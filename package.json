@@ -1,8 +1,9 @@
 {
   "private": true,
   "scripts": {
-    "dev": "./scripts/dev.sh",
-    "backend:dev": "cd backend && ../venv/bin/python -m uvicorn app.main:app --reload --port 8787",
+    "dev": "node scripts/dev.js",
+    "dev:sh": "bash scripts/dev.sh",
+    "backend:dev": "cd backend && ../venv/Scripts/python -m uvicorn app.main:app --reload --port 8787",
     "frontend:dev": "cd frontend && npm run dev"
   }
 }

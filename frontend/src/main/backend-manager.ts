@@ -107,6 +107,15 @@ export class BackendManager {
 
   private async _start(): Promise<void> {
     this.ensureConfigLoaded()
+
+    // 后端已由外部管理（如 dev.js 已启动），跳过本地启动，直接验证可达性
+    if (process.env.HIMAGE_BACKEND_MANAGED === '1') {
+      await this.waitForReady(`http://127.0.0.1:${this.localPort}`, 10000)
+      this.isReady = true
+      console.log('[BackendManager] Using externally managed backend')
+      return
+    }
+
     if (this.config.mode === 'local') {
       await this.startLocalBackend()
     } else {
@@ -232,7 +241,7 @@ export class BackendManager {
 
     this.process = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, PYTHONUNBUFFERED: '1' },
+      env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' },
     })
 
     this.process.stdout?.on('data', (data: Buffer) => {
@@ -281,23 +290,36 @@ export class BackendManager {
    * 启动新后端前调用，避免端口残留导致 code 1 崩溃。
    */
   private async freePort(port: number): Promise<void> {
-    return new Promise((resolve) => {
-      if (process.platform === 'win32') {
-        // Windows: netstat 找到 PID 再 taskkill
-        const cmd = spawn('cmd', ['/c', `for /f "tokens=5" %a in ('netstat -aon ^| findstr :${port}') do taskkill /F /PID %a`], { shell: true })
-        cmd.on('close', () => resolve())
-      } else {
-        // macOS/Linux: lsof 找到所有占用该端口的 PID 并 kill -9
-        const cmd = spawn('sh', ['-c', `lsof -ti tcp:${port} | xargs -r kill -9`])
-        cmd.on('close', (code) => {
-          if (code === 0) {
-            console.log(`[BackendManager] Freed port ${port}`)
+    if (process.platform === 'win32') {
+      // Windows: 用 netstat 找到占用端口的 PID，再 taskkill
+      return new Promise((resolve) => {
+        const child = spawn('cmd', ['/c', `netstat -ano | findstr /i ":${port}"`], { shell: true })
+        const chunks: Buffer[] = []
+        child.stdout?.on('data', (d: Buffer) => chunks.push(d))
+        child.on('close', () => {
+          const output = Buffer.concat(chunks).toString('utf-8')
+          const pids = new Set<string>()
+          for (const line of output.split('\n')) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
+            const parts = trimmed.split(/\s+/)
+            const pid = parts[parts.length - 1]
+            if (pid && /^\d+$/.test(pid)) pids.add(pid)
           }
-          // 无论成功失败都继续（端口本来就没被占用时也是非 0）
-          resolve()
+          for (const pid of pids) {
+            try { spawn('taskkill', ['/F', '/PID', pid], { shell: true }) } catch {}
+          }
+          // 等一小段时间让端口释放
+          setTimeout(resolve, 500)
         })
-      }
-    })
+      })
+    } else {
+      // macOS/Linux: lsof 找到所有占用该端口的 PID 并 kill -9
+      return new Promise((resolve) => {
+        const cmd = spawn('sh', ['-c', `lsof -ti tcp:${port} | xargs -r kill -9`])
+        cmd.on('close', () => resolve())
+      })
+    }
   }
 
   private ensureConfigLoaded(): void {
@@ -313,7 +335,9 @@ export class BackendManager {
       return { command: backendPath, args: ['--port', String(this.localPort)] }
     } else {
       const projectRoot = path.join(__dirname, '..', '..', '..')
-      const venvPython = path.join(projectRoot, 'venv', 'bin', 'python')
+      const venvPython = process.platform === 'win32'
+        ? path.join(projectRoot, 'venv', 'Scripts', 'python.exe')
+        : path.join(projectRoot, 'venv', 'bin', 'python')
       const runScript = path.join(projectRoot, 'backend', 'run.py')
       return { command: venvPython, args: [runScript, '--port', String(this.localPort)] }
     }

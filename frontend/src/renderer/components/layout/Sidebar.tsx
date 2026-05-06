@@ -16,6 +16,9 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
+  const isMac = typeof window !== 'undefined' && (window as any).electronAPI?.platform === 'darwin'
+
+  const trafficLightHeight = isMac ? 'h-[52px]' : 'h-[8px]'
 
   return (
     <aside
@@ -24,8 +27,8 @@ export default function Sidebar() {
         collapsed ? 'w-[56px]' : 'w-[200px]'
       )}
     >
-      {/* Traffic light spacer (macOS) */}
-      <div className="h-[52px] flex-shrink-0 drag-region" />
+      {/* Traffic light spacer (macOS only) */}
+      <div className={`${trafficLightHeight} flex-shrink-0 drag-region`} />
 
       {/* Header */}
       <div className="flex items-center h-[36px] px-3 gap-2">

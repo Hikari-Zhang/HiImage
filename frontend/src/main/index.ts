@@ -22,6 +22,7 @@ let mainWindow: BrowserWindow | null = null
 const backendManager = new BackendManager()
 
 function createWindow(): void {
+  const isMac = process.platform === 'darwin'
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -29,8 +30,8 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     backgroundColor: '#1e1e1e',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 12, y: 12 },
+    titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+    ...(isMac && { trafficLightPosition: { x: 12, y: 12 } }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -119,6 +120,22 @@ function setupIPC(): void {
     } catch (err: any) {
       throw new Error(`无法读取文件: ${err.message}`)
     }
+  })
+
+  // Window controls (Windows 隐藏标题栏后由前端自定义按钮触发)
+  ipcMain.on('window:minimize', () => {
+    mainWindow?.minimize()
+  })
+  ipcMain.on('window:maximize', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize()
+    } else {
+      mainWindow.maximize()
+    }
+  })
+  ipcMain.on('window:close', () => {
+    mainWindow?.close()
   })
 }
 

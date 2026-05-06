@@ -4,6 +4,9 @@ import { contextBridge, ipcRenderer } from 'electron'
  * Expose Electron APIs to renderer via contextBridge
  */
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Platform info
+  platform: process.platform,
+
   // File dialogs
   openFile: (): Promise<string | null> => ipcRenderer.invoke('dialog:openFile'),
   saveFile: (defaultPath?: string): Promise<string | null> =>
@@ -18,6 +21,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getBackendConfig: (): Promise<Record<string, unknown>> => ipcRenderer.invoke('backend:getConfig'),
   updateBackendConfig: (config: Record<string, unknown>): Promise<string> =>
     ipcRenderer.invoke('backend:updateConfig', config),
+
+  // Window controls (Windows 自定义标题栏按钮)
+  windowMinimize: (): void => ipcRenderer.send('window:minimize'),
+  windowMaximize: (): void => ipcRenderer.send('window:maximize'),
+  windowClose: (): void => ipcRenderer.send('window:close'),
 
   // App events
   onBackendReady: (callback: () => void) => {
