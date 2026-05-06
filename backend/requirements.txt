@@ -19,3 +19,10 @@ facexlib>=0.3.0
 # 智能合成依赖
 rembg>=2.0.50
 gfpgan>=1.3.8
+
+# 提示词驱动编辑依赖（方案A/B/C）
+# diffusers>=0.30.0 需要 FluxFillPipeline（FLUX.1-Fill-dev）
+# transformers>=4.37.0 需要 GroundingDINO + SAM 支持
+diffusers>=0.30.0
+transformers>=4.37.0
+accelerate>=0.20.0

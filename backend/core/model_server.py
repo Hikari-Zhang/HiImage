@@ -292,9 +292,20 @@ def inpaint_via_server(
     device: str,
     disable_nsfw: bool,
     iopaint_path: str = 'iopaint',
+    prompt: str = '',
+    negative_prompt: str = '',
+    sd_steps: int = 50,
+    sd_guidance_scale: float = 7.5,
+    sd_seed: int = 42,
 ) -> np.ndarray:
     """
     通过 iopaint HTTP server 执行修复，返回 RGB numpy 图像。
+
+    :param prompt:          SD 系列模型的正向文字引导（非 SD 模型忽略）
+    :param negative_prompt: SD 系列模型的负向提示词（为空时使用默认值）
+    :param sd_steps:        扩散步数（SD 模型生效）
+    :param sd_guidance_scale: CFG scale（SD 模型生效）
+    :param sd_seed:         随机种子（SD 模型生效）
     """
     srv = get_server()
     srv.set_iopaint_path(iopaint_path)
@@ -304,10 +315,27 @@ def inpaint_via_server(
     image_b64 = _ndarray_to_b64(cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR), '.png')
     mask_b64 = _ndarray_to_b64(mask, '.png')
 
-    payload = json.dumps({
+    payload_dict: dict = {
         'image': image_b64,
         'mask': mask_b64,
-    }).encode('utf-8')
+        # SD 通用参数（非 SD 模型会忽略这些字段）
+        'ldm_steps': sd_steps,
+        'sd_guidance_scale': sd_guidance_scale,
+        'sd_seed': sd_seed,
+        'hd_strategy': 'Crop',
+        'hd_strategy_crop_trigger_size': 800,
+        'hd_strategy_crop_margin': 196,
+    }
+
+    # 仅当 prompt 非空时注入，避免干扰非 SD 模型（如 LaMa）
+    if prompt:
+        payload_dict['prompt'] = prompt
+        payload_dict['negative_prompt'] = (
+            negative_prompt if negative_prompt
+            else 'blurry, low quality, deformed, artifacts, watermark'
+        )
+
+    payload = json.dumps(payload_dict).encode('utf-8')
 
     url = f'{base_url}/api/v1/inpaint'
     req = urllib.request.Request(

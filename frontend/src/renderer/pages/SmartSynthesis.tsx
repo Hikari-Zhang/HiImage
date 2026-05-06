@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   Upload, Download, Square, Move, Trash2, RotateCcw,
   Image, Shirt, User, Sparkles, Info, ChevronDown, ChevronRight,
+  Crosshair, Wand2, MessageSquare,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import ImageCanvas from '../components/ImageCanvas'
@@ -17,7 +18,22 @@ import type { ROI } from '../stores/useImageStore'
 type CanvasTool = 'draw' | 'pan'
 
 // ─── 模式配置（与后端 SYNTHESIS_MODE_GROUPS 对应）─────────────────────────
-const MODE_GROUPS = [
+type ModeGroup = {
+  id: string
+  name: string
+  Icon: React.ComponentType<{ size?: number; strokeWidth?: number }>
+  description: string
+  needsReference: boolean
+  referenceLabel?: string
+  referenceHint?: string
+  needsROI: boolean
+  needsPrompt: boolean
+  promptLabel?: string
+  promptHint?: string
+  promptRequired?: boolean
+}
+
+const MODE_GROUPS: ModeGroup[] = [
   {
     id: 'background_replace',
     name: '换背景',
@@ -26,6 +42,8 @@ const MODE_GROUPS = [
     needsReference: true,
     referenceLabel: '新背景图',
     referenceHint: '拖拽或点击上传新背景图片',
+    needsROI: false,
+    needsPrompt: false,
   },
   {
     id: 'outfit_swap',
@@ -35,6 +53,8 @@ const MODE_GROUPS = [
     needsReference: true,
     referenceLabel: '目标服装图',
     referenceHint: '上传想要替换的目标服装图片',
+    needsROI: false,
+    needsPrompt: false,
   },
   {
     id: 'face_swap',
@@ -44,6 +64,8 @@ const MODE_GROUPS = [
     needsReference: true,
     referenceLabel: '目标人脸图',
     referenceHint: '上传目标人物的人脸图片',
+    needsROI: false,
+    needsPrompt: false,
   },
   {
     id: 'virtual_tryon',
@@ -53,62 +75,235 @@ const MODE_GROUPS = [
     needsReference: true,
     referenceLabel: '服装图',
     referenceHint: '上传想要试穿的服装图片',
+    needsROI: false,
+    needsPrompt: false,
+  },
+  {
+    id: 'prompt_inpaint',
+    name: '精准替换',
+    Icon: Crosshair,
+    description: '手动框选区域，输入文字描述，SD 1.5 按描述替换选定区域',
+    needsReference: false,
+    needsROI: true,
+    needsPrompt: true,
+    promptRequired: true,
+    promptLabel: '替换描述',
+    promptHint: '例：a red down jacket / 一件红色羽绒服',
+  },
+  {
+    id: 'auto_segment_edit',
+    name: '智能定位',
+    Icon: Wand2,
+    description: '输入中文指令自动识别服装部位并换色/换风格，无需手动框选',
+    needsReference: false,
+    needsROI: false,
+    needsPrompt: true,
+    promptRequired: true,
+    promptLabel: '编辑指令',
+    promptHint: '例：将上衣换成黑色 / 把裤子改成牛仔风格',
+  },
+  {
+    id: 'instruction_edit',
+    name: '自由编辑',
+    Icon: MessageSquare,
+    description: '自然语言指令驱动全图语义编辑，无需参考图或框选区域',
+    needsReference: false,
+    needsROI: false,
+    needsPrompt: true,
+    promptRequired: true,
+    promptLabel: '编辑指令',
+    promptHint: '例：make the background a forest / 将背景换成夜晚城市',
   },
 ]
 
 // ─── 模型配置（与后端 SYNTHESIS_MODELS 对应）─────────────────────────────
 const ALL_MODELS = [
-  // 换背景
+  // ── 换背景（质量优先排序）──
+  {
+    id: 'birefnet',
+    name: 'BiRefNet-General',
+    tags: ['background_replace'],
+    description: '双向精化网络，2024 SOTA 抠图，边缘细节极佳，复杂场景首选',
+    badge: '推荐',
+  },
   {
     id: 'rmbg',
     name: 'RMBG 2.0',
     tags: ['background_replace'],
-    description: 'BRIA RMBG 2.0 —— SOTA 抠图，边缘精细',
-    badge: '推荐',
+    description: 'BRIA 商业级抠图精度，人像与产品图均优秀',
+    badge: '',
+  },
+  {
+    id: 'isnet',
+    name: 'IS-Net General',
+    tags: ['background_replace'],
+    description: 'ISNet 通用目标分割，产品图与商品摄影效果极佳',
+    badge: '',
+  },
+  {
+    id: 'isnet_anime',
+    name: 'IS-Net Anime',
+    tags: ['background_replace'],
+    description: '专为动漫/插画优化，发丝与细线条保留精准',
+    badge: '动漫',
   },
   {
     id: 'u2net',
     name: 'U²-Net',
     tags: ['background_replace'],
-    description: '通用显著目标检测，支持人像/商品/动物',
+    description: '经典通用分割模型，人像/商品/动物均兼顾',
     badge: '',
   },
   {
     id: 'modnet',
     name: 'MODNet',
     tags: ['background_replace'],
-    description: '实时人像抠图，速度快',
+    description: '轻量实时人像抠图，速度极快，适合批量与快速预览',
     badge: '快速',
   },
-  // 换装 / 换脸
+  // ── 换装 / 换脸 / 试穿（质量优先排序）──
   {
-    id: 'lama_inpaint',
-    name: 'LaMa（区域替换）',
-    tags: ['outfit_swap', 'face_swap'],
-    description: '大感受野修复，纹理延续自然，适合换装',
-    badge: '推荐',
+    id: 'flux_fill',
+    name: 'FLUX.1-Fill-dev',
+    tags: ['outfit_swap', 'face_swap', 'virtual_tryon'],
+    description: 'FLUX.1 专用 Inpainting，2024 SOTA，细节与语义一致性最佳（需 16GB+ VRAM，建议 24GB）',
+    badge: '高质量',
   },
   {
-    id: 'sd15',
-    name: 'Stable Diffusion 1.5',
-    tags: ['outfit_swap', 'face_swap', 'virtual_tryon'],
-    description: '文字引导 Inpainting，可描述目标样式',
-    badge: 'SD',
+    id: 'sdxl',
+    name: 'Stable Diffusion XL',
+    tags: ['outfit_swap', 'virtual_tryon'],
+    description: 'SDXL 高分辨率 Inpainting，1024px 输出，服装纹理自然（需 12GB+ VRAM）',
+    badge: '',
   },
   {
     id: 'powerpaint',
     name: 'PowerPaint v2',
     tags: ['outfit_swap', 'virtual_tryon'],
-    description: '多任务 Inpainting，换装效果自然',
+    description: '多任务 Inpainting，专为局部换装/试穿设计，结构保留优秀',
+    badge: '推荐',
+  },
+  {
+    id: 'mat',
+    name: 'MAT',
+    tags: ['outfit_swap', 'face_swap'],
+    description: 'Mask-Aware Transformer，不规则掩码处理精度最高，边缘自然无痕',
     badge: '',
   },
-  // 换脸
+  {
+    id: 'lama_inpaint',
+    name: 'LaMa',
+    tags: ['outfit_swap', 'face_swap'],
+    description: '大感受野卷积修复，纹理延续自然，速度快，小显存可用',
+    badge: '',
+  },
+  {
+    id: 'zits',
+    name: 'ZITS',
+    tags: ['outfit_swap'],
+    description: '专为结构线修复，布料纹理/格纹/条纹类服装效果出色',
+    badge: '',
+  },
+  {
+    id: 'sd15',
+    name: 'Stable Diffusion 1.5',
+    tags: ['outfit_swap', 'face_swap', 'virtual_tryon'],
+    description: '文字引导 Inpainting，可用提示词描述目标样式，创意度高',
+    badge: '',
+  },
   {
     id: 'gfpgan',
     name: 'GFPGAN v1.4',
     tags: ['face_swap'],
-    description: '人脸生成对抗网络，专精人脸修复与增强',
+    description: '人脸生成对抗网络，专精人脸修复与超分增强，换脸合成首选',
     badge: '推荐',
+  },
+  // ── 精准替换（质量优先排序）──
+  {
+    id: 'flux_fill_prompt',
+    name: 'FLUX.1-Fill-dev',
+    tags: ['prompt_inpaint'],
+    description: 'FLUX.1 专用 Inpainting，语义理解与细节还原最佳，精准替换首选（需 16GB+ VRAM）',
+    badge: '高质量',
+  },
+  {
+    id: 'sdxl_inpaint_prompt',
+    name: 'SDXL Inpainting',
+    tags: ['prompt_inpaint'],
+    description: 'SDXL 文字引导替换，1024px 高精度输出（需 12GB+ VRAM）',
+    badge: '推荐',
+  },
+  {
+    id: 'powerpaint_prompt',
+    name: 'PowerPaint v2',
+    tags: ['prompt_inpaint'],
+    description: '结构保留佳，替换边缘自然，文字引导效果优秀',
+    badge: '推荐',
+  },
+  {
+    id: 'sd15_inpaint_prompt',
+    name: 'SD 1.5 Inpainting',
+    tags: ['prompt_inpaint'],
+    description: 'SD 1.5 文字引导，速度快，显存需求低，适合快速预览',
+    badge: '',
+  },
+  // ── 智能定位 ──
+  {
+    id: 'grounded_sam_flux',
+    name: 'GroundingDINO + SAM + FLUX.1-Fill',
+    tags: ['auto_segment_edit'],
+    description: '零样本精准检测 + 像素级分割 + FLUX.1-Fill 高质量替换，任意部位均可识别（需 25GB+ VRAM）',
+    badge: '高质量',
+  },
+  {
+    id: 'grounded_sam_sdxl',
+    name: 'GroundingDINO + SAM + SDXL',
+    tags: ['auto_segment_edit'],
+    description: '零样本精准检测 + 像素级分割 + SDXL Inpainting，支持复杂场景，任意部位（需 12GB+ VRAM）',
+    badge: '',
+  },
+  {
+    id: 'auto_segment_hsv',
+    name: 'SegFormer + HSV',
+    tags: ['auto_segment_edit'],
+    description: '自动分割后 HSV 换色，亚秒级响应，保留布料光影，纯色替换首选',
+    badge: '推荐',
+  },
+  {
+    id: 'auto_segment_sd15',
+    name: 'SegFormer + SD 1.5',
+    tags: ['auto_segment_edit'],
+    description: '自动分割后用 SD 1.5 Inpainting，支持纹理/风格类复杂指令',
+    badge: '',
+  },
+  // ── 自由编辑（画质优先排序）──
+  {
+    id: 'flux',
+    name: 'FLUX.1-dev',
+    tags: ['instruction_edit'],
+    description: 'Black Forest Labs 2024 SOTA，文字理解力极强，细节还原最佳（需 24GB+ VRAM）',
+    badge: '高质量',
+  },
+  {
+    id: 'sdxl_img2img',
+    name: 'SDXL Img2Img',
+    tags: ['instruction_edit'],
+    description: 'SDXL 图生图，1024px 高分辨率输出，画质优于 SD 1.5（需 12GB+ VRAM）',
+    badge: '',
+  },
+  {
+    id: 'magicbrush',
+    name: 'MagicBrush',
+    tags: ['instruction_edit'],
+    description: '精准指令跟随的 IP2P 变体，兼顾速度与效果，推荐首选',
+    badge: '推荐',
+  },
+  {
+    id: 'instruct_pix2pix',
+    name: 'InstructPix2Pix',
+    tags: ['instruction_edit'],
+    description: '原版 SD 1.5 底座，显存需求低，适合快速预览',
+    badge: '',
   },
 ]
 
@@ -283,6 +478,14 @@ export default function SmartSynthesis() {
       showToast('warning', `请先上传${activeModeConfig.referenceLabel}`)
       return
     }
+    if (activeModeConfig.needsROI && rois.length === 0) {
+      showToast('warning', '请先在画布上框选处理区域（ROI）')
+      return
+    }
+    if (activeModeConfig.promptRequired && !prompt.trim()) {
+      showToast('warning', `请输入${activeModeConfig.promptLabel ?? '提示词'}`)
+      return
+    }
 
     try {
       startProcess(selectedModel)
@@ -334,7 +537,7 @@ export default function SmartSynthesis() {
     e.dataTransfer.dropEffect = 'copy'
   }
 
-  const needsPrompt = selectedModel === 'sd15' || selectedModel === 'powerpaint'
+  const needsPrompt = activeModeConfig.needsPrompt
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -546,6 +749,14 @@ export default function SmartSynthesis() {
             )}
           </section>
 
+          {/* ROI 必填提示（精准替换模式）*/}
+          {activeModeConfig.needsROI && rois.length === 0 && (
+            <div className="bg-status-warning/10 border border-status-warning/30 rounded px-2 py-1.5 text-[10px] text-status-warning flex items-start gap-1.5">
+              <Square size={11} className="mt-0.5 shrink-0" />
+              <span>请在左侧画布上拖拽框选要替换的区域</span>
+            </div>
+          )}
+
           {/* 模型选择 */}
           <section>
             <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">模型</h3>
@@ -575,7 +786,11 @@ export default function SmartSynthesis() {
                           ? 'bg-fg-accent/20 text-fg-accent'
                           : model.badge === '快速'
                             ? 'bg-status-success/20 text-status-success'
-                            : 'bg-border-subtle text-fg-secondary'
+                            : model.badge === '高质量'
+                              ? 'bg-purple-500/20 text-purple-400'
+                              : model.badge === '动漫'
+                                ? 'bg-pink-500/20 text-pink-400'
+                                : 'bg-border-subtle text-fg-secondary'
                       )}>
                         {model.badge}
                       </span>
@@ -591,12 +806,16 @@ export default function SmartSynthesis() {
           {needsPrompt && (
             <section>
               <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">
-                文字引导 <span className="normal-case text-fg-secondary font-normal">（可选）</span>
+                {activeModeConfig.promptLabel ?? '提示词'}
+                {activeModeConfig.promptRequired
+                  ? <span className="ml-1 text-status-error">*</span>
+                  : <span className="normal-case text-fg-secondary font-normal"> （可选）</span>
+                }
               </h3>
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="描述你想要的目标效果，例如：a red dress with floral patterns"
+                placeholder={activeModeConfig.promptHint ?? '描述你想要的目标效果'}
                 className="w-full bg-bg-primary border border-border-subtle rounded text-xs text-fg-primary p-2 resize-none focus:border-border-focus focus:outline-none"
                 rows={3}
               />
@@ -620,7 +839,13 @@ export default function SmartSynthesis() {
           <div className="mt-auto pt-2 space-y-2">
             <Button
               onClick={handleProcess}
-              disabled={isProcessing || !sourceImage || (activeModeConfig.needsReference && !referenceImage)}
+              disabled={
+                isProcessing
+                || !sourceImage
+                || (activeModeConfig.needsReference && !referenceImage)
+                || (activeModeConfig.needsROI && rois.length === 0)
+                || (activeModeConfig.promptRequired && !prompt.trim())
+              }
               loading={isProcessing}
               className="w-full"
               size="lg"

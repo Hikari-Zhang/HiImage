@@ -65,7 +65,9 @@ class Inpainter:
     MODEL_GROUPS = MODEL_GROUPS
     AVAILABLE_MODELS = AVAILABLE_MODELS
 
-    def __init__(self, model_name='lama', iopaint_path=None, device='mps', dilation=10, disable_nsfw=False):
+    def __init__(self, model_name='lama', iopaint_path=None, device='mps', dilation=10, disable_nsfw=False,
+                 prompt: str = '', negative_prompt: str = '',
+                 sd_steps: int = 50, sd_guidance_scale: float = 7.5, sd_seed: int = 42):
         """
         初始化去除器
         :param model_name: 模型ID，见 AVAILABLE_MODELS
@@ -73,12 +75,22 @@ class Inpainter:
         :param device: 计算设备 ('mps', 'cpu', 'cuda')
         :param dilation: 遮罩扩张像素数
         :param disable_nsfw: 禁用 NSFW 安全检查（SD 类模型必须开启）
+        :param prompt: SD 系列模型的正向文字引导（非 SD 模型忽略）
+        :param negative_prompt: SD 系列模型的负向提示词
+        :param sd_steps: 扩散步数
+        :param sd_guidance_scale: CFG scale
+        :param sd_seed: 随机种子
         """
         self.model_name = model_name
         self.iopaint_path = iopaint_path or 'iopaint'
         self.device = device
         self.dilation = dilation
         self.disable_nsfw = disable_nsfw
+        self.prompt = prompt
+        self.negative_prompt = negative_prompt
+        self.sd_steps = sd_steps
+        self.sd_guidance_scale = sd_guidance_scale
+        self.sd_seed = sd_seed
         # CLI 模式超时：快速模型 5 分钟，扩散模型 30 分钟（首次下载时 CLI 也用得上）
         self._timeout = 1800 if is_diffusion_model(model_name) else 300
         self._project_tmp = os.path.join(
@@ -143,6 +155,11 @@ class Inpainter:
                     device=self.device,
                     disable_nsfw=self.disable_nsfw,
                     iopaint_path=self.iopaint_path,
+                    prompt=self.prompt,
+                    negative_prompt=self.negative_prompt,
+                    sd_steps=self.sd_steps,
+                    sd_guidance_scale=self.sd_guidance_scale,
+                    sd_seed=self.sd_seed,
                 )
             else:
                 # 快速模型 → CLI 模式
