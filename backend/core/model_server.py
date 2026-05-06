@@ -400,6 +400,72 @@ def get_server() -> _ModelServer:
 # HTTP inpaint 调用
 # ------------------------------------------------------------------
 
+def _listen_diffusion_progress(
+    base_url: str,
+    sd_steps: int,
+    progress_callback,
+    stop_event: threading.Event,
+):
+    """
+    在后台线程中连接 iopaint 的 socket.io 端点，监听 DDIM/扩散步进度事件，
+    将步骤数（0-based）转换为百分比后通过 progress_callback 上报。
+
+    iopaint 在每个扩散步完成后 emit:
+      diffusion_progress {"step": N}   (N 从 0 开始)
+      diffusion_finish                  (推理完成)
+
+    percent 计算：step 从 0 到 sd_steps-1，映射到前端进度 20% ~ 95%
+    （20% 为请求发出前占位进度，95% 留给图像解码阶段）
+    """
+    try:
+        import socketio as _sio_module
+    except ImportError:
+        return  # python-socketio 不可用，跳过进度监听
+
+    # iopaint 的 socket.io 挂载在 /ws 路径（ASGIApp 中挂载）
+    sio_url = base_url.replace('http://', 'http://')  # 保持 http
+    sio = _sio_module.Client(reconnection=False, logger=False, engineio_logger=False)
+
+    @sio.on('diffusion_progress')
+    def on_progress(data):
+        if stop_event.is_set():
+            return
+        step = data.get('step', 0)
+        # 将 step 映射到 20%~95% 区间：保留头尾给加载/收尾阶段
+        if sd_steps > 0:
+            pct = 20 + int((step + 1) / sd_steps * 75)
+            pct = min(pct, 95)
+        else:
+            pct = 50
+        try:
+            progress_callback(pct, f"扩散采样中... {step + 1}/{sd_steps} 步")
+        except Exception:
+            pass
+
+    @sio.on('diffusion_finish')
+    def on_finish(data=None):
+        stop_event.set()
+        try:
+            sio.disconnect()
+        except Exception:
+            pass
+
+    try:
+        # socketio_path 指定 socket.io 服务器的挂载路径（iopaint 挂载在 /ws）
+        sio.connect(sio_url, socketio_path='/ws/socket.io', wait_timeout=10)
+        # 阻塞等待，直到推理完成或外部要求停止
+        while not stop_event.is_set() and sio.connected:
+            sio.sleep(0.1)
+    except Exception as e:
+        print(f"[ModelServer] socket.io 进度监听失败（非致命）: {e}")
+    finally:
+        try:
+            if sio.connected:
+                sio.disconnect()
+        except Exception:
+            pass
+
+
 def inpaint_via_server(
     image_rgb: np.ndarray,
     mask: np.ndarray,
@@ -412,19 +478,37 @@ def inpaint_via_server(
     sd_steps: int = 50,
     sd_guidance_scale: float = 7.5,
     sd_seed: int = 42,
+    progress_callback=None,
 ) -> np.ndarray:
     """
     通过 iopaint HTTP server 执行修复，返回 RGB numpy 图像。
 
-    :param prompt:          SD 系列模型的正向文字引导（非 SD 模型忽略）
-    :param negative_prompt: SD 系列模型的负向提示词（为空时使用默认值）
-    :param sd_steps:        扩散步数（SD 模型生效）
-    :param sd_guidance_scale: CFG scale（SD 模型生效）
-    :param sd_seed:         随机种子（SD 模型生效）
+    :param prompt:             SD 系列模型的正向文字引导（非 SD 模型忽略）
+    :param negative_prompt:    SD 系列模型的负向提示词（为空时使用默认值）
+    :param sd_steps:           扩散步数（SD 模型生效）
+    :param sd_guidance_scale:  CFG scale（SD 模型生效）
+    :param sd_seed:            随机种子（SD 模型生效）
+    :param progress_callback:  可选回调，签名 (percent: int, message: str)；
+                               由 socket.io 监听 iopaint 的 diffusion_progress 事件驱动，
+                               percent 范围 20%~95%（推理阶段），每个 DDIM 步更新一次
     """
     srv = get_server()
     srv.set_iopaint_path(iopaint_path)
     base_url = srv.ensure_running(model_name, device, disable_nsfw)
+
+    # ── 启动 socket.io 进度监听线程 ─────────────────────────────────
+    # iopaint server 通过 socket.io (/ws) emit diffusion_progress 事件，
+    # 在 HTTP 请求阻塞期间，后台线程并行订阅该事件，将步骤映射为百分比后回调。
+    stop_event = threading.Event()
+    sio_thread = None
+    if progress_callback is not None:
+        sio_thread = threading.Thread(
+            target=_listen_diffusion_progress,
+            args=(base_url, sd_steps, progress_callback, stop_event),
+            daemon=True,
+            name='iopaint-sio-progress',
+        )
+        sio_thread.start()
 
     # 编码图像和掩码为 base64 PNG
     image_b64 = _ndarray_to_b64(cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR), '.png')
@@ -474,6 +558,11 @@ def inpaint_via_server(
             f"[ModelServer] inpaint 请求失败 HTTP {e.code}: {body}\n"
             f"--- iopaint 服务器最近日志 ---\n{log_tail}"
         )
+    finally:
+        # HTTP 请求结束（无论成功/失败），通知 socket.io 线程退出
+        stop_event.set()
+        if sio_thread is not None:
+            sio_thread.join(timeout=3)
 
     # 解码结果图像
     result_arr = np.frombuffer(result_bytes, dtype=np.uint8)

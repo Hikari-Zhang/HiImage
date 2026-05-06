@@ -73,6 +73,19 @@ async def run_synthesis(req: SynthesisRequest):
 
     iopaint_path = get("inpaint.iopaint_path") or _detect_iopaint_path()
 
+    loop = asyncio.get_event_loop()
+
+    def _make_progress_callback():
+        def callback(percent: int, message: str):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    progress_manager.send_progress(percent, message),
+                    loop,
+                )
+            except Exception as e:
+                log_manager.error(f"进度上报失败: {e}", source="synthesis")
+        return callback
+
     def _process():
         from core.synthesizer import Synthesizer
         synth = Synthesizer(
@@ -81,6 +94,7 @@ async def run_synthesis(req: SynthesisRequest):
             device=req.device,
             iopaint_path=iopaint_path,
             prompt=req.prompt,
+            progress_callback=_make_progress_callback(),
         )
         return synth.run(
             source_rgb=source,
@@ -88,7 +102,6 @@ async def run_synthesis(req: SynthesisRequest):
             reference_rgb=reference,
         )
 
-    loop = asyncio.get_event_loop()
     await progress_manager.send_progress(20, "正在处理中...")
 
     try:

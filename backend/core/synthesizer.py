@@ -36,10 +36,13 @@ class Synthesizer:
     """
     智能合成处理器
 
-    :param mode:       处理模式 ID
-    :param model_id:   所用模型 ID
-    :param device:     推理设备 (mps/cpu/cuda)
-    :param iopaint_path: IOPaint 可执行路径（换装/换脸场景需要）
+    :param mode:              处理模式 ID
+    :param model_id:          所用模型 ID
+    :param device:            推理设备 (mps/cpu/cuda)
+    :param iopaint_path:      IOPaint 可执行路径（换装/换脸场景需要）
+    :param progress_callback: 可选进度回调，签名 (percent: int, message: str)；
+                              扩散模型（SD/AnyText）每个 DDIM 步触发一次（via socket.io），
+                              快速模型（LaMa/ZITS）每批次完成触发一次
     """
 
     def __init__(
@@ -49,12 +52,14 @@ class Synthesizer:
         device: str = "mps",
         iopaint_path: Optional[str] = None,
         prompt: str = "",
+        progress_callback=None,
     ):
         self.mode = mode
         self.model_id = model_id
         self.device = device
         self.iopaint_path = iopaint_path
         self.prompt = prompt
+        self.progress_callback = progress_callback
 
     # ------------------------------------------------------------------
     # 公共入口
@@ -258,6 +263,7 @@ class Synthesizer:
                 disable_nsfw=False,
                 iopaint_path=self.iopaint_path,
                 prompt=self.prompt,
+                progress_callback=self.progress_callback,
             )
             result = inpainter.remove_watermark_with_mask(base_rgb, mask)
 
@@ -374,6 +380,7 @@ class Synthesizer:
             disable_nsfw=True,
             iopaint_path=self.iopaint_path,
             prompt=self.prompt,
+            progress_callback=self.progress_callback,
         )
 
     # ------------------------------------------------------------------
@@ -451,6 +458,7 @@ class Synthesizer:
                     disable_nsfw=True,
                     iopaint_path=self.iopaint_path,
                     prompt=inpaint_prompt,
+                    progress_callback=self.progress_callback,
                 )
 
         elif intent.action == "color_change" and use_sd:
@@ -464,6 +472,7 @@ class Synthesizer:
                 disable_nsfw=True,
                 iopaint_path=self.iopaint_path,
                 prompt=sd_prompt,
+                progress_callback=self.progress_callback,
             )
 
         elif intent.action == "style_change":
@@ -477,6 +486,7 @@ class Synthesizer:
                 disable_nsfw=True,
                 iopaint_path=self.iopaint_path,
                 prompt=sd_prompt,
+                progress_callback=self.progress_callback,
             )
 
         else:

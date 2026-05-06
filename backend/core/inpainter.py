@@ -205,6 +205,8 @@ class Inpainter:
             if is_diffusion_model(self.model_name):
                 # 扩散模型 → HTTP Server 模式（保活5分钟，无需每次重载）
                 # 注意：传给 server 的是 iopaint_model_id（如 "Sanster/AnyText"）
+                # progress_callback 同步透传：inpaint_via_server 在后台线程通过
+                # socket.io 监听 iopaint 的 diffusion_progress 事件（每 DDIM 步一次）
                 return inpaint_via_server(
                     image_rgb=image,
                     mask=mask,
@@ -217,6 +219,7 @@ class Inpainter:
                     sd_steps=self.sd_steps,
                     sd_guidance_scale=self.sd_guidance_scale,
                     sd_seed=self.sd_seed,
+                    progress_callback=self.progress_callback,
                 )
             else:
                 # 快速模型 → CLI 模式
