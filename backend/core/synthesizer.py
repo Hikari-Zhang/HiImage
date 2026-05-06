@@ -10,14 +10,8 @@
   - auto_segment_edit:    智能定位（中文指令 → 自动识别服装部位 → HSV 换色 / SD 换风格）
   - instruction_edit:     自由编辑（自然语言指令 → InstructPix2Pix 全图语义编辑）
 
-各模式处理策略：
-  - background_replace:   使用 rembg (RMBG/U2Net) 抠图 + ROI 区域合成
-  - outfit_swap:          使用 LaMa/SD Inpainting 替换指定 ROI 区域为参考图纹理
-  - face_swap:            使用 GFPGAN 增强 + 区域叠覆合成
-  - virtual_tryon:        参考图引导 Inpainting（轻量近似方案）
-  - prompt_inpaint:       SD 1.5 Inpainting 文字引导区域替换
-  - auto_segment_edit:    SegFormer 自动分割 + HSV 换色 / SD Inpainting
-  - instruction_edit:     InstructPix2Pix 无掩码全图语义编辑
+模型配置（名称/描述/下载链接/支持参数/功能）统一由 core/model_registry.py 维护。
+新增或修改模型时只需编辑 model_registry.py，本文件无需改动。
 """
 from __future__ import annotations
 
@@ -25,384 +19,13 @@ import cv2
 import numpy as np
 from typing import Optional, List, Tuple
 
-
 # ──────────────────────────────────────────────────────────────
-# 模型注册表（带功能说明）
+# 从集中配置导入模型注册表与模式分组
+# 新增模型时只需修改 core/model_registry.py，无需改此文件
 # ──────────────────────────────────────────────────────────────
+from core.model_registry import MODELS as SYNTHESIS_MODELS, MODE_GROUPS as SYNTHESIS_MODE_GROUPS
 
-SYNTHESIS_MODELS = [
-    # ── 换背景（按质量排序）──
-    {
-        "id": "birefnet",
-        "name": "BiRefNet-General",
-        "provider": "rembg",
-        "tags": ["background_replace"],
-        "description": "双向精化网络，2024 SOTA 抠图，边缘细节极佳，复杂场景首选",
-        "recommended_for": "换背景",
-        "requires_reference": False,
-        "size_mb": 100,
-        "badge": "推荐",
-    },
-    {
-        "id": "rmbg",
-        "name": "RMBG 2.0",
-        "provider": "BRIA",
-        "tags": ["background_replace"],
-        "description": "BRIA RMBG 2.0 —— 商业级抠图精度，人像/产品均优秀",
-        "recommended_for": "换背景",
-        "requires_reference": False,
-        "size_mb": 176,
-    },
-    {
-        "id": "isnet",
-        "name": "IS-Net General",
-        "provider": "rembg",
-        "tags": ["background_replace"],
-        "description": "ISNet 通用目标分割，产品图/商品摄影效果极佳，细节保留好",
-        "recommended_for": "换背景（商品）",
-        "requires_reference": False,
-        "size_mb": 120,
-    },
-    {
-        "id": "isnet_anime",
-        "name": "IS-Net Anime",
-        "provider": "rembg",
-        "tags": ["background_replace"],
-        "description": "针对动漫/插画优化的分割模型，发丝与细线条保留精准",
-        "recommended_for": "换背景（动漫）",
-        "requires_reference": False,
-        "size_mb": 120,
-    },
-    {
-        "id": "u2net",
-        "name": "U²-Net",
-        "provider": "rembg",
-        "tags": ["background_replace"],
-        "description": "通用显著目标检测经典模型，人像/商品/动物均兼顾",
-        "recommended_for": "换背景（通用）",
-        "requires_reference": False,
-        "size_mb": 176,
-    },
-    {
-        "id": "modnet",
-        "name": "MODNet",
-        "provider": "rembg",
-        "tags": ["background_replace"],
-        "description": "轻量实时人像抠图，速度极快，适合批量与预览",
-        "recommended_for": "换背景（快速）",
-        "requires_reference": False,
-        "size_mb": 25,
-        "badge": "快速",
-    },
-    # ── 换装 / 换脸 / 试穿（按质量排序）──
-    {
-        "id": "flux_fill",
-        "name": "FLUX.1-Fill-dev",
-        "provider": "diffusers",
-        "tags": ["outfit_swap", "virtual_tryon", "face_swap"],
-        "description": "FLUX.1 官方 Inpainting 变体，语义理解力极强，细节还原最佳，需 16-24GB VRAM",
-        "recommended_for": "换装 / 试穿 / 换脸（最高质量）",
-        "requires_reference": False,
-        "size_mb": 23800,
-        "badge": "高质量",
-    },
-    {
-        "id": "sdxl",
-        "name": "Stable Diffusion XL",
-        "provider": "IOPaint",
-        "tags": ["outfit_swap", "virtual_tryon"],
-        "description": "SDXL Inpainting，1024px 高分辨率生成，服装纹理自然，需 12GB+ VRAM",
-        "recommended_for": "换装 / 试穿（高分辨率）",
-        "requires_reference": False,
-        "size_mb": 7000,
-    },
-    {
-        "id": "powerpaint",
-        "name": "PowerPaint v2",
-        "provider": "IOPaint",
-        "tags": ["outfit_swap", "virtual_tryon"],
-        "description": "多任务 Inpainting，专为局部换装/试穿设计，结构保留优秀",
-        "recommended_for": "换装 / 试穿",
-        "requires_reference": False,
-        "size_mb": 4500,
-        "badge": "推荐",
-    },
-    {
-        "id": "mat",
-        "name": "MAT",
-        "provider": "IOPaint",
-        "tags": ["outfit_swap", "face_swap"],
-        "description": "Mask-Aware Transformer，不规则掩码处理精度最高，边缘自然无痕",
-        "recommended_for": "换装 / 换脸（精细边缘）",
-        "requires_reference": True,
-        "size_mb": 500,
-    },
-    {
-        "id": "lama_inpaint",
-        "name": "LaMa",
-        "provider": "IOPaint",
-        "tags": ["outfit_swap", "face_swap"],
-        "description": "大感受野卷积修复，纹理延续自然，速度快，小显存也能跑",
-        "recommended_for": "换装 / 区域修复",
-        "requires_reference": True,
-        "size_mb": 200,
-    },
-    {
-        "id": "zits",
-        "name": "ZITS",
-        "provider": "IOPaint",
-        "tags": ["outfit_swap"],
-        "description": "基于 Transformer 的结构线修复，布料纹理/格纹/条纹重建出色",
-        "recommended_for": "换装（纹理类服装）",
-        "requires_reference": True,
-        "size_mb": 200,
-    },
-    {
-        "id": "sd15",
-        "name": "Stable Diffusion 1.5",
-        "provider": "IOPaint",
-        "tags": ["outfit_swap", "face_swap", "virtual_tryon"],
-        "description": "文字引导 Inpainting，可配合提示词描述目标样式，创意度高",
-        "recommended_for": "换装 / 换脸（文字引导）",
-        "requires_reference": False,
-        "size_mb": 4000,
-    },
-    {
-        "id": "gfpgan",
-        "name": "GFPGAN v1.4",
-        "provider": "facexlib",
-        "tags": ["face_swap"],
-        "description": "人脸生成对抗网络，专精人脸修复与超分增强，换脸后处理首选",
-        "recommended_for": "换脸 / 人脸增强",
-        "requires_reference": True,
-        "size_mb": 340,
-        "badge": "推荐",
-    },
-    # ── 方案A：精准替换（按质量排序）──
-    {
-        "id": "flux_fill_prompt",
-        "name": "FLUX.1-Fill-dev",
-        "provider": "diffusers",
-        "tags": ["prompt_inpaint"],
-        "description": "FLUX.1 Inpainting，2024 SOTA，文字理解力最强，细节还原极佳，需 16-24GB VRAM",
-        "recommended_for": "精准替换（最高质量）",
-        "requires_reference": False,
-        "size_mb": 23800,
-        "badge": "高质量",
-    },
-    {
-        "id": "sdxl_inpaint_prompt",
-        "name": "SDXL Inpainting",
-        "provider": "IOPaint",
-        "tags": ["prompt_inpaint"],
-        "description": "SDXL 文字引导精准替换，1024px 高精度输出，需 12GB+ VRAM",
-        "recommended_for": "精准替换（高质量）",
-        "requires_reference": False,
-        "size_mb": 7000,
-        "badge": "高质量",
-    },
-    {
-        "id": "powerpaint_prompt",
-        "name": "PowerPaint v2",
-        "provider": "IOPaint",
-        "tags": ["prompt_inpaint"],
-        "description": "PowerPaint 文字引导，结构保留佳，替换边缘自然，推荐首选",
-        "recommended_for": "精准替换",
-        "requires_reference": False,
-        "size_mb": 4500,
-        "badge": "推荐",
-    },
-    {
-        "id": "sd15_inpaint_prompt",
-        "name": "SD 1.5 Inpainting",
-        "provider": "IOPaint",
-        "tags": ["prompt_inpaint"],
-        "description": "SD 1.5 文字引导 Inpainting，速度快，显存需求低，适合快速预览",
-        "recommended_for": "精准替换（快速）",
-        "requires_reference": False,
-        "size_mb": 4000,
-    },
-    # ── 方案B：智能定位（按质量排序）──
-    {
-        "id": "grounded_sam_flux",
-        "name": "GDINO + SAM + FLUX.1-Fill",
-        "provider": "HiImage",
-        "tags": ["auto_segment_edit"],
-        "description": "GroundingDINO 零样本检测 + SAM 精细分割 + FLUX.1-Fill 修复，任意目标、边缘最精准，需 16-24GB VRAM",
-        "recommended_for": "换色/换风格（最高质量）",
-        "requires_reference": False,
-        "size_mb": 25500,
-        "badge": "高质量",
-    },
-    {
-        "id": "grounded_sam_sdxl",
-        "name": "GDINO + SAM + SDXL",
-        "provider": "HiImage",
-        "tags": ["auto_segment_edit"],
-        "description": "GroundingDINO + SAM 精准分割 + SDXL Inpainting，分割边缘精细，高分辨率输出，需 12GB VRAM",
-        "recommended_for": "换色/换风格（高质量）",
-        "requires_reference": False,
-        "size_mb": 9500,
-    },
-    {
-        "id": "auto_segment_hsv",
-        "name": "SegFormer + HSV 换色",
-        "provider": "HiImage",
-        "tags": ["auto_segment_edit"],
-        "description": "自动识别服装部位，HSV 色彩空间换色，亚秒级响应，保留布料光影",
-        "recommended_for": "换色（纯色）",
-        "requires_reference": False,
-        "size_mb": 400,
-        "badge": "推荐",
-    },
-    {
-        "id": "auto_segment_sd15",
-        "name": "SegFormer + SD 1.5",
-        "provider": "HiImage + IOPaint",
-        "tags": ["auto_segment_edit"],
-        "description": "自动分割后用 SD 1.5 Inpainting 替换，支持纹理/风格类指令",
-        "recommended_for": "换风格 / 换纹理",
-        "requires_reference": False,
-        "size_mb": 4400,
-    },
-    # ── 方案C：自由编辑（按画质排序）──
-    {
-        "id": "flux",
-        "name": "FLUX.1-dev",
-        "provider": "diffusers",
-        "tags": ["instruction_edit"],
-        "description": "Black Forest Labs 2024 SOTA，文字理解力极强，细节还原最佳，需 24GB+ VRAM",
-        "recommended_for": "自由编辑（最高画质）",
-        "requires_reference": False,
-        "size_mb": 24000,
-        "badge": "高质量",
-    },
-    {
-        "id": "sdxl_img2img",
-        "name": "SDXL Img2Img",
-        "provider": "diffusers",
-        "tags": ["instruction_edit"],
-        "description": "SDXL 图生图，1024px 高分辨率输出，画质明显优于 SD 1.5，需 12GB+ VRAM",
-        "recommended_for": "自由编辑（高分辨率）",
-        "requires_reference": False,
-        "size_mb": 7000,
-    },
-    {
-        "id": "magicbrush",
-        "name": "MagicBrush",
-        "provider": "diffusers",
-        "tags": ["instruction_edit"],
-        "description": "高质量指令编辑数据集微调的 IP2P，指令跟随更精准，兼顾速度与效果",
-        "recommended_for": "自由语义编辑（精准指令）",
-        "requires_reference": False,
-        "size_mb": 5000,
-        "badge": "推荐",
-    },
-    {
-        "id": "instruct_pix2pix",
-        "name": "InstructPix2Pix",
-        "provider": "diffusers",
-        "tags": ["instruction_edit"],
-        "description": "原版 timbrooks/instruct-pix2pix，SD 1.5 底座，显存需求低，适合快速预览",
-        "recommended_for": "自由语义编辑（快速）",
-        "requires_reference": False,
-        "size_mb": 5000,
-    },
-]
-
-# 模式分组（前端用于按功能过滤）
-SYNTHESIS_MODE_GROUPS = [
-    {
-        "id": "background_replace",
-        "name": "换背景",
-        "icon": "image",
-        "description": "智能抠图后替换背景图",
-        "models": [m["id"] for m in SYNTHESIS_MODELS if "background_replace" in m["tags"]],
-        "default_model": "birefnet",
-        "needs_reference": True,   # 参考图 = 新背景图
-        "reference_label": "新背景图",
-        "needs_roi": False,
-        "needs_prompt": False,
-    },
-    {
-        "id": "outfit_swap",
-        "name": "换装模拟",
-        "icon": "shirt",
-        "description": "在指定区域替换服装纹理",
-        "models": [m["id"] for m in SYNTHESIS_MODELS if "outfit_swap" in m["tags"]],
-        "default_model": "powerpaint",
-        "needs_reference": True,   # 参考图 = 目标服装图
-        "reference_label": "目标服装图",
-        "needs_roi": False,
-        "needs_prompt": False,
-    },
-    {
-        "id": "face_swap",
-        "name": "换脸模拟",
-        "icon": "user",
-        "description": "在人脸区域替换目标人脸（仅用于合法创作）",
-        "models": [m["id"] for m in SYNTHESIS_MODELS if "face_swap" in m["tags"]],
-        "default_model": "gfpgan",
-        "needs_reference": True,   # 参考图 = 目标人脸图
-        "reference_label": "目标人脸图",
-        "needs_roi": False,
-        "needs_prompt": False,
-    },
-    {
-        "id": "virtual_tryon",
-        "name": "虚拟试穿",
-        "icon": "sparkles",
-        "description": "将服装自然穿上人物照（AI 近似方案）",
-        "models": [m["id"] for m in SYNTHESIS_MODELS if "virtual_tryon" in m["tags"]],
-        "default_model": "sd15",
-        "needs_reference": True,
-        "reference_label": "服装图",
-        "needs_roi": False,
-        "needs_prompt": False,
-    },
-    # ── 方案A：精准替换 ──
-    {
-        "id": "prompt_inpaint",
-        "name": "精准替换",
-        "icon": "crosshair",
-        "description": "手动框选区域，输入文字描述，SD 1.5 按描述替换选定区域",
-        "models": [m["id"] for m in SYNTHESIS_MODELS if "prompt_inpaint" in m["tags"]],
-        "default_model": "powerpaint_prompt",
-        "needs_reference": False,
-        "needs_roi": True,
-        "needs_prompt": True,
-        "prompt_label": "替换描述",
-        "prompt_hint": "例：a red down jacket / 一件红色羽绒服",
-    },
-    # ── 方案B：智能定位 ──
-    {
-        "id": "auto_segment_edit",
-        "name": "智能定位",
-        "icon": "wand",
-        "description": "输入中文指令自动识别服装部位并换色/换风格，无需手动框选",
-        "models": [m["id"] for m in SYNTHESIS_MODELS if "auto_segment_edit" in m["tags"]],
-        "default_model": "auto_segment_hsv",
-        "needs_reference": False,
-        "needs_roi": False,
-        "needs_prompt": True,
-        "prompt_label": "编辑指令",
-        "prompt_hint": "例：将上衣换成黑色 / 把裤子改成牛仔风格",
-    },
-    # ── 方案C：自由编辑 ──
-    {
-        "id": "instruction_edit",
-        "name": "自由编辑",
-        "icon": "message",
-        "description": "自然语言指令驱动全图语义编辑，无需参考图或框选区域",
-        "models": [m["id"] for m in SYNTHESIS_MODELS if "instruction_edit" in m["tags"]],
-        "default_model": "magicbrush",
-        "needs_reference": False,
-        "needs_roi": False,
-        "needs_prompt": True,
-        "prompt_label": "编辑指令",
-        "prompt_hint": "例：make the background a forest / 将背景换成夜晚城市",
-    },
-]
+__all__ = ["SYNTHESIS_MODELS", "SYNTHESIS_MODE_GROUPS", "Synthesizer"]
 
 
 # ──────────────────────────────────────────────────────────────
@@ -451,6 +74,29 @@ class Synthesizer:
         :param reference_rgb: 参考图（新背景/服装/人脸图），模式需要时必传
         :return:              合成结果（RGB numpy, uint8）
         """
+        # ── Pre-flight：模型完整性预检 ────────────────────────────────────────
+        # 在推理开始前检测模型文件是否存在/完整，提供明确的中文错误提示。
+        # ImportError 时跳过检测（不阻断推理），保证向后兼容。
+        try:
+            from core.model_checker import ModelChecker
+            _checker = ModelChecker()
+            _chk = _checker.check_model(self.model_id)
+            if _chk.status == "missing":
+                raise RuntimeError(
+                    f"模型 '{self.model_id}'（{_chk.name}）尚未下载。\n"
+                    f"  详情：{_chk.message}\n"
+                    f"  请先下载模型，或运行：python scripts/check_models.py"
+                )
+            elif _chk.status in ("corrupted", "partial"):
+                raise RuntimeError(
+                    f"模型 '{self.model_id}'（{_chk.name}）文件可能已损坏或不完整。\n"
+                    f"  详情：{_chk.message}\n"
+                    f"  建议重新下载，或运行：python scripts/check_models.py"
+                )
+        except ImportError:
+            pass  # model_checker 不可用时跳过检测
+        # ── End Pre-flight ────────────────────────────────────────────────────
+
         if self.mode == "background_replace":
             return self._background_replace(source_rgb, reference_rgb, rois)
         elif self.mode == "outfit_swap":
@@ -712,9 +358,9 @@ class Synthesizer:
 
         # 其余模型走 IOPaint
         _prompt_model_map = {
-            "sdxl_inpaint_prompt":      "diffusers_sd_xl_inpaint",
-            "powerpaint_prompt":         "PowerPaint",
-            "sd15_inpaint_prompt":       "runwayml/stable-diffusion-inpainting",
+            "sdxl_inpaint_prompt":  "diffusers_sd_xl_inpaint",
+            "powerpaint_prompt":    "PowerPaint",
+            "sd15_inpaint_prompt":  "runwayml/stable-diffusion-inpainting",
         }
         iopaint_model = _prompt_model_map.get(
             self.model_id, "runwayml/stable-diffusion-inpainting"

@@ -1,94 +1,85 @@
 """
 超分辨率核心模块 - 使用 Real-ESRGAN
-支持 2x / 4x 图像增清，首次调用时自动下载模型权重（~18-65MB）
+支持 2x / 4x 图像增清，首次调用时自动下载模型权重（~8-65MB）
+
+模型列表从 core/models.yaml 动态加载（upscale 模式），
+按 display_group 字段分组，无需在代码中硬编码。
 """
 import os
 import cv2
 import numpy as np
 import urllib.request
 
-# 模型信息：(model_name, scale, weight_filename, download_url, display_name, description)
-# 排序规则：同组内按推荐度从高到低
-UPSCALE_MODEL_LIST = [
-    # ── 通用超分辨率 ──
-    (
-        "RealESRGAN_x4plus",
-        4,
-        "RealESRGAN_x4plus.pth",
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
-        "4x 通用照片（推荐）",
-        "通用场景，综合细节恢复最佳，适合照片/截图；强 GAN 锐化，细节感强｜模型 ~65 MB",
-    ),
-    (
-        "RealESRGAN_x2plus",
-        2,
-        "RealESRGAN_x2plus.pth",
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
-        "2x 通用照片",
-        "2 倍放大，速度更快，文件更小，放大幅度要求不高时优先选此｜模型 ~65 MB",
-    ),
-    # ── 精细化增强（去噪/去模糊）──
-    (
-        "realesr-general-x4v3",
-        4,
-        "realesr-general-x4v3.pth",
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth",
-        "4x 精细化增强·轻量（推荐）",
-        "专为真实世界压缩/模糊图设计：同时去噪+去模糊+放大，效果优于 x4plus，体积仅 17 MB｜速度最快",
-    ),
-    (
-        "RealESRNet_x4plus",
-        4,
-        "RealESRNet_x4plus.pth",
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth",
-        "4x 自然细化（无 GAN）",
-        "无 GAN 判别器，避免过度锐化伪影，色彩还原最自然；人像/风景/需要忠实还原的场景首选｜模型 ~65 MB",
-    ),
-    # ── 动漫/插画 ──
-    (
-        "RealESRGAN_x4plus_anime_6B",
-        4,
-        "RealESRGAN_x4plus_anime_6B.pth",
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth",
-        "4x 动漫/插画（静图）",
-        "针对动漫线稿/赛璐璐风格插画优化，线条锐利、无晕染｜模型 ~18 MB",
-    ),
-    (
-        "realesr-animevideov3",
-        4,
-        "realesr-animevideov3.pth",
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth",
-        "4x 动漫视频/帧序列",
-        "动漫视频逐帧处理专用：更少闪烁、更好时间一致性；也可用于动漫截帧精细化｜模型 ~8 MB",
-    ),
-]
 
-# 结构化分组（供 API 和 GUI 直接使用）
-UPSCALE_MODEL_GROUPS = [
-    ("── 通用超分辨率 ──", [
-        (model_name, display_name, description)
-        for model_name, scale, weight_file, url, display_name, description in UPSCALE_MODEL_LIST
-        if model_name in ("RealESRGAN_x4plus", "RealESRGAN_x2plus")
-    ]),
-    ("── 精细化增强（去噪/去模糊）──", [
-        (model_name, display_name, description)
-        for model_name, scale, weight_file, url, display_name, description in UPSCALE_MODEL_LIST
-        if model_name in ("realesr-general-x4v3", "RealESRNet_x4plus")
-    ]),
-    ("── 动漫/插画 ──", [
-        (model_name, display_name, description)
-        for model_name, scale, weight_file, url, display_name, description in UPSCALE_MODEL_LIST
-        if model_name in ("RealESRGAN_x4plus_anime_6B", "realesr-animevideov3")
-    ]),
-]
+def _build_upscale_structures():
+    """
+    从 models.yaml 构建所有超分辨率相关数据结构。
 
-# 扁平化 model_name 列表
-AVAILABLE_UPSCALE_MODELS = [m[0] for m in UPSCALE_MODEL_LIST]
+    返回：(UPSCALE_MODEL_LIST, UPSCALE_MODEL_GROUPS, lookup_dicts)
+      UPSCALE_MODEL_LIST:
+        [(model_id, scale, weight_filename, download_url, display_name, description), ...]
 
-# 模型 name → scale 映射
-_MODEL_SCALE = {m[0]: m[1] for m in UPSCALE_MODEL_LIST}
-_MODEL_WEIGHT = {m[0]: m[2] for m in UPSCALE_MODEL_LIST}
-_MODEL_URL = {m[0]: m[3] for m in UPSCALE_MODEL_LIST}
+      UPSCALE_MODEL_GROUPS:
+        [(group_label, [(model_id, display_name, description), ...]), ...]
+
+      lookup_dicts:
+        (_MODEL_SCALE, _MODEL_WEIGHT, _MODEL_URL, _MODEL_ARCH, _MODEL_NUM_BLOCK, _MODEL_NUM_CONV)
+    """
+    try:
+        from core.model_registry import get_models_for_mode
+        models = get_models_for_mode("upscale")
+    except Exception:
+        models = []
+
+    model_list = []
+    for m in models:
+        model_list.append((
+            m["id"],
+            m.get("scale", 4),
+            m.get("weight_filename", f"{m['id']}.pth"),
+            m.get("download_url", ""),
+            m.get("name", m["id"]),
+            m.get("description", ""),
+        ))
+
+    # 按 display_group 分组（保留 YAML 中的顺序）
+    groups_dict: dict[str, list] = {}
+    for m in models:
+        label = m.get("display_group", "其他")
+        if label not in groups_dict:
+            groups_dict[label] = []
+        groups_dict[label].append((
+            m["id"],
+            m.get("name", m["id"]),
+            m.get("description", ""),
+        ))
+    model_groups = list(groups_dict.items())
+
+    # 查找字典（model_id → 属性）
+    scale_map  = {entry[0]: entry[1] for entry in model_list}
+    weight_map = {entry[0]: entry[2] for entry in model_list}
+    url_map    = {entry[0]: entry[3] for entry in model_list}
+
+    # 架构相关参数（_build_upsampler 使用，来自 models.yaml 的 arch/num_block/num_conv 字段）
+    arch_map      = {m["id"]: m.get("arch", "RRDBNet")   for m in models}
+    num_block_map = {m["id"]: m.get("num_block", 23)      for m in models}
+    num_conv_map  = {m["id"]: m.get("num_conv", 32)       for m in models}
+
+    return model_list, model_groups, (scale_map, weight_map, url_map, arch_map, num_block_map, num_conv_map)
+
+
+# ── 模块级数据（进程内只构建一次）───────────────────────────────────────────
+
+_list, _groups, _dicts = _build_upscale_structures()
+
+UPSCALE_MODEL_LIST   = _list
+UPSCALE_MODEL_GROUPS = _groups
+
+_MODEL_SCALE, _MODEL_WEIGHT, _MODEL_URL, \
+_MODEL_ARCH, _MODEL_NUM_BLOCK, _MODEL_NUM_CONV = _dicts
+
+# 扁平化 model_id 列表（向后兼容旧接口）
+AVAILABLE_UPSCALE_MODELS = [entry[0] for entry in UPSCALE_MODEL_LIST]
 
 # 项目内模型缓存目录
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -194,7 +185,14 @@ class Upscaler:
         self._upsampler = self._build_upsampler(weight_path)
 
     def _build_upsampler(self, weight_path: str):
-        """构建 RealESRGANer 实例"""
+        """
+        构建 RealESRGANer 实例。
+
+        网络结构通过 models.yaml 中的 arch 字段决定：
+          - arch: SRVGGNetCompact → 轻量模型（realesr-general-x4v3、realesr-animevideov3）
+          - arch: RRDBNet         → 标准模型（其余所有）
+                  num_block 决定深度：6（anime_6B）或 23（其他）
+        """
         try:
             from realesrgan import RealESRGANer
             from basicsr.archs.rrdbnet_arch import RRDBNet
@@ -205,10 +203,12 @@ class Upscaler:
                 "  pip install realesrgan basicsr facexlib"
             ) from e
 
-        # 根据模型选择网络结构
-        if self.model_name in ('realesr-general-x4v3', 'realesr-animevideov3'):
-            # SRVGGNetCompact 轻量模型
-            # general-x4v3: num_conv=32；animevideov3: num_conv=16
+        arch      = _MODEL_ARCH.get(self.model_name, "RRDBNet")
+        num_block = _MODEL_NUM_BLOCK.get(self.model_name, 23)
+        num_conv  = _MODEL_NUM_CONV.get(self.model_name, 32)
+
+        if arch == "SRVGGNetCompact":
+            # 轻量模型：general-x4v3 (num_conv=32) / animevideov3 (num_conv=16)
             try:
                 from basicsr.archs.srvgg_arch import SRVGGNetCompact
             except ImportError:
@@ -216,22 +216,15 @@ class Upscaler:
                     from realesrgan.archs.srvgg_arch import SRVGGNetCompact
                 except ImportError as e:
                     raise ImportError(f"缺少 SRVGGNetCompact: {e}") from e
-            num_conv = 32 if self.model_name == 'realesr-general-x4v3' else 16
             model = SRVGGNetCompact(
                 num_in_ch=3, num_out_ch=3,
                 num_feat=64, num_conv=num_conv, upscale=4, act_type='prelu'
             )
-        elif self.model_name == 'RealESRGAN_x4plus_anime_6B':
-            # anime 静图模型：更小的 num_block=6
-            model = RRDBNet(
-                num_in_ch=3, num_out_ch=3,
-                num_feat=64, num_block=6, num_grow_ch=32, scale=4
-            )
         else:
-            # x4plus、x2plus、RealESRNet_x4plus 均使用标准 23 块 RRDBNet
+            # 标准 RRDBNet：num_block=23（通用/2x）或 6（anime_6B）
             model = RRDBNet(
                 num_in_ch=3, num_out_ch=3,
-                num_feat=64, num_block=23, num_grow_ch=32,
+                num_feat=64, num_block=num_block, num_grow_ch=32,
                 scale=self.scale
             )
 
@@ -257,3 +250,4 @@ class Upscaler:
         )
         print(f"[Upscaler] 模型加载完成: {self.model_name} (device={self.device}, scale={self.scale}x)")
         return upsampler
+

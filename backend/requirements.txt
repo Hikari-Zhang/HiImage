@@ -22,6 +22,7 @@ python-multipart>=0.0.9
 numpy>=1.26.0
 opencv-python>=4.10.0
 Pillow==9.5.0
+PyYAML>=6.0          # 运行时读取 core/models.yaml（已随 transformers/diffusers 安装）
 
 # ---- AI models (pinned to verified versions) ----
 iopaint==1.6.0
