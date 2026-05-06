@@ -23,6 +23,11 @@ interface SettingsState {
   keepaliveSeconds: number
   startupTimeout: number
 
+  // Memory optimization (diffusion models)
+  lowMem: boolean
+  cpuOffload: boolean
+  cpuTextencoder: boolean
+
   // Network
   hfEndpoint: string
   hfToken: string
@@ -57,6 +62,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   serverPort: 51821,
   keepaliveSeconds: 300,
   startupTimeout: 1800,
+  lowMem: true,
+  cpuOffload: false,
+  cpuTextencoder: false,
   hfEndpoint: 'https://huggingface.co',
   hfToken: '',
   isLoading: false,
@@ -87,6 +95,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         hfToken: data.hf_token ?? '',
         defaultDilation: data.default_dilation ?? 10,
         disableNsfw: data.disable_nsfw ?? true,
+        lowMem: data.low_mem ?? true,
+        cpuOffload: data.cpu_offload ?? false,
+        cpuTextencoder: data.cpu_textencoder ?? false,
       })
     } catch (err) {
       console.error('Failed to load settings:', err)
@@ -108,8 +119,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           server_startup_timeout: state.startupTimeout,
           hf_endpoint: state.hfEndpoint,
           hf_token: state.hfToken,
-          default_dilation: state.defaultDilation,
-          disable_nsfw: state.disableNsfw,
+        default_dilation: state.defaultDilation,
+        disable_nsfw: state.disableNsfw,
+        low_mem: state.lowMem,
+        cpu_offload: state.cpuOffload,
+        cpu_textencoder: state.cpuTextencoder,
         }),
       })
     } catch (err) {

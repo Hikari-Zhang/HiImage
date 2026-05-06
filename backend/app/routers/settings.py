@@ -19,6 +19,10 @@ class SettingsUpdate(BaseModel):
     hf_token: Optional[str] = None
     default_dilation: Optional[int] = None
     disable_nsfw: Optional[bool] = None
+    # 内存优化选项（扩散模型）
+    low_mem: Optional[bool] = None
+    cpu_offload: Optional[bool] = None
+    cpu_textencoder: Optional[bool] = None
 
 
 @router.get("/settings")
@@ -34,6 +38,9 @@ async def get_settings():
         "hf_token": all_settings.get("network.hf_token", ""),
         "default_dilation": all_settings.get("inpaint.default_dilation", 10),
         "disable_nsfw": all_settings.get("inpaint.disable_nsfw", True),
+        "low_mem": all_settings.get("server.low_mem", True),
+        "cpu_offload": all_settings.get("server.cpu_offload", False),
+        "cpu_textencoder": all_settings.get("server.cpu_textencoder", False),
     }
 
 
@@ -58,6 +65,12 @@ async def update_settings(data: SettingsUpdate):
         current["inpaint.default_dilation"] = data.default_dilation
     if data.disable_nsfw is not None:
         current["inpaint.disable_nsfw"] = data.disable_nsfw
+    if data.low_mem is not None:
+        current["server.low_mem"] = data.low_mem
+    if data.cpu_offload is not None:
+        current["server.cpu_offload"] = data.cpu_offload
+    if data.cpu_textencoder is not None:
+        current["server.cpu_textencoder"] = data.cpu_textencoder
 
     save(current)
     return {"status": "ok", "message": "设置已保存"}
