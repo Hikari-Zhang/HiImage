@@ -1,5 +1,6 @@
 # FastAPI stack
-fastapi>=0.111.0
+# Pinned to 0.108.0 to match iopaint 1.6.0's dependency constraint
+fastapi==0.108.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.8
 python-multipart>=0.0.9
