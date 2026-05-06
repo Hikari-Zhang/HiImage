@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { Upload, Wand2, Trash2, Download, ZoomIn, ZoomOut, Move, Square, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
+import { Upload, Wand2, Trash2, Download, ZoomIn, ZoomOut, Move, Square, RotateCcw, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import ImageCanvas from '../components/ImageCanvas'
 import ImageCompare from '../components/ImageCompare'
@@ -38,7 +38,7 @@ export default function WatermarkRemoval() {
     setDevice, setInpaintModel, setDilation, setSensitivity,
     setPostprocessMethod, setPostprocessEnabled, setUpscaleEnabled, setUpscaleModel,
   } = useSettingsStore()
-  const { inpaintGroups, upscaleOptions } = useModelStore()
+  const { inpaintGroups, upscaleGroups } = useModelStore()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
@@ -222,13 +222,23 @@ export default function WatermarkRemoval() {
     }
   }
 
+  // 将处理结果作为新的源图进行再次处理
+  const handleUseResultAsSource = () => {
+    if (!resultImage) return
+    reset()
+    clearROIs()
+    setSourceImage(resultImage, undefined)
+    setShowResult(false)
+    showToast('success', '已将处理结果设为新源图，可继续去水印')
+  }
+
   // Delete selected ROIs
   const handleDeleteSelected = () => {
     selectedROIs.forEach((id) => removeROI(id))
   }
 
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col min-h-0">
       <PageHeader
         title="去水印"
         subtitle={imageWidth > 0 ? `${imageWidth} x ${imageHeight}` : undefined}
@@ -236,7 +246,7 @@ export default function WatermarkRemoval() {
       />
 
       {/* Content area */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Canvas area */}
         <div
           className="flex-1 bg-[#1a1a1a] relative"
@@ -303,7 +313,7 @@ export default function WatermarkRemoval() {
         </div>
 
         {/* Control panel */}
-        <div className="w-[240px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-3 overflow-y-auto">
+        <div className="w-[240px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-3 overflow-y-auto min-h-0">
           {/* ROI list */}
           <section>
             <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">水印区域</h3>
@@ -442,7 +452,7 @@ export default function WatermarkRemoval() {
                     value={upscaleModel}
                     onChange={(e) => setUpscaleModel(e.target.value)}
                     size="sm"
-                    options={upscaleOptions}
+                    groups={upscaleGroups}
                   />
                 )}
               </div>
@@ -479,6 +489,15 @@ export default function WatermarkRemoval() {
                   size="sm"
                 >
                   {showResult ? '返回编辑' : '查看对比'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={handleUseResultAsSource}
+                  icon={<RefreshCw size={14} />}
+                  className="w-full"
+                  size="sm"
+                >
+                  再次去水印
                 </Button>
                 <Button
                   variant="ghost"

@@ -31,7 +31,7 @@ export interface InpaintModelsResponse {
   }>
 }
 
-/** 后端 /api/models/upscale 返回结构 */
+/** 后端 /api/models/upscale 返回结构（分组形式） */
 export interface UpscaleModelsResponse {
   groups: Array<{
     label: string

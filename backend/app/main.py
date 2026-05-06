@@ -1,5 +1,5 @@
 """
-ClearWaterMark FastAPI 应用
+HiImage FastAPI 应用
 """
 import os
 import sys
@@ -38,11 +38,11 @@ async def lifespan(app: FastAPI):
     os.environ["HF_HOME"] = os.path.join(MODELS_DIR, "huggingface")
     os.environ["TORCH_HOME"] = os.path.join(MODELS_DIR, "torch")
 
-    print(f"[Backend] ClearWaterMark API 启动")
+    print(f"[Backend] HiImage API 启动")
     print(f"[Backend] 项目根目录: {PROJECT_ROOT}")
     print(f"[Backend] 模型目录: {MODELS_DIR}")
 
-    log_manager.info("ClearWaterMark API 启动", source="backend")
+    log_manager.info("HiImage API 启动", source="backend")
     log_manager.info(f"项目根目录: {PROJECT_ROOT}", source="backend")
     log_manager.info(f"模型目录: {MODELS_DIR}", source="backend")
 
@@ -56,11 +56,11 @@ async def lifespan(app: FastAPI):
             server.stop()
     except Exception:
         pass
-    print("[Backend] ClearWaterMark API 关闭")
+    print("[Backend] HiImage API 关闭")
 
 
 app = FastAPI(
-    title="ClearWaterMark API",
+    title="HiImage API",
     version="2.0.0",
     lifespan=lifespan,
 )

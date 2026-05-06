@@ -4,7 +4,7 @@
 from fastapi import APIRouter
 
 from core.inpainter import MODEL_GROUPS
-from core.upscaler import UPSCALE_MODEL_LIST
+from core.upscaler import UPSCALE_MODEL_GROUPS, _MODEL_SCALE
 
 router = APIRouter()
 
@@ -29,14 +29,17 @@ async def list_inpaint_models():
 
 @router.get("/models/upscale")
 async def list_upscale_models():
-    """获取超分辨率模型列表"""
-    models = [
-        {
-            "id": name,
-            "scale": scale,
-            "name": display_name,
-            "description": desc,
-        }
-        for name, scale, _weight, _url, display_name, desc in UPSCALE_MODEL_LIST
-    ]
-    return {"models": models}
+    """获取超分辨率模型列表（分组）"""
+    groups = []
+    for group_label, models in UPSCALE_MODEL_GROUPS:
+        items = [
+            {
+                "id": model_name,
+                "name": display_name,
+                "description": desc,
+                "scale": _MODEL_SCALE.get(model_name, 4),
+            }
+            for model_name, display_name, desc in models
+        ]
+        groups.append({"label": group_label, "models": items})
+    return {"groups": groups}

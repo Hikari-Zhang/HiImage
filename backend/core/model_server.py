@@ -24,7 +24,7 @@ import cv2
 import app.config as _cfg
 
 # 哪些模型走 Server 模式（扩散模型，加载慢）
-_DIFFUSION_PREFIXES = ('runwayml/', 'andregn/', 'Sanster/', 'diffusers/')
+_DIFFUSION_PREFIXES = ('runwayml/', 'Sanster/', 'diffusers/', 'Uminosachi/', 'redstonehero/', 'Fantasy-Studio/')
 
 SERVER_HOST = '127.0.0.1'
 

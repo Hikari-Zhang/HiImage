@@ -5,7 +5,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: clearwatermark-backend
+    container_name: hiimage-backend
     ports:
       - "${BACKEND_PORT:-8787}:8787"
     volumes:
@@ -33,7 +33,7 @@ services:
   #   build:
   #     context: ./backend
   #     dockerfile: Dockerfile
-  #   container_name: clearwatermark-backend-gpu
+  #   container_name: hiimage-backend-gpu
   #   ports:
   #     - "${BACKEND_PORT:-8787}:8787"
   #   volumes:

@@ -143,13 +143,21 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('window-all-closed', async () => {
-  await backendManager.stop()
+app.on('window-all-closed', () => {
+  // macOS 下关闭窗口不退出，不需要 stop（before-quit 会处理）
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
-app.on('before-quit', async () => {
-  await backendManager.stop()
+let isQuitting = false
+app.on('before-quit', (e) => {
+  if (isQuitting) return  // 已经处理过，放行
+  e.preventDefault()      // 阻止本次退出，等后端停止后再退
+  isQuitting = true
+  console.log('[Main] Quitting, stopping backend...')
+  backendManager.forceQuit().finally(() => {
+    console.log('[Main] Backend stopped, exiting app')
+    process.exit(0)  // 直接终止进程，避免 app.quit() 的二次事件循环问题
+  })
 })

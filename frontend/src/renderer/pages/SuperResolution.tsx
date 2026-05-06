@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Upload, Download, ArrowLeftRight } from 'lucide-react'
+import { Upload, Download, RefreshCw } from 'lucide-react'
 import { Button, Select, Progress, showToast } from '../components/ui'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
@@ -12,7 +12,7 @@ export default function SuperResolution() {
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { upscale } = useBackendAPI()
   const { device, upscaleModel, setDevice, setUpscaleModel } = useSettingsStore()
-  const { upscaleOptions } = useModelStore()
+  const { upscaleGroups } = useModelStore()
 
   const [sourceImage, setSourceImage] = useState<string | null>(null)
   const [resultImage, setResultImage] = useState<string | null>(null)
@@ -25,6 +25,9 @@ export default function SuperResolution() {
     RealESRGAN_x4plus: 4,
     RealESRGAN_x4plus_anime_6B: 4,
     RealESRGAN_x2plus: 2,
+    'realesr-general-x4v3': 4,
+    RealESRNet_x4plus: 4,
+    'realesr-animevideov3': 4,
   }
 
   const currentScale = scaleMap[upscaleModel] || 4
@@ -159,8 +162,20 @@ export default function SuperResolution() {
     }
   }
 
+  // 将处理结果作为新的源图，进行再次超分
+  const handleUseResultAsSource = () => {
+    if (!resultImage) return
+    const newInputSize = { ...outputSize }
+    setSourceImage(resultImage)
+    setResultImage(null)
+    setInputSize(newInputSize)
+    setOutputSize({ w: newInputSize.w * currentScale, h: newInputSize.h * currentScale })
+    reset()
+    showToast('success', '已将处理结果设为新源图，可继续超分辨率')
+  }
+
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col min-h-0">
       <PageHeader
         title="超分辨率"
         subtitle={inputSize.w > 0 ? `${inputSize.w}x${inputSize.h} → ${outputSize.w}x${outputSize.h}` : undefined}
@@ -168,7 +183,7 @@ export default function SuperResolution() {
       />
 
       {/* Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Image area */}
         <div
           className="flex-1 bg-[#1a1a1a] flex items-center justify-center relative"
@@ -209,14 +224,14 @@ export default function SuperResolution() {
         </div>
 
         {/* Control panel */}
-        <div className="w-[240px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-4 overflow-y-auto">
+        <div className="w-[240px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-4 overflow-y-auto min-h-0">
           {/* Model */}
           <Select
             label="模型"
             value={upscaleModel}
             onChange={(e) => handleModelChange(e.target.value)}
             size="sm"
-            options={upscaleOptions}
+            groups={upscaleGroups}
           />
 
           {/* Device */}
@@ -282,6 +297,18 @@ export default function SuperResolution() {
                 size="sm"
               >
                 保存结果
+              </Button>
+            )}
+
+            {resultImage && (
+              <Button
+                variant="ghost"
+                onClick={handleUseResultAsSource}
+                icon={<RefreshCw size={14} />}
+                className="w-full"
+                size="sm"
+              >
+                再次超分
               </Button>
             )}
 

@@ -34,7 +34,7 @@ export default function Sidebar() {
         </div>
         {!collapsed && (
           <span className="text-sm font-medium text-fg-primary truncate">
-            ClearWaterMark
+            HiImage
           </span>
         )}
       </div>

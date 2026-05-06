@@ -339,14 +339,14 @@ export default function SmartSynthesis() {
   // ──────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col min-h-0">
       <PageHeader
         title="智能合成"
         subtitle={imageWidth > 0 ? `${imageWidth} × ${imageHeight}` : undefined}
         right={<span className="text-xs text-fg-secondary">{activeModeConfig.name} | {device}</span>}
       />
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* ── 画布区域 ── */}
         <div
           className="flex-1 bg-[#1a1a1a] relative"
@@ -418,7 +418,7 @@ export default function SmartSynthesis() {
         </div>
 
         {/* ── 控制面板 ── */}
-        <div className="w-[260px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-3 overflow-y-auto">
+        <div className="w-[260px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-3 overflow-y-auto min-h-0">
 
           {/* 模式选择 */}
           <section>

@@ -1,5 +1,5 @@
 {
-  "name": "clearwatermark",
+  "name": "hiimage",
   "version": "2.0.0",
   "description": "AI-powered watermark removal and image enhancement tool",
   "main": "./out/main/index.js",
@@ -38,8 +38,8 @@
     "vite": "^5.4.8"
   },
   "build": {
-    "appId": "com.hikari.clearwatermark",
-    "productName": "ClearWaterMark",
+    "appId": "com.hikari.hiimage",
+    "productName": "HiImage",
     "mac": {
       "target": [
         "dmg"
@@ -51,7 +51,7 @@
     },
     "extraResources": [
       {
-        "from": "../backend/dist/clearwatermark-backend",
+        "from": "../backend/dist/hiimage-backend",
         "to": "backend"
       },
       {

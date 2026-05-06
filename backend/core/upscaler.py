@@ -7,23 +7,17 @@ import cv2
 import numpy as np
 import urllib.request
 
-# 模型信息：(model_name, scale, weight_filename, download_url, description)
+# 模型信息：(model_name, scale, weight_filename, download_url, display_name, description)
+# 排序规则：同组内按推荐度从高到低
 UPSCALE_MODEL_LIST = [
+    # ── 通用超分辨率 ──
     (
         "RealESRGAN_x4plus",
         4,
         "RealESRGAN_x4plus.pth",
         "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
         "4x 通用照片（推荐）",
-        "通用场景，细节恢复最佳，适合照片/截图｜模型 ~65 MB",
-    ),
-    (
-        "RealESRGAN_x4plus_anime_6B",
-        4,
-        "RealESRGAN_x4plus_anime_6B.pth",
-        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth",
-        "4x 动漫/插画",
-        "动漫线稿/插画专用，线条更锐利｜模型 ~18 MB",
+        "通用场景，综合细节恢复最佳，适合照片/截图；强 GAN 锐化，细节感强｜模型 ~65 MB",
     ),
     (
         "RealESRGAN_x2plus",
@@ -31,16 +25,61 @@ UPSCALE_MODEL_LIST = [
         "RealESRGAN_x2plus.pth",
         "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
         "2x 通用照片",
-        "放大倍率适中，速度更快，文件更小｜模型 ~65 MB",
+        "2 倍放大，速度更快，文件更小，放大幅度要求不高时优先选此｜模型 ~65 MB",
+    ),
+    # ── 精细化增强（去噪/去模糊）──
+    (
+        "realesr-general-x4v3",
+        4,
+        "realesr-general-x4v3.pth",
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth",
+        "4x 精细化增强·轻量（推荐）",
+        "专为真实世界压缩/模糊图设计：同时去噪+去模糊+放大，效果优于 x4plus，体积仅 17 MB｜速度最快",
+    ),
+    (
+        "RealESRNet_x4plus",
+        4,
+        "RealESRNet_x4plus.pth",
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth",
+        "4x 自然细化（无 GAN）",
+        "无 GAN 判别器，避免过度锐化伪影，色彩还原最自然；人像/风景/需要忠实还原的场景首选｜模型 ~65 MB",
+    ),
+    # ── 动漫/插画 ──
+    (
+        "RealESRGAN_x4plus_anime_6B",
+        4,
+        "RealESRGAN_x4plus_anime_6B.pth",
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth",
+        "4x 动漫/插画（静图）",
+        "针对动漫线稿/赛璐璐风格插画优化，线条锐利、无晕染｜模型 ~18 MB",
+    ),
+    (
+        "realesr-animevideov3",
+        4,
+        "realesr-animevideov3.pth",
+        "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth",
+        "4x 动漫视频/帧序列",
+        "动漫视频逐帧处理专用：更少闪烁、更好时间一致性；也可用于动漫截帧精细化｜模型 ~8 MB",
     ),
 ]
 
-# 结构化分组（供 GUI 直接使用）
+# 结构化分组（供 API 和 GUI 直接使用）
 UPSCALE_MODEL_GROUPS = [
-    ("── 超分辨率模型 ──", [
+    ("── 通用超分辨率 ──", [
         (model_name, display_name, description)
         for model_name, scale, weight_file, url, display_name, description in UPSCALE_MODEL_LIST
-    ])
+        if model_name in ("RealESRGAN_x4plus", "RealESRGAN_x2plus")
+    ]),
+    ("── 精细化增强（去噪/去模糊）──", [
+        (model_name, display_name, description)
+        for model_name, scale, weight_file, url, display_name, description in UPSCALE_MODEL_LIST
+        if model_name in ("realesr-general-x4v3", "RealESRNet_x4plus")
+    ]),
+    ("── 动漫/插画 ──", [
+        (model_name, display_name, description)
+        for model_name, scale, weight_file, url, display_name, description in UPSCALE_MODEL_LIST
+        if model_name in ("RealESRGAN_x4plus_anime_6B", "realesr-animevideov3")
+    ]),
 ]
 
 # 扁平化 model_name 列表
@@ -167,14 +206,29 @@ class Upscaler:
             ) from e
 
         # 根据模型选择网络结构
-        if self.model_name == 'RealESRGAN_x4plus_anime_6B':
-            # anime 模型使用更小的 num_block=6
+        if self.model_name in ('realesr-general-x4v3', 'realesr-animevideov3'):
+            # SRVGGNetCompact 轻量模型
+            # general-x4v3: num_conv=32；animevideov3: num_conv=16
+            try:
+                from basicsr.archs.srvgg_arch import SRVGGNetCompact
+            except ImportError:
+                try:
+                    from realesrgan.archs.srvgg_arch import SRVGGNetCompact
+                except ImportError as e:
+                    raise ImportError(f"缺少 SRVGGNetCompact: {e}") from e
+            num_conv = 32 if self.model_name == 'realesr-general-x4v3' else 16
+            model = SRVGGNetCompact(
+                num_in_ch=3, num_out_ch=3,
+                num_feat=64, num_conv=num_conv, upscale=4, act_type='prelu'
+            )
+        elif self.model_name == 'RealESRGAN_x4plus_anime_6B':
+            # anime 静图模型：更小的 num_block=6
             model = RRDBNet(
                 num_in_ch=3, num_out_ch=3,
                 num_feat=64, num_block=6, num_grow_ch=32, scale=4
             )
         else:
-            # x4plus 和 x2plus 均使用标准 23 块
+            # x4plus、x2plus、RealESRNet_x4plus 均使用标准 23 块 RRDBNet
             model = RRDBNet(
                 num_in_ch=3, num_out_ch=3,
                 num_feat=64, num_block=23, num_grow_ch=32,

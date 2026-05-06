@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Save, RotateCcw, Monitor, Globe, CheckCircle2, XCircle } from 'lucide-react'
+import { Save, RotateCcw, Monitor, Globe, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import PageHeader from '../components/layout/PageHeader'
 import { showToast } from '../components/ui'
@@ -22,6 +22,7 @@ const DEFAULTS = {
 
 export default function Settings() {
   const backendURL = useBackendStore((s) => s.backendURL)
+  const setBackendURL = useBackendStore((s) => s.setBackendURL)
   const store = useSettingsStore()
 
   // 本地 draft state — 用户编辑中但尚未保存的值
@@ -29,6 +30,7 @@ export default function Settings() {
   const [remoteHost, setRemoteHost] = useState('127.0.0.1')
   const [remotePort, setRemotePort] = useState('8787')
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connected' | 'disconnected' | 'testing'>('idle')
+  const [isSwitching, setIsSwitching] = useState(false)
 
   const [device, setDevice] = useState(store.device)
   const [port, setPort] = useState(String(store.serverPort))
@@ -40,8 +42,18 @@ export default function Settings() {
   const [disableNsfw, setDisableNsfw] = useState(store.disableNsfw)
   const [isSaving, setIsSaving] = useState(false)
 
-  // 初始化时从后端加载最新设置，并同步到本地 draft
+  // 初始化：从 Electron 主进程读取连接配置，从后端读取应用设置
   useEffect(() => {
+    // 读取连接模式
+    if (window.electronAPI?.getBackendConfig) {
+      window.electronAPI.getBackendConfig().then((cfg: any) => {
+        setConnectionMode(cfg.mode ?? 'local')
+        setRemoteHost(cfg.remoteHost ?? '127.0.0.1')
+        setRemotePort(String(cfg.remotePort ?? 8787))
+      })
+    }
+
+    // 读取应用设置
     store.loadSettings(backendURL).then(() => {
       const s = useSettingsStore.getState()
       setDevice(s.device)
@@ -71,6 +83,50 @@ export default function Settings() {
       setConnectionStatus(res.ok ? 'connected' : 'disconnected')
     } catch {
       setConnectionStatus('disconnected')
+    }
+  }
+
+  // 切换连接模式（立即生效，通知主进程）
+  const handleSwitchMode = async (newMode: ConnectionMode) => {
+    if (newMode === connectionMode) return
+    setIsSwitching(true)
+    setConnectionStatus('idle')
+    try {
+      const newConfig: Record<string, unknown> = { mode: newMode }
+      if (newMode === 'remote') {
+        newConfig.remoteHost = remoteHost
+        newConfig.remotePort = Number(remotePort) || 8787
+      }
+      // 通知主进程切换模式（会停止/启动本地后端）
+      const newURL = await window.electronAPI?.updateBackendConfig(newConfig)
+      if (newURL) {
+        setBackendURL(newURL)
+      }
+      setConnectionMode(newMode)
+      showToast('success', newMode === 'local' ? '已切换到本地模式，正在启动后端...' : '已切换到远程模式')
+    } catch (err: any) {
+      showToast('error', `切换失败: ${err.message}`)
+    } finally {
+      setIsSwitching(false)
+    }
+  }
+
+  // 保存远程连接配置（仅 remote 模式下需要更新 host/port）
+  const handleSaveConnection = async () => {
+    if (connectionMode !== 'remote') return
+    setIsSwitching(true)
+    try {
+      const newURL = await window.electronAPI?.updateBackendConfig({
+        mode: 'remote',
+        remoteHost: remoteHost,
+        remotePort: Number(remotePort) || 8787,
+      })
+      if (newURL) setBackendURL(newURL)
+      showToast('success', '连接配置已保存')
+    } catch (err: any) {
+      showToast('error', `保存失败: ${err.message}`)
+    } finally {
+      setIsSwitching(false)
     }
   }
 
@@ -121,30 +177,42 @@ export default function Settings() {
           <h3 className="text-sm font-medium mb-3">连接方式</h3>
           <div className="grid grid-cols-2 gap-3 mb-3">
             <button
-              onClick={() => setConnectionMode('local')}
+              onClick={() => handleSwitchMode('local')}
+              disabled={isSwitching}
               className={clsx(
                 'p-3 rounded-md border text-center transition-all',
                 connectionMode === 'local'
                   ? 'bg-bg-active border-border-focus'
-                  : 'bg-bg-primary border-border-subtle hover:border-fg-secondary'
+                  : 'bg-bg-primary border-border-subtle hover:border-fg-secondary',
+                isSwitching && 'opacity-60 cursor-not-allowed'
               )}
             >
-              <Monitor size={18} className={clsx('mx-auto mb-1', connectionMode === 'local' ? 'text-fg-accent' : 'text-fg-secondary')} />
+              {isSwitching && connectionMode !== 'local' ? (
+                <Loader2 size={18} className="mx-auto mb-1 animate-spin text-fg-accent" />
+              ) : (
+                <Monitor size={18} className={clsx('mx-auto mb-1', connectionMode === 'local' ? 'text-fg-accent' : 'text-fg-secondary')} />
+              )}
               <div className={clsx('text-xs font-medium', connectionMode === 'local' ? 'text-fg-accent' : 'text-fg-primary')}>
                 本地启动
               </div>
               <div className="text-[11px] text-fg-secondary mt-0.5">自动管理后端进程</div>
             </button>
             <button
-              onClick={() => setConnectionMode('remote')}
+              onClick={() => handleSwitchMode('remote')}
+              disabled={isSwitching}
               className={clsx(
                 'p-3 rounded-md border text-center transition-all',
                 connectionMode === 'remote'
                   ? 'bg-bg-active border-border-focus'
-                  : 'bg-bg-primary border-border-subtle hover:border-fg-secondary'
+                  : 'bg-bg-primary border-border-subtle hover:border-fg-secondary',
+                isSwitching && 'opacity-60 cursor-not-allowed'
               )}
             >
-              <Globe size={18} className={clsx('mx-auto mb-1', connectionMode === 'remote' ? 'text-fg-accent' : 'text-fg-secondary')} />
+              {isSwitching && connectionMode !== 'remote' ? (
+                <Loader2 size={18} className="mx-auto mb-1 animate-spin text-fg-accent" />
+              ) : (
+                <Globe size={18} className={clsx('mx-auto mb-1', connectionMode === 'remote' ? 'text-fg-accent' : 'text-fg-secondary')} />
+              )}
               <div className={clsx('text-xs font-medium', connectionMode === 'remote' ? 'text-fg-accent' : 'text-fg-primary')}>
                 远程连接
               </div>
@@ -177,7 +245,7 @@ export default function Settings() {
                 </div>
               </div>
 
-              {/* Connection test */}
+              {/* Connection test + save */}
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleTestConnection}
@@ -185,6 +253,13 @@ export default function Settings() {
                   className="text-xs px-3 py-1.5 bg-bg-primary border border-border-subtle rounded hover:bg-bg-hover transition-colors disabled:opacity-50"
                 >
                   {connectionStatus === 'testing' ? '测试中...' : '测试连接'}
+                </button>
+                <button
+                  onClick={handleSaveConnection}
+                  disabled={isSwitching}
+                  className="text-xs px-3 py-1.5 bg-border-focus text-white rounded hover:bg-blue-600 transition-colors disabled:opacity-50"
+                >
+                  应用地址
                 </button>
                 {connectionStatus === 'connected' && (
                   <span className="text-xs text-status-success flex items-center gap-1">
