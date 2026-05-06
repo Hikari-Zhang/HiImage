@@ -2,6 +2,9 @@
 水印去除核心模块 - 使用IOPaint
 - 快速模型（lama/migan/zits 等）：CLI 批处理模式，按需调用
 - 扩散模型（AnyText/SD 系列）  ：HTTP Server 模式，保活 5 分钟
+
+模型列表从 core/models.yaml 动态加载（watermark_removal 模式），
+按 display_group 字段分组，无需在代码中硬编码。
 """
 import cv2
 import numpy as np
@@ -9,6 +12,7 @@ import subprocess
 import os
 import sys
 import uuid
+import re
 import shutil
 from pathlib import Path
 
@@ -25,48 +29,60 @@ def _detect_iopaint_path() -> str:
     return "iopaint"  # fallback
 
 
-# 模型目录：按推荐优先级分组
-# 结构：(group_label, [(model_id, display_name, description), ...])
-# gui/preview_panel.py 直接引用此数据，无需重复维护
-MODEL_GROUPS = [
-    ("── 快速修复（本地推理）──", [
-        ("lama",  "LaMa（推荐·通用）",   "综合最佳首选：速度快、质量好，适合绝大多数水印场景｜内存 ~500 MB，无需显卡"),
-        ("migan", "MiGAN（GAN·快速）",   "基于生成对抗网络，速度快，背景纹理较规则时效果好｜内存 ~600 MB，无需显卡"),
-        ("zits",  "ZITS（边缘感知）",     "边缘感知修复，文字/logo 边缘过渡自然｜内存 ~700 MB，无需显卡"),
-        ("fcf",   "FCF（快速填充）",      "Fast Context-based Fill，背景简单/重复时效果佳｜内存 ~600 MB，无需显卡"),
-        ("mat",   "MAT（精细修复）",      "Multi-scale Attention，质量最高但速度较慢｜内存 ~1.5 GB，无需显卡"),
-        ("ldm",   "LDM（轻量扩散）",      "轻量级 Latent Diffusion，质量与速度均衡｜内存 ~1.5 GB，无需显卡"),
-        ("manga", "Manga（漫画专用）",    "针对漫画/线稿优化，线条清晰无模糊｜内存 ~500 MB，无需显卡"),
-        ("cv2",   "CV2（传统算法）",      "OpenCV 传统算法，无需 GPU，速度最快，质量有限｜内存 <100 MB，纯 CPU"),
-    ]),
-    ("── 专用模型（首次使用自动下载）──", [
-        ("Sanster/AnyText", "AnyText（文字水印专用）", "识别字体、颜色后重建背景，文字类水印效果显著优于 LaMa；常驻内存保活5分钟｜下载 ~3 GB，运行 ~10 GB 统一内存"),
-        ("Sanster/PowerPaint-V1-stable-diffusion-inpainting",
-         "PowerPaint V1（最强通用）",
-         "支持文字引导（如 'remove watermark'），综合效果最强，iopaint 原生支持；常驻内存保活5分钟｜下载 ~5 GB，运行 ~12 GB 统一内存"),
-    ]),
-    ("── 扩散模型 SD 1.5（高质量·首次下载较大）──", [
-        ("runwayml/stable-diffusion-inpainting",
-         "SD 1.5 Inpainting（通用）",
-         "Stable Diffusion 1.5 官方 inpainting，复杂/渐变背景效果自然，兼容性最佳；常驻内存保活5分钟｜下载 ~4 GB，运行 ~8 GB 统一内存"),
-        ("Uminosachi/realisticVisionV51_v51VAE-inpainting",
-         "Realistic Vision V5.1（写实照片）",
-         "写实照片/人像/风景真实感最强，V5.1 比 V3 细节更好；常驻内存保活5分钟｜下载 ~4 GB，运行 ~8 GB 统一内存"),
-        ("redstonehero/dreamshaper-inpainting",
-         "DreamShaper（艺术风格）",
-         "艺术感强，人像/插画/幻想场景下背景重建最自然；常驻内存保活5分钟｜下载 ~4 GB，运行 ~8 GB 统一内存"),
-        ("Sanster/anything-4.0-inpainting",
-         "Anything V4（动漫/插画）",
-         "二次元/动漫/CG 插图专用，线条与色彩风格高度一致；常驻内存保活5分钟｜下载 ~4 GB，运行 ~8 GB 统一内存"),
-    ]),
-    ("── 扩散模型 SDXL（超高质量·2K+）──", [
-        ("diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
-         "SDXL Inpainting（高分辨率）",
-         "2K+ 图像细节最佳，语义理解最强，速度最慢；常驻内存保活5分钟｜下载 ~7 GB，运行 ~16 GB 统一内存"),
-    ]),
-]
+def _build_model_groups() -> list:
+    """
+    从 models.yaml 构建 MODEL_GROUPS（watermark_removal 模式）。
 
-# 扁平化的 model_id 列表（兼容旧接口）
+    返回格式（与旧版硬编码保持一致，供 GUI/Preview 使用）：
+      [(group_label, [(model_id, display_name, description), ...]), ...]
+
+    其中 model_id 为 registry ID（如 "wm_lama"），调用时通过
+    _resolve_iopaint_model_id() 转换为 iopaint 实际模型参数。
+    """
+    try:
+        from core.model_registry import get_models_for_mode
+        models = get_models_for_mode("watermark_removal")
+    except Exception:
+        return []
+
+    # 按 display_group 分组（保留 YAML 中的顺序）
+    groups: dict[str, list] = {}
+    for m in models:
+        group_label = m.get("display_group", "其他")
+        if group_label not in groups:
+            groups[group_label] = []
+        groups[group_label].append((
+            m["id"],
+            m.get("name", m["id"]),
+            m.get("description", ""),
+        ))
+
+    return list(groups.items())
+
+
+def _resolve_iopaint_model_id(model_id: str) -> str:
+    """
+    将 registry ID（如 "wm_anytext"）解析为 iopaint 实际模型参数（如 "Sanster/AnyText"）。
+
+    如果传入的本身就是 iopaint_model_id（如旧代码直接传 "lama"），则原样返回。
+    """
+    try:
+        from core.model_registry import MODEL_BY_ID
+        cfg = MODEL_BY_ID.get(model_id)
+        if cfg:
+            # 优先使用 iopaint_model_id（扩散模型的 HF repo）；
+            # cli 模型的 iopaint_model_id 与简短名相同（如 "lama"）
+            return cfg.get("iopaint_model_id", model_id)
+    except Exception:
+        pass
+    return model_id
+
+
+# 模型目录：从注册表动态构建，按 display_group 分组
+# GUI/preview_panel.py 直接引用此数据，无需重复维护
+MODEL_GROUPS = _build_model_groups()
+
+# 扁平化的 model_id 列表（registry ID，兼容旧接口）
 AVAILABLE_MODELS = [mid for _, models in MODEL_GROUPS for mid, _, _ in models]
 
 
@@ -76,12 +92,16 @@ class Inpainter:
     MODEL_GROUPS = MODEL_GROUPS
     AVAILABLE_MODELS = AVAILABLE_MODELS
 
-    def __init__(self, model_name='lama', iopaint_path=None, device='mps', dilation=10, disable_nsfw=False,
+    def __init__(self, model_name='wm_lama', iopaint_path=None, device='mps', dilation=10, disable_nsfw=False,
                  prompt: str = '', negative_prompt: str = '',
-                 sd_steps: int = 50, sd_guidance_scale: float = 7.5, sd_seed: int = 42):
+                 sd_steps: int = 50, sd_guidance_scale: float = 7.5, sd_seed: int = 42,
+                 progress_callback=None):
         """
         初始化去除器
-        :param model_name: 模型ID，见 AVAILABLE_MODELS
+
+        :param model_name: 模型 ID，可以是：
+                           - registry ID（如 "wm_lama"、"wm_anytext"，来自 models.yaml）
+                           - iopaint 原生模型名（如 "lama"、"Sanster/AnyText"，向后兼容）
         :param iopaint_path: iopaint可执行文件路径（如果不在PATH中）
         :param device: 计算设备 ('mps', 'cpu', 'cuda')
         :param dilation: 遮罩扩张像素数
@@ -91,8 +111,11 @@ class Inpainter:
         :param sd_steps: 扩散步数
         :param sd_guidance_scale: CFG scale
         :param sd_seed: 随机种子
+        :param progress_callback: 可选回调函数，签名为 progress_callback(percent: int, message: str)
         """
+        # 保留原始 registry ID 供外部查询；内部使用 _iopaint_model_id 与 iopaint 交互
         self.model_name = model_name
+        self._iopaint_model_id = _resolve_iopaint_model_id(model_name)
         self.iopaint_path = iopaint_path or _detect_iopaint_path()
         self.device = device
         self.dilation = dilation
@@ -102,6 +125,7 @@ class Inpainter:
         self.sd_steps = sd_steps
         self.sd_guidance_scale = sd_guidance_scale
         self.sd_seed = sd_seed
+        self.progress_callback = progress_callback
         # CLI 模式超时：快速模型 5 分钟，扩散模型 30 分钟（首次下载时 CLI 也用得上）
         self._timeout = 1800 if is_diffusion_model(model_name) else 300
         self._project_tmp = os.path.join(
@@ -159,10 +183,11 @@ class Inpainter:
         try:
             if is_diffusion_model(self.model_name):
                 # 扩散模型 → HTTP Server 模式（保活5分钟，无需每次重载）
+                # 注意：传给 server 的是 iopaint_model_id（如 "Sanster/AnyText"）
                 return inpaint_via_server(
                     image_rgb=image,
                     mask=mask,
-                    model_name=self.model_name,
+                    model_name=self._iopaint_model_id,
                     device=self.device,
                     disable_nsfw=self.disable_nsfw,
                     iopaint_path=self.iopaint_path,
@@ -218,13 +243,14 @@ class Inpainter:
     def _run_iopaint_cli(self, image_path: str, mask_path: str, output_dir: str) -> np.ndarray:
         """
         调用 IOPaint CLI 并返回 RGB 结果图像（流式打印日志，含下载进度）
+        会从 tqdm 进度条中解析百分比并通过回调上报进度
         """
         cmd = [
             self.iopaint_path, 'run',
             '--image', image_path,
             '--mask', mask_path,
             '--output', output_dir,
-            '--model', self.model_name,
+            '--model', self._iopaint_model_id,   # 使用解析后的 iopaint 模型参数
             '--device', self.device,
         ]
         # --disable-nsfw 已在 iopaint 1.6.0 中移除，不再传递
@@ -248,6 +274,7 @@ class Inpainter:
 
         # 流式转发日志，正确处理 \r（tqdm 进度条原地刷新）
         stdout_lines = []
+        last_progress = 0
         try:
             buf = []
             while True:
@@ -263,6 +290,19 @@ class Inpainter:
                     line = ''.join(buf)
                     sys.stdout.write(f'\r{line}')
                     sys.stdout.flush()
+                    
+                    # 尝试从 tqdm 进度条中解析百分比（例如 "50%"）
+                    percent_match = re.search(r'(\d+)%', line)
+                    if percent_match:
+                        try:
+                            percent = int(percent_match.group(1))
+                            # 避免重复上报相同的进度
+                            if percent != last_progress and self.progress_callback:
+                                self.progress_callback(percent, f"处理中... {percent}%")
+                                last_progress = percent
+                        except (ValueError, AttributeError):
+                            pass
+                    
                     buf = []
                 elif ch == '\n':
                     line = ''.join(buf)
@@ -306,12 +346,10 @@ class Inpainter:
                 f"无法读取处理结果: {output_path}\n{stdout_text}"
             )
 
+        # 上报最终进度为 100%
+        if self.progress_callback:
+            self.progress_callback(100, "处理完成")
+
         return cv2.cvtColor(result_bgr, cv2.COLOR_BGR2RGB)
 
-    def _cleanup_old_tmp(self):
-        """清理 tmp 目录下已存在的历史残留目录"""
-        if not os.path.isdir(self._project_tmp):
-            return
-        for entry in os.scandir(self._project_tmp):
-            if entry.is_dir() and entry.name.startswith('iopaint_'):
-                shutil.rmtree(entry.path, ignore_errors=True)
+

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { Upload, Wand2, Trash2, Download, ZoomIn, ZoomOut, Move, Square, RotateCcw, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import ImageCanvas from '../components/ImageCanvas'
@@ -45,6 +45,52 @@ export default function WatermarkRemoval() {
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+
+  // WebSocket listener for progress updates
+  useEffect(() => {
+    const connectProgressWS = async () => {
+      try {
+        const backendURL = window.electronAPI
+          ? await window.electronAPI.getBackendURL()
+          : 'http://127.0.0.1:8787'
+        const wsURL = backendURL.replace('http', 'ws') + '/api/ws/progress'
+
+        const ws = new WebSocket(wsURL)
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data)
+            if (msg.type === 'progress' && typeof msg.percent === 'number') {
+              updateProgress(msg.percent, msg.message || '')
+            } else if (msg.type === 'complete') {
+              finishProcess(msg.message || '处理完成')
+            } else if (msg.type === 'error') {
+              setError(msg.message || '处理出错')
+            }
+          } catch (err) {
+            console.error('Failed to parse progress message:', err)
+          }
+        }
+        ws.onerror = () => {
+          console.error('Progress WebSocket error')
+        }
+        ws.onclose = () => {
+          // Reconnect after 3s
+          setTimeout(connectProgressWS, 3000)
+        }
+        wsRef.current = ws
+      } catch (err) {
+        console.error('Failed to connect progress WebSocket:', err)
+        setTimeout(connectProgressWS, 3000)
+      }
+    }
+
+    connectProgressWS()
+    return () => {
+      wsRef.current?.close()
+    }
+  }, [updateProgress, finishProcess, setError])
+
 
   // Open file
   const handleOpenFile = async () => {

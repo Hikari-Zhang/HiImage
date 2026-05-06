@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config import get, PROJECT_ROOT, MODELS_DIR
-from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis
+from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, models as models_router_module
 from app.websocket.progress import router as ws_router
 from app.logging_manager import log_manager, setup_logging
 
@@ -82,4 +82,5 @@ app.include_router(settings.router, prefix="/api", tags=["settings"])
 app.include_router(logs.router, prefix="/api", tags=["logs"])
 app.include_router(postprocess.router, prefix="/api", tags=["postprocess"])
 app.include_router(synthesis.router, prefix="/api", tags=["synthesis"])
+app.include_router(models_router_module.router, prefix="/api", tags=["models"])
 app.include_router(ws_router)

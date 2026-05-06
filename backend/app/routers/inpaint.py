@@ -85,6 +85,47 @@ def encode_image(image_rgb: np.ndarray) -> str:
 # ============ Endpoints ============
 
 
+@router.get("/models/inpaint")
+async def get_inpaint_models():
+    """
+    返回所有去水印模型（来自 models.yaml），按 display_group 分组。
+
+    响应格式与前端 useModelStore.ts 对齐：
+    {
+      "groups": [
+        {
+          "label": "快速本地模型",
+          "models": [{"id": "wm_lama", "name": "LaMa", "description": "..."}]
+        }
+      ]
+    }
+    """
+    from core.model_registry import get_models_for_mode
+
+    # 从注册表读取 watermark_removal 模式下的所有模型
+    models = get_models_for_mode("watermark_removal")
+
+    # 按 display_group 顺序分组（保留 YAML 中的模型顺序）
+    groups: dict[str, list] = {}
+    for m in models:
+        group_label = m.get("display_group", "其他")
+        if group_label not in groups:
+            groups[group_label] = []
+        groups[group_label].append({
+            "id":          m["id"],
+            "name":        m.get("name", m["id"]),
+            "description": m.get("description", ""),
+            "badge":       m.get("badge", ""),
+        })
+
+    return {
+        "groups": [
+            {"label": label, "models": model_list}
+            for label, model_list in groups.items()
+        ]
+    }
+
+
 @router.post("/detect")
 async def detect_watermark(req: DetectRequest):
     """自动检测水印区域"""
@@ -120,16 +161,30 @@ async def inpaint_with_rois(req: InpaintRequest):
 
     await progress_manager.send_progress(10, "正在初始化模型...")
 
+    loop = asyncio.get_event_loop()
+
+    def _make_progress_callback():
+        """创建线程安全的进度回调"""
+        def callback(percent: int, message: str):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    progress_manager.send_progress(percent, message),
+                    loop
+                )
+            except Exception as e:
+                log_manager.error(f"进度上报失败: {e}", source="inpaint")
+        return callback
+
     def _process():
         inpainter = Inpainter(
             model_name=req.model,
             device=req.device,
             dilation=req.dilation,
             disable_nsfw=req.disable_nsfw,
+            progress_callback=_make_progress_callback(),
         )
         return inpainter.remove_watermark(image, req.rois)
 
-    loop = asyncio.get_event_loop()
     await progress_manager.send_progress(20, "正在处理...")
 
     try:
@@ -166,6 +221,7 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
             device=req.device,
             dilation=req.dilation,
             disable_nsfw=req.disable_nsfw,
+            progress_callback=lambda percent, message: progress_manager._queue_progress(percent, message),
         )
         return inpainter.remove_watermark_with_mask(image, mask)
 
