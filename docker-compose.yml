@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clearwatermark-backend
+    ports:
+      - "${BACKEND_PORT:-8787}:8787"
+    volumes:
+      # 持久化模型（避免每次重新下载）
+      - ./models:/app/models
+      # 配置文件
+      - ./config:/app/config
+      # 临时文件
+      - ./tmp:/app/tmp
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HF_HOME=/app/models/huggingface
+      - TORCH_HOME=/app/models/torch
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # GPU 版本（NVIDIA GPU）
+  # 取消注释下面的配置来使用 GPU 加速
+  # backend-gpu:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile
+  #   container_name: clearwatermark-backend-gpu
+  #   ports:
+  #     - "${BACKEND_PORT:-8787}:8787"
+  #   volumes:
+  #     - ./models:/app/models
+  #     - ./config:/app/config
+  #     - ./tmp:/app/tmp
+  #   environment:
+  #     - PYTHONUNBUFFERED=1
+  #     - HF_HOME=/app/models/huggingface
+  #     - TORCH_HOME=/app/models/torch
+  #     - NVIDIA_VISIBLE_DEVICES=all
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   restart: unless-stopped

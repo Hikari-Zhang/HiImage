@@ -1,0 +1,378 @@
+import { useState, useEffect } from 'react'
+import { Save, RotateCcw, Monitor, Globe, CheckCircle2, XCircle } from 'lucide-react'
+import { clsx } from 'clsx'
+import PageHeader from '../components/layout/PageHeader'
+import { showToast } from '../components/ui'
+import { useSettingsStore } from '../stores/useSettingsStore'
+import { useBackendStore } from '../stores/useBackendStore'
+
+type ConnectionMode = 'local' | 'remote'
+
+// 默认值（用于「恢复默认」）
+const DEFAULTS = {
+  device: 'mps',
+  serverPort: 51821,
+  keepaliveSeconds: 300,
+  startupTimeout: 1800,
+  hfEndpoint: 'https://huggingface.co',
+  hfToken: '',
+  defaultDilation: 10,
+  disableNsfw: true,
+}
+
+export default function Settings() {
+  const backendURL = useBackendStore((s) => s.backendURL)
+  const store = useSettingsStore()
+
+  // 本地 draft state — 用户编辑中但尚未保存的值
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>('local')
+  const [remoteHost, setRemoteHost] = useState('127.0.0.1')
+  const [remotePort, setRemotePort] = useState('8787')
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'connected' | 'disconnected' | 'testing'>('idle')
+
+  const [device, setDevice] = useState(store.device)
+  const [port, setPort] = useState(String(store.serverPort))
+  const [keepalive, setKeepalive] = useState(String(store.keepaliveSeconds))
+  const [startupTimeout, setStartupTimeout] = useState(String(store.startupTimeout))
+  const [hfEndpoint, setHfEndpoint] = useState(store.hfEndpoint)
+  const [hfToken, setHfToken] = useState(store.hfToken)
+  const [dilation, setDilation] = useState(String(store.defaultDilation))
+  const [disableNsfw, setDisableNsfw] = useState(store.disableNsfw)
+  const [isSaving, setIsSaving] = useState(false)
+
+  // 初始化时从后端加载最新设置，并同步到本地 draft
+  useEffect(() => {
+    store.loadSettings(backendURL).then(() => {
+      const s = useSettingsStore.getState()
+      setDevice(s.device)
+      setPort(String(s.serverPort))
+      setKeepalive(String(s.keepaliveSeconds))
+      setStartupTimeout(String(s.startupTimeout))
+      setHfEndpoint(s.hfEndpoint)
+      setHfToken(s.hfToken)
+      setDilation(String(s.defaultDilation))
+      setDisableNsfw(s.disableNsfw)
+    })
+  }, [backendURL])
+
+  const devices = [
+    { id: 'mps', label: 'MPS', desc: 'Apple Silicon' },
+    { id: 'cpu', label: 'CPU', desc: 'Universal' },
+    { id: 'cuda', label: 'CUDA', desc: 'NVIDIA GPU' },
+  ]
+
+  const handleTestConnection = async () => {
+    setConnectionStatus('testing')
+    const url = connectionMode === 'local'
+      ? `http://127.0.0.1:8787/api/health`
+      : `http://${remoteHost}:${remotePort}/api/health`
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
+      setConnectionStatus(res.ok ? 'connected' : 'disconnected')
+    } catch {
+      setConnectionStatus('disconnected')
+    }
+  }
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      // 先把 draft 写入 store
+      store.setSettings({
+        device,
+        serverPort: Number(port) || DEFAULTS.serverPort,
+        keepaliveSeconds: Number(keepalive) || DEFAULTS.keepaliveSeconds,
+        startupTimeout: Number(startupTimeout) || DEFAULTS.startupTimeout,
+        hfEndpoint,
+        hfToken,
+        defaultDilation: Number(dilation) || DEFAULTS.defaultDilation,
+        disableNsfw,
+      })
+      // 再持久化到后端
+      await useSettingsStore.getState().saveSettings(backendURL)
+      showToast('success', '设置已保存')
+    } catch (err: any) {
+      showToast('error', `保存失败: ${err.message}`)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleReset = () => {
+    setDevice(DEFAULTS.device)
+    setPort(String(DEFAULTS.serverPort))
+    setKeepalive(String(DEFAULTS.keepaliveSeconds))
+    setStartupTimeout(String(DEFAULTS.startupTimeout))
+    setHfEndpoint(DEFAULTS.hfEndpoint)
+    setHfToken(DEFAULTS.hfToken)
+    setDilation(String(DEFAULTS.defaultDilation))
+    setDisableNsfw(DEFAULTS.disableNsfw)
+    showToast('success', '已恢复默认值，点击保存生效')
+  }
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      <PageHeader title="设置" />
+
+      {/* Content */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4 max-w-[640px]">
+        {/* Connection Mode */}
+        <section className="bg-bg-tertiary rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">连接方式</h3>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <button
+              onClick={() => setConnectionMode('local')}
+              className={clsx(
+                'p-3 rounded-md border text-center transition-all',
+                connectionMode === 'local'
+                  ? 'bg-bg-active border-border-focus'
+                  : 'bg-bg-primary border-border-subtle hover:border-fg-secondary'
+              )}
+            >
+              <Monitor size={18} className={clsx('mx-auto mb-1', connectionMode === 'local' ? 'text-fg-accent' : 'text-fg-secondary')} />
+              <div className={clsx('text-xs font-medium', connectionMode === 'local' ? 'text-fg-accent' : 'text-fg-primary')}>
+                本地启动
+              </div>
+              <div className="text-[11px] text-fg-secondary mt-0.5">自动管理后端进程</div>
+            </button>
+            <button
+              onClick={() => setConnectionMode('remote')}
+              className={clsx(
+                'p-3 rounded-md border text-center transition-all',
+                connectionMode === 'remote'
+                  ? 'bg-bg-active border-border-focus'
+                  : 'bg-bg-primary border-border-subtle hover:border-fg-secondary'
+              )}
+            >
+              <Globe size={18} className={clsx('mx-auto mb-1', connectionMode === 'remote' ? 'text-fg-accent' : 'text-fg-secondary')} />
+              <div className={clsx('text-xs font-medium', connectionMode === 'remote' ? 'text-fg-accent' : 'text-fg-primary')}>
+                远程连接
+              </div>
+              <div className="text-[11px] text-fg-secondary mt-0.5">连接远程 / Docker 后端</div>
+            </button>
+          </div>
+
+          {/* Remote connection settings */}
+          {connectionMode === 'remote' && (
+            <div className="space-y-3 pt-2 border-t border-border-subtle">
+              <div className="grid grid-cols-3 gap-2 mt-3">
+                <div className="col-span-2">
+                  <label className="text-xs text-fg-secondary mb-1 block">主机地址</label>
+                  <input
+                    type="text"
+                    value={remoteHost}
+                    onChange={(e) => setRemoteHost(e.target.value)}
+                    placeholder="192.168.1.100 或 my-server.com"
+                    className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-fg-secondary mb-1 block">端口</label>
+                  <input
+                    type="text"
+                    value={remotePort}
+                    onChange={(e) => setRemotePort(e.target.value)}
+                    className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Connection test */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleTestConnection}
+                  disabled={connectionStatus === 'testing'}
+                  className="text-xs px-3 py-1.5 bg-bg-primary border border-border-subtle rounded hover:bg-bg-hover transition-colors disabled:opacity-50"
+                >
+                  {connectionStatus === 'testing' ? '测试中...' : '测试连接'}
+                </button>
+                {connectionStatus === 'connected' && (
+                  <span className="text-xs text-status-success flex items-center gap-1">
+                    <CheckCircle2 size={12} /> 连接成功
+                  </span>
+                )}
+                {connectionStatus === 'disconnected' && (
+                  <span className="text-xs text-status-error flex items-center gap-1">
+                    <XCircle size={12} /> 未连接
+                  </span>
+                )}
+              </div>
+
+              {/* Docker hint */}
+              <div className="bg-bg-primary rounded p-2.5 border border-border-subtle">
+                <p className="text-[11px] text-fg-secondary leading-relaxed">
+                  <strong className="text-fg-primary">Docker 部署：</strong>
+                  在服务器上运行 <code className="bg-bg-hover px-1 rounded text-fg-accent">docker compose up -d</code> 启动后端，
+                  然后在此处填入服务器 IP 和端口 (默认 8787)。
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Local mode info */}
+          {connectionMode === 'local' && (
+            <div className="bg-bg-primary rounded p-2.5 border border-border-subtle mt-2">
+              <p className="text-[11px] text-fg-secondary leading-relaxed">
+                <strong className="text-fg-primary">本地模式：</strong>
+                应用启动时自动启动 Python 后端进程 (127.0.0.1:8787)，关闭应用时自动停止。
+                适合个人本地使用。
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* Compute Device */}
+        <section className="bg-bg-tertiary rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">计算设备</h3>
+          <div className="grid grid-cols-3 gap-3">
+            {devices.map((d) => (
+              <button
+                key={d.id}
+                onClick={() => setDevice(d.id)}
+                className={clsx(
+                  'p-3 rounded-md border text-center transition-all',
+                  device === d.id
+                    ? 'bg-bg-active border-border-focus'
+                    : 'bg-bg-primary border-border-subtle hover:border-fg-secondary'
+                )}
+              >
+                <div className={clsx('text-xs font-medium', device === d.id ? 'text-fg-accent' : 'text-fg-primary')}>
+                  {d.label}
+                </div>
+                <div className="text-[11px] text-fg-secondary mt-0.5">{d.desc}</div>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Server Config */}
+        <section className="bg-bg-tertiary rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">服务器配置</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-fg-secondary mb-1 block">IOPaint 端口</label>
+              <input
+                type="text"
+                value={port}
+                onChange={(e) => setPort(e.target.value)}
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-fg-secondary mb-1 block">保活时间 (秒)</label>
+              <input
+                type="text"
+                value={keepalive}
+                onChange={(e) => setKeepalive(e.target.value)}
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-fg-secondary mb-1 block">启动超时 (秒)</label>
+              <input
+                type="text"
+                value={startupTimeout}
+                onChange={(e) => setStartupTimeout(e.target.value)}
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Inpaint Settings */}
+        <section className="bg-bg-tertiary rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">修复参数</h3>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-fg-secondary mb-1 block">默认遮罩扩张 (px)</label>
+                <input
+                  type="text"
+                  value={dilation}
+                  onChange={(e) => setDilation(e.target.value)}
+                  className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+                />
+              </div>
+            </div>
+            {/* NSFW toggle */}
+            <div className="flex items-center justify-between py-1">
+              <div>
+                <div className="text-xs text-fg-primary">禁用 NSFW 安全检查</div>
+                <div className="text-[11px] text-fg-secondary mt-0.5">
+                  使用 SD 类扩散模型时需要开启，否则可能误拦截正常图片
+                </div>
+              </div>
+              <button
+                onClick={() => setDisableNsfw(!disableNsfw)}
+                className={clsx(
+                  'relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ml-3',
+                  disableNsfw ? 'bg-border-focus' : 'bg-bg-hover'
+                )}
+              >
+                <div
+                  className={clsx(
+                    'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
+                    disableNsfw ? 'translate-x-[22px]' : 'translate-x-[2px]'
+                  )}
+                />
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Network */}
+        <section className="bg-bg-tertiary rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">网络 / HuggingFace</h3>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-fg-secondary mb-1 block">HuggingFace Endpoint</label>
+              <input
+                type="text"
+                value={hfEndpoint}
+                onChange={(e) => setHfEndpoint(e.target.value)}
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-fg-secondary mb-1 block">HuggingFace Token</label>
+              <input
+                type="password"
+                value={hfToken}
+                onChange={(e) => setHfToken(e.target.value)}
+                placeholder="hf_xxxx..."
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+            </div>
+            <div className="bg-bg-primary rounded p-2.5 border border-border-subtle">
+              <p className="text-[11px] text-fg-secondary leading-relaxed">
+                <strong className="text-fg-primary">国内镜像：</strong>
+                如无法访问 HuggingFace，可将 Endpoint 改为
+                <code className="bg-bg-hover px-1 rounded text-fg-accent mx-1">https://hf-mirror.com</code>
+                加速模型下载。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        {/* Actions */}
+        <div className="flex gap-3 pt-2 pb-4">
+          <button
+            onClick={handleSave}
+            disabled={isSaving}
+            className="flex-1 py-2.5 bg-border-focus text-white text-sm font-medium rounded-md hover:bg-blue-600 transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            <Save size={14} />
+            {isSaving ? '保存中...' : '保存设置'}
+          </button>
+          <button
+            onClick={handleReset}
+            className="py-2.5 px-4 border border-border-subtle text-fg-secondary text-sm rounded-md hover:bg-bg-hover transition-colors flex items-center gap-2"
+          >
+            <RotateCcw size={14} />
+            恢复默认
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

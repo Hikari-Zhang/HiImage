@@ -1,0 +1,16 @@
+{
+  "server": {
+    "keepalive_seconds": 300,
+    "port": 51821,
+    "startup_timeout": 1800
+  },
+  "inpaint": {
+    "default_dilation": 10,
+    "default_device": "mps",
+    "disable_nsfw": true
+  },
+  "network": {
+    "hf_endpoint": "https://huggingface.co",
+    "hf_token": ""
+  }
+}

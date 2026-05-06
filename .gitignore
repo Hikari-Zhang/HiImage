@@ -1,0 +1,84 @@
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+*.whl
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+INSTALLER/
+pip-wheel-metadata/
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv
+venv*/
+
+# Pytest / Coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# ============ Node.js / Frontend ============
+node_modules/
+frontend/dist/
+frontend/build/
+frontend/out/
+frontend/.vite/
+frontend/.eslintcache
+frontend/coverage/
+*.tsbuildinfo
+
+# ============ 项目特定 ============
+
+# RTK (未知缓存目录)
+.rtk/
+# 模型文件（体积大，不入库）
+models/
+# 输出目录
+output/
+# 临时文件
+tmp/
+# 示例图片（可选，按需保留）
+samples/
+
+# ============ IDE ============
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ============ 日志 ============
+*.log
+logs/
+
+# ============ 环境变量 ============
+.env
+.env.*
+!.env.example
+
+# ============ WorkBuddy ============
+.workbuddy/
+
+# ============ 系统 ============
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon

@@ -1,0 +1,70 @@
+{
+  "name": "clearwatermark",
+  "version": "2.0.0",
+  "description": "AI-powered watermark removal and image enhancement tool",
+  "main": "./out/main/index.js",
+  "author": "Hikari",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "package": "electron-builder"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.447.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "tailwind-merge": "^2.5.3",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@types/node": "^22.7.0",
+    "@types/react": "^18.3.9",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.6.2",
+    "vite": "^5.4.8"
+  },
+  "build": {
+    "appId": "com.hikari.clearwatermark",
+    "productName": "ClearWaterMark",
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "arch": [
+        "arm64"
+      ],
+      "category": "public.app-category.graphics-design"
+    },
+    "extraResources": [
+      {
+        "from": "../backend/dist/clearwatermark-backend",
+        "to": "backend"
+      },
+      {
+        "from": "../models",
+        "to": "models",
+        "filter": [
+          "!**/.DS_Store"
+        ]
+      },
+      {
+        "from": "../config",
+        "to": "config"
+      }
+    ]
+  }
+}

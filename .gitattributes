@@ -1,0 +1,40 @@
+# 自动处理行尾
+* text=auto
+
+# 强制 Unix 风格换行（shell 脚本）
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Windows 批处理
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制文件（不合并 diff）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
+*.tiff binary
+*.webp binary
+*.ico binary
+
+# 模型权重文件
+*.pt binary
+*.pth binary
+*.onnx binary
+*.safetensors binary
+*.bin binary
+*.ckpt binary
+*.pb binary
+
+# 压缩包
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+*.rar binary
+
+# 锁定文件（不合并）
+package-lock.json -diff
+yarn.lock -diff
