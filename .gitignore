@@ -43,7 +43,8 @@ frontend/.eslintcache
 frontend/coverage/
 *.tsbuildinfo
 
-# ============ 项目特定 ============
+# 配置文件（含敏感信息，不入库）
+config/settings.json
 
 # RTK (未知缓存目录)
 .rtk/
