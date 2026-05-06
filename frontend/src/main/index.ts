@@ -175,6 +175,8 @@ app.on('before-quit', (e) => {
   console.log('[Main] Quitting, stopping backend...')
   backendManager.forceQuit().finally(() => {
     console.log('[Main] Backend stopped, exiting app')
-    process.exit(0)  // 直接终止进程，避免 app.quit() 的二次事件循环问题
+    // app.exit() 是 Electron 原生退出，不等事件循环、不等 renderer，立刻终止
+    // process.exit(0) 在 Electron 中会被 native hook 拦截，可能导致卡住
+    app.exit(0)
   })
 })
