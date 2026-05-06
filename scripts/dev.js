@@ -88,7 +88,9 @@ async function main() {
   const backend = spawn(uvicorn[0], [...uvicorn.slice(1), 'app.main:app', '--reload', '--host', '127.0.0.1', '--port', '8787'], {
     cwd: path.join(ROOT, 'backend'),
     stdio: 'inherit',
-    shell: true,
+    shell: false,
+    // detached: 让后端成为进程组组长，cleanup 时可以用 -pid 杀掉整个进程树
+    detached: process.platform !== 'win32',
   });
   log('   Backend PID: ' + backend.pid);
 
@@ -121,17 +123,32 @@ async function main() {
   });
   log('   Frontend PID: ' + frontend.pid);
 
-  // 清理子进程
+  // 清理子进程（杀掉整个进程树，防止 uvicorn/iopaint 子进程残留）
+  let cleanedUp = false;
   const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     log('\n🛑 Shutting down...');
-    try { backend.kill(); } catch {}
-    try { frontend.kill(); } catch {}
+    if (process.platform === 'win32') {
+      // Windows：taskkill /T 杀整个进程树
+      try { require('child_process').execSync(`taskkill /F /T /PID ${backend.pid}`, { stdio: 'pipe' }); } catch {}
+      try { require('child_process').execSync(`taskkill /F /T /PID ${frontend.pid}`, { stdio: 'pipe' }); } catch {}
+    } else {
+      // macOS/Linux：kill(-pid) 杀进程组
+      try { process.kill(-backend.pid, 'SIGKILL'); } catch { try { backend.kill('SIGKILL'); } catch {} }
+      try { process.kill(-frontend.pid, 'SIGKILL'); } catch { try { frontend.kill('SIGKILL'); } catch {} }
+    }
     log('👋 Done.');
     process.exit(0);
   };
   process.on('exit', cleanup);
   process.on('SIGINT', cleanup);
   process.on('SIGTERM', cleanup);
+  // Electron 前端退出后，dev.js 也自动退出（触发 cleanup）
+  frontend.on('exit', () => {
+    log('[dev.js] Frontend exited, shutting down backend...');
+    cleanup();
+  });
 }
 
 main().catch((err) => {
