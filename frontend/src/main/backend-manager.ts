@@ -67,6 +67,8 @@ export class BackendManager {
     this.queue = Promise.resolve()
     // 直接 kill
     await this.killLocalProcess()
+    // 重建 abortController，防止下次启动时立即被 abort（不太可能，但防御性保留）
+    this.abortController = new AbortController()
   }
 
   /** 更新连接配置（会自动停旧/启新进程） */
@@ -207,11 +209,13 @@ export class BackendManager {
       if (process.platform === 'win32') {
         spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { shell: true })
       } else {
-        // 尝试杀整个进程组（负 PID）
+        // detached:true 保证 Python 是进程组组长，-pid 可以杀掉整个进程树
         try {
           process.kill(-pid, 'SIGKILL')
-        } catch {
-          // 不是组长则直接 kill 主进程
+          console.log(`[BackendManager] Killed process group -${pid}`)
+        } catch (e) {
+          // 进程组不存在（可能已退出），降级直接 kill 主进程
+          console.warn(`[BackendManager] kill(-${pid}) failed, trying direct:`, e)
           try { proc.kill('SIGKILL') } catch { /* 已退出 */ }
         }
       }
@@ -241,6 +245,9 @@ export class BackendManager {
 
     this.process = spawn(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      // detached: true 让 Python 成为新的进程组组长，
+      // 这样 kill(-pid, SIGKILL) 可以杀掉整个进程树（uvicorn workers + iopaint subprocesses）
+      detached: process.platform !== 'win32',
       env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' },
     })
 
