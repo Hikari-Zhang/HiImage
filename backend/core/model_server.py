@@ -112,15 +112,21 @@ class _ModelServer:
         """
         确保对应模型的 server 正在运行，返回 base URL（如 http://127.0.0.1:51821）。
         如果参数变化（模型/设备/nsfw），先停止旧进程再启动新的。
+
+        注意：device 比较使用「有效设备」——若模型有 device_override 配置，
+        则以 override 值为准，避免在 MPS/CPU 之间无意义地重启保活服务。
         """
         with self._lock:
             self._reset_idle_timer()
+
+            # 计算此次请求的有效设备（可能被 models.yaml 的 device_override 覆盖）
+            effective_device = self._resolve_effective_device(model_name, device)
 
             needs_restart = (
                 self._proc is None
                 or self._proc.poll() is not None   # 进程已退出
                 or self._current_model != model_name
-                or self._current_device != device
+                or self._current_device != effective_device
                 or self._current_nsfw != disable_nsfw
             )
 
@@ -129,6 +135,28 @@ class _ModelServer:
                 self._start_unlocked(model_name, device, disable_nsfw)
 
             return f'http://{SERVER_HOST}:{_port()}'
+
+    @staticmethod
+    def _resolve_effective_device(model_name: str, device: str) -> str:
+        """
+        查询 models.yaml 中模型的 device_override 字段，返回实际使用的设备名。
+        若无 override 或注册表不可用，返回原始 device。
+        """
+        try:
+            from core.model_registry import MODEL_BY_ID, MODELS
+            cfg = MODEL_BY_ID.get(model_name)
+            if cfg is None:
+                for m in MODELS:
+                    if m.get("iopaint_model_id") == model_name:
+                        cfg = m
+                        break
+            if cfg:
+                override = cfg.get("device_override")
+                if override:
+                    return override
+        except Exception:
+            pass
+        return device
 
     def stop(self):
         """主动停止（如程序退出时调用）"""
@@ -145,23 +173,50 @@ class _ModelServer:
         # 避免因文件位置不同导致的路径计算错误
         model_dir = _cfg.MODELS_DIR
 
+        # 部分扩散模型在特定设备上存在兼容性问题，需要从注册表读取强制设备覆盖。
+        # 例如：AnyText 的 LDM/DDIM pipeline 使用了 MPS 不支持的 float64 cast
+        # 和 cumsum 操作，在 MPS 上运行时 iopaint server 推理时返回 HTTP 500。
+        # 对于这类模型，models.yaml 中设置 device_override: cpu，此处读取并覆盖。
+        effective_device = device
+        try:
+            from core.model_registry import MODEL_BY_ID, MODELS
+            # 优先按 registry ID 查找；若直接传入了 iopaint_model_id 则反向查找
+            cfg = MODEL_BY_ID.get(model_name)
+            if cfg is None:
+                for m in MODELS:
+                    if m.get("iopaint_model_id") == model_name:
+                        cfg = m
+                        break
+            if cfg:
+                override = cfg.get("device_override")
+                if override and override != device:
+                    print(
+                        f"[ModelServer] 模型 '{model_name}' 不支持设备 '{device}'，"
+                        f"按配置强制切换为 '{override}'"
+                    )
+                    effective_device = override
+        except Exception:
+            pass  # 注册表不可用时，沿用用户设定的设备，不阻断启动
+
         cmd = [
             self._iopaint_path, 'start',
             '--host', SERVER_HOST,
             '--port', str(_port()),
             '--model', model_name,
-            '--device', device,
+            '--device', effective_device,
             '--model-dir', model_dir,
         ]
         if disable_nsfw:
             cmd.append('--disable-nsfw-checker')
         # 显存优化参数（从 settings.json 读取，默认值偏向省显存）
-        if _low_mem():
-            cmd.append('--low-mem')
-        if _cpu_offload():
-            cmd.append('--cpu-offload')
-        if _cpu_textencoder():
-            cmd.append('--cpu-textencoder')
+        # --low-mem / --cpu-offload / --cpu-textencoder 在 CPU 设备上无意义，跳过
+        if effective_device != 'cpu':
+            if _low_mem():
+                cmd.append('--low-mem')
+            if _cpu_offload():
+                cmd.append('--cpu-offload')
+            if _cpu_textencoder():
+                cmd.append('--cpu-textencoder')
 
         # 继承当前环境变量，并注入 HuggingFace 凭据和镜像配置
         # PYTHONUNBUFFERED=1 禁用 Python 输出缓冲，确保下载进度实时显示
@@ -188,7 +243,7 @@ class _ModelServer:
             popen_kwargs['start_new_session'] = True
         self._proc = subprocess.Popen(cmd, **popen_kwargs)
         self._current_model = model_name
-        self._current_device = device
+        self._current_device = effective_device   # 存储有效设备（已应用 device_override）
         self._current_nsfw = disable_nsfw
 
         # 异步打印服务日志
@@ -378,22 +433,24 @@ def inpaint_via_server(
     payload_dict: dict = {
         'image': image_b64,
         'mask': mask_b64,
-        # SD 通用参数（非 SD 模型会忽略这些字段）
+        # iopaint InpaintRequest 字段：
+        #   sd_steps   —— SD/AnyText 等扩散模型的扩散步数
+        #   ldm_steps  —— 旧版 LDM 模型步数，同时赋值兼容旧版 iopaint
+        'sd_steps': sd_steps,
         'ldm_steps': sd_steps,
         'sd_guidance_scale': sd_guidance_scale,
         'sd_seed': sd_seed,
+        # 始终发送 prompt 字段——AnyText 等模型要求该字段存在（即使为空字符串）；
+        # 非 SD 模型（LaMa/ZITS 等）会忽略此字段
+        'prompt': prompt,
+        'negative_prompt': (
+            negative_prompt if negative_prompt
+            else 'blurry, low quality, deformed, artifacts, watermark'
+        ),
         'hd_strategy': 'Crop',
         'hd_strategy_crop_trigger_size': 800,
         'hd_strategy_crop_margin': 196,
     }
-
-    # 仅当 prompt 非空时注入，避免干扰非 SD 模型（如 LaMa）
-    if prompt:
-        payload_dict['prompt'] = prompt
-        payload_dict['negative_prompt'] = (
-            negative_prompt if negative_prompt
-            else 'blurry, low quality, deformed, artifacts, watermark'
-        )
 
     payload = json.dumps(payload_dict).encode('utf-8')
 
@@ -410,7 +467,13 @@ def inpaint_via_server(
             result_bytes = resp.read()
     except urllib.error.HTTPError as e:
         body = e.read().decode('utf-8', errors='replace')
-        raise RuntimeError(f"[ModelServer] inpaint 请求失败 HTTP {e.code}: {body}")
+        # 等待日志线程将 iopaint 打印的错误堆栈刷入缓冲（500 的 traceback 在响应之后才输出）
+        time.sleep(1.0)
+        log_tail = '\n'.join(srv._log_lines[-40:]) if srv._log_lines else '（无日志）'
+        raise RuntimeError(
+            f"[ModelServer] inpaint 请求失败 HTTP {e.code}: {body}\n"
+            f"--- iopaint 服务器最近日志 ---\n{log_tail}"
+        )
 
     # 解码结果图像
     result_arr = np.frombuffer(result_bytes, dtype=np.uint8)

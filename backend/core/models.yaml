@@ -1,0 +1,1101 @@
+# ==============================================================================
+# HiImage —— 统一模型与模式注册表
+#
+# 所有功能（换背景/换装/去水印/超分辨率/……）的模型配置均在此文件维护。
+# Python 代码通过 core/model_registry.py 读取本文件，不再硬编码任何模型信息。
+#
+# 字段说明
+# --------
+# id              内部 ID，与前端 model_id / 后端 dispatch 一一对应
+# name            展示名称
+# provider        模型来源：
+#                   rembg       → rembg 库管理，权重在 ~/.u2net/
+#                   IOPaint     → iopaint 快速本地模型（lama/migan 等），无独立权重
+#                   diffusers   → HuggingFace diffusers 管道，权重在 HF 缓存
+#                   HiImage     → 本项目自定义管道（组合多个子模型）
+#                   facexlib    → GFPGAN/facexlib，权重在 models/gfpgan/
+#                   realesrgan  → Real-ESRGAN，权重在 models/realesrgan/
+# tags            所属功能模式 ID 列表（一个模型可属于多个模式）
+# description     面向用户的功能描述
+# recommended_for 适合的场景（用于 UI tooltip）
+# requires_reference 是否需要参考图
+# size_mb         模型权重大小（MB，估算）
+# badge           UI 徽章：推荐 / 快速 / 高质量 / 动漫（空串表示无徽章）
+# hf_model_id     HuggingFace Hub model ID，可直接传给 snapshot_download()
+# download_url    模型下载页面 URL（HuggingFace 或 GitHub Release）
+# local_path      相对于 PROJECT_ROOT 的本地权重路径
+#                   用于 GFPGAN / Real-ESRGAN 等以文件系统路径存储的模型
+# rembg_model_name  rembg 库内部模型名，对应 ~/.u2net/<name>.onnx
+#
+# ── IOPaint 专用字段（provider: IOPaint）────────────────────────────────────
+# iopaint_model_id  传给 iopaint CLI / server 的 --model 参数：
+#                   快速本地模型（lama/migan 等）直接用单词；
+#                   扩散模型用 HuggingFace org/repo 格式
+# iopaint_mode    IOPaint 调用方式：
+#                   "cli"    → iopaint run 命令（快速本地模型，无需独立下载）
+#                   "server" → iopaint start HTTP 服务（扩散模型，首次自动下载）
+# device_override 强制使用的推理设备，忽略用户在 UI 中的选择。
+#                   用于处理某些模型不兼容特定设备的情况，例如：
+#                   AnyText 的 LDM/DDIM pipeline 使用了 MPS 不支持的操作，
+#                   必须强制回退到 cpu，否则 iopaint server 在推理时返回 HTTP 500。
+#                   不设置此字段（或设为 null）则尊重用户选择的设备。
+# display_group   在 UI 下拉中所属的分组标题（watermark_removal 模式专用）
+#
+# ── Real-ESRGAN 专用字段（provider: realesrgan）──────────────────────────────
+# scale           超分倍率（2 或 4）
+# weight_filename 权重文件名，完整路径为 models/realesrgan/<weight_filename>
+# arch            网络架构：RRDBNet（标准大模型）或 SRVGGNetCompact（轻量模型）
+# num_block       RRDBNet 专用：dense block 数（23 = 标准；6 = anime 小模型）
+# num_conv        SRVGGNetCompact 专用：conv 层数（32 = general-x4v3；16 = animevideo）
+#
+# supported_params 推理参数说明（key → type/default/range?/desc）
+# features        能力标签列表：
+#                   matting / inpaint_region / inpaint_prompt / segmentation /
+#                   pure_color / texture / style / instruction / face_enhance /
+#                   upscale
+#
+# 新增模型只需在 models 列表末尾追加一条记录，无需修改任何 Python 代码。
+# ==============================================================================
+
+
+# ── 参数规格模板（锚点，供各模型引用以避免重复）─────────────────────────────
+
+_templates:
+
+  # SD 1.5 Inpainting 参数
+  sd_inpaint: &sd_inpaint
+    num_inference_steps:
+      type: int
+      default: 50
+      range: [1, 150]
+      desc: 扩散去噪步数；步数越多越精细，但耗时增加
+    guidance_scale:
+      type: float
+      default: 7.5
+      range: [1.0, 20.0]
+      desc: 提示词引导强度；值越高越贴近 prompt，但可能过拟合
+    seed:
+      type: int
+      default: 42
+      range: [0, 2147483647]
+      desc: 随机种子；相同种子可复现结果
+    prompt:
+      type: str
+      default: ""
+      desc: 正向提示词（英文效果更佳）
+    negative_prompt:
+      type: str
+      default: "blurry, low quality, deformed"
+      desc: 负向提示词，描述不希望出现的内容
+
+  # SDXL Inpainting 参数（与 SD 1.5 相同，但推荐步数不同）
+  sdxl_inpaint: &sdxl_inpaint
+    <<: *sd_inpaint
+    num_inference_steps:
+      type: int
+      default: 40
+      range: [1, 100]
+      desc: SDXL 推荐 30-50 步，兼顾质量与速度
+
+  # FLUX.1 参数
+  flux: &flux
+    num_inference_steps:
+      type: int
+      default: 28
+      range: [1, 50]
+      desc: FLUX 推荐 20-30 步（flow-matching，步数不宜过多）
+    guidance_scale:
+      type: float
+      default: 3.5
+      range: [1.0, 10.0]
+      desc: FLUX guidance；通常 3-5 即可，过高会过饱和
+    seed:
+      type: int
+      default: 42
+      range: [0, 2147483647]
+      desc: 随机种子
+    prompt:
+      type: str
+      default: ""
+      desc: 正向提示词
+
+  # InstructPix2Pix 参数
+  ip2p: &ip2p
+    num_inference_steps:
+      type: int
+      default: 50
+      range: [1, 150]
+      desc: 去噪步数
+    image_guidance_scale:
+      type: float
+      default: 1.5
+      range: [1.0, 5.0]
+      desc: 原图保留程度；越高越接近原图，越低创意越强
+    guidance_scale:
+      type: float
+      default: 7.5
+      range: [1.0, 20.0]
+      desc: 指令引导强度
+    seed:
+      type: int
+      default: 42
+      range: [0, 2147483647]
+      desc: 随机种子
+    prompt:
+      type: str
+      default: ""
+      desc: 编辑指令（支持中英文）
+
+  # GFPGAN 参数
+  gfpgan: &gfpgan
+    upscale:
+      type: int
+      default: 1
+      range: [1, 4]
+      desc: 超分倍率；1 = 不超分，仅增强细节
+
+  # HSV 换色参数
+  hsv: &hsv
+    feather_px:
+      type: int
+      default: 5
+      range: [0, 30]
+      desc: 边缘羽化像素数，避免换色边界生硬
+    saturation_boost:
+      type: float
+      default: 1.0
+      range: [0.2, 3.0]
+      desc: 目标颜色饱和度增益
+
+  # 编辑指令提示词（追加到其他模板之上）
+  edit_prompt: &edit_prompt
+    prompt:
+      type: str
+      default: ""
+      desc: 编辑指令，例：将上衣换成黑色 / 把裤子改成牛仔风格
+
+
+# ==============================================================================
+# 模型列表
+# ==============================================================================
+
+models:
+
+  # ── 换背景（matting 模型）────────────────────────────────────────────────
+
+  - id: birefnet
+    name: BiRefNet-General
+    provider: rembg
+    tags: [background_replace]
+    description: 双向精化网络，2024 SOTA 抠图，边缘细节极佳，复杂场景首选
+    recommended_for: 换背景
+    requires_reference: false
+    size_mb: 100
+    badge: 推荐
+    hf_model_id: ZhengPeng7/BiRefNet
+    download_url: https://huggingface.co/ZhengPeng7/BiRefNet
+    rembg_model_name: birefnet-general    # ~/.u2net/birefnet-general.onnx
+    supported_params: {}
+    features: [matting]
+
+  - id: rmbg
+    name: RMBG 2.0
+    provider: rembg
+    tags: [background_replace]
+    description: BRIA RMBG 2.0 —— 商业级抠图精度，人像/产品均优秀
+    recommended_for: 换背景
+    requires_reference: false
+    size_mb: 176
+    badge: ""
+    hf_model_id: briaai/RMBG-2.0
+    download_url: https://huggingface.co/briaai/RMBG-2.0
+    rembg_model_name: briaai/RMBG-2.0    # ~/.u2net/briaai/RMBG-2.0.onnx
+    supported_params: {}
+    features: [matting]
+
+  - id: isnet
+    name: IS-Net General
+    provider: rembg
+    tags: [background_replace]
+    description: ISNet 通用目标分割，产品图/商品摄影效果极佳，细节保留好
+    recommended_for: 换背景（商品）
+    requires_reference: false
+    size_mb: 120
+    badge: ""
+    hf_model_id: danielgatis/rembg
+    download_url: https://huggingface.co/danielgatis/rembg
+    rembg_model_name: isnet-general-use   # ~/.u2net/isnet-general-use.onnx
+    supported_params: {}
+    features: [matting]
+
+  - id: isnet_anime
+    name: IS-Net Anime
+    provider: rembg
+    tags: [background_replace]
+    description: 针对动漫/插画优化的分割模型，发丝与细线条保留精准
+    recommended_for: 换背景（动漫）
+    requires_reference: false
+    size_mb: 120
+    badge: 动漫
+    hf_model_id: danielgatis/rembg
+    download_url: https://huggingface.co/danielgatis/rembg
+    rembg_model_name: isnet-anime         # ~/.u2net/isnet-anime.onnx
+    supported_params: {}
+    features: [matting]
+
+  - id: u2net
+    name: U²-Net
+    provider: rembg
+    tags: [background_replace]
+    description: 通用显著目标检测经典模型，人像/商品/动物均兼顾
+    recommended_for: 换背景（通用）
+    requires_reference: false
+    size_mb: 176
+    badge: ""
+    hf_model_id: danielgatis/rembg
+    download_url: https://huggingface.co/danielgatis/rembg
+    rembg_model_name: u2net               # ~/.u2net/u2net.onnx
+    supported_params: {}
+    features: [matting]
+
+  - id: modnet
+    name: MODNet
+    provider: rembg
+    tags: [background_replace]
+    description: 轻量实时人像抠图，速度极快，适合批量与预览
+    recommended_for: 换背景（快速）
+    requires_reference: false
+    size_mb: 25
+    badge: 快速
+    hf_model_id: danielgatis/rembg
+    download_url: https://huggingface.co/danielgatis/rembg
+    rembg_model_name: modnet_portrait_matting  # ~/.u2net/modnet_portrait_matting.onnx
+    supported_params: {}
+    features: [matting]
+
+  # ── 换装 / 换脸 / 试穿（Inpainting 模型）────────────────────────────────
+
+  - id: flux_fill
+    name: FLUX.1-Fill-dev
+    provider: diffusers
+    tags: [outfit_swap, virtual_tryon, face_swap]
+    description: FLUX.1 官方 Inpainting 变体，语义理解力极强，细节还原最佳，需 16-24GB VRAM
+    recommended_for: 换装 / 试穿 / 换脸（最高质量）
+    requires_reference: false
+    size_mb: 23800
+    badge: 高质量
+    hf_model_id: black-forest-labs/FLUX.1-Fill-dev
+    download_url: https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev
+    supported_params:
+      <<: *flux
+    features: [inpaint_region]
+
+  - id: sdxl
+    name: Stable Diffusion XL
+    provider: IOPaint
+    tags: [outfit_swap, virtual_tryon]
+    description: SDXL Inpainting，1024px 高分辨率生成，服装纹理自然，需 12GB+ VRAM
+    recommended_for: 换装 / 试穿（高分辨率）
+    requires_reference: false
+    size_mb: 7000
+    badge: ""
+    hf_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    supported_params:
+      <<: *sdxl_inpaint
+    features: [inpaint_region, texture]
+
+  - id: powerpaint
+    name: PowerPaint v2
+    provider: IOPaint
+    tags: [outfit_swap, virtual_tryon]
+    description: 多任务 Inpainting，专为局部换装/试穿设计，结构保留优秀
+    recommended_for: 换装 / 试穿
+    requires_reference: false
+    size_mb: 4500
+    badge: 推荐
+    hf_model_id: Sanster/PowerPaint-V2-brush
+    download_url: https://huggingface.co/Sanster/PowerPaint-V2-brush
+    supported_params:
+      <<: *sd_inpaint
+    features: [inpaint_region, texture, style]
+
+  - id: mat
+    name: MAT
+    provider: IOPaint
+    tags: [outfit_swap, face_swap]
+    description: Mask-Aware Transformer，不规则掩码处理精度最高，边缘自然无痕
+    recommended_for: 换装 / 换脸（精细边缘）
+    requires_reference: true
+    size_mb: 500
+    badge: ""
+    hf_model_id: Sanster/big-lama
+    download_url: https://huggingface.co/Sanster/big-lama
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: lama_inpaint
+    name: LaMa
+    provider: IOPaint
+    tags: [outfit_swap, face_swap]
+    description: 大感受野卷积修复，纹理延续自然，速度快，小显存也能跑
+    recommended_for: 换装 / 区域修复
+    requires_reference: true
+    size_mb: 200
+    badge: ""
+    hf_model_id: Sanster/big-lama
+    download_url: https://huggingface.co/Sanster/big-lama
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: zits
+    name: ZITS
+    provider: IOPaint
+    tags: [outfit_swap]
+    description: 基于 Transformer 的结构线修复，布料纹理/格纹/条纹重建出色
+    recommended_for: 换装（纹理类服装）
+    requires_reference: true
+    size_mb: 200
+    badge: ""
+    hf_model_id: Sanster/zits_cleaning
+    download_url: https://huggingface.co/Sanster/zits_cleaning
+    supported_params: {}
+    features: [inpaint_region, texture]
+
+  - id: sd15
+    name: Stable Diffusion 1.5
+    provider: IOPaint
+    tags: [outfit_swap, face_swap, virtual_tryon]
+    description: 文字引导 Inpainting，可配合提示词描述目标样式，创意度高
+    recommended_for: 换装 / 换脸（文字引导）
+    requires_reference: false
+    size_mb: 4000
+    badge: ""
+    hf_model_id: runwayml/stable-diffusion-inpainting
+    download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
+    supported_params:
+      <<: *sd_inpaint
+    features: [inpaint_region, inpaint_prompt]
+
+  - id: gfpgan
+    name: GFPGAN v1.4
+    provider: facexlib
+    tags: [face_swap]
+    description: 人脸生成对抗网络，专精人脸修复与超分增强，换脸后处理首选
+    recommended_for: 换脸 / 人脸增强
+    requires_reference: true
+    size_mb: 340
+    badge: 推荐
+    hf_model_id: xinntao/facexlib
+    download_url: https://github.com/TencentARC/GFPGAN/releases
+    local_path: models/gfpgan/GFPGANv1.4.pth   # 相对于 PROJECT_ROOT
+    supported_params:
+      <<: *gfpgan
+    features: [face_enhance]
+
+  # ── 方案A：精准替换（prompt_inpaint）────────────────────────────────────
+
+  - id: flux_fill_prompt
+    name: FLUX.1-Fill-dev
+    provider: diffusers
+    tags: [prompt_inpaint]
+    description: FLUX.1 Inpainting，2024 SOTA，文字理解力最强，细节还原极佳，需 16-24GB VRAM
+    recommended_for: 精准替换（最高质量）
+    requires_reference: false
+    size_mb: 23800
+    badge: 高质量
+    hf_model_id: black-forest-labs/FLUX.1-Fill-dev
+    download_url: https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev
+    supported_params:
+      <<: *flux
+    features: [inpaint_prompt]
+
+  - id: sdxl_inpaint_prompt
+    name: SDXL Inpainting
+    provider: IOPaint
+    tags: [prompt_inpaint]
+    description: SDXL 文字引导精准替换，1024px 高精度输出，需 12GB+ VRAM
+    recommended_for: 精准替换（高质量）
+    requires_reference: false
+    size_mb: 7000
+    badge: 推荐
+    hf_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    supported_params:
+      <<: *sdxl_inpaint
+    features: [inpaint_prompt]
+
+  - id: powerpaint_prompt
+    name: PowerPaint v2
+    provider: IOPaint
+    tags: [prompt_inpaint]
+    description: PowerPaint 文字引导，结构保留佳，替换自然，推荐首选
+    recommended_for: 精准替换
+    requires_reference: false
+    size_mb: 4500
+    badge: 推荐
+    hf_model_id: Sanster/PowerPaint-V2-brush
+    download_url: https://huggingface.co/Sanster/PowerPaint-V2-brush
+    supported_params:
+      <<: *sd_inpaint
+    features: [inpaint_prompt]
+
+  - id: sd15_inpaint_prompt
+    name: SD 1.5 Inpainting
+    provider: IOPaint
+    tags: [prompt_inpaint]
+    description: SD 1.5 文字引导 Inpainting，速度快，显存需求低，适合快速预览
+    recommended_for: 精准替换（快速）
+    requires_reference: false
+    size_mb: 4000
+    badge: ""
+    hf_model_id: runwayml/stable-diffusion-inpainting
+    download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
+    supported_params:
+      <<: *sd_inpaint
+    features: [inpaint_prompt]
+
+  # ── 方案B：智能定位（auto_segment_edit）─────────────────────────────────
+
+  - id: grounded_sam_flux
+    name: GDINO + SAM + FLUX.1-Fill
+    provider: HiImage
+    tags: [auto_segment_edit]
+    description: GroundingDINO 零样本检测 + SAM 精细分割 + FLUX.1-Fill 修复，任意目标、边缘最精准，需 16-24GB VRAM
+    recommended_for: 换色/换风格（最高质量）
+    requires_reference: false
+    size_mb: 25500
+    badge: 高质量
+    hf_model_id: IDEA-Research/grounding-dino-base
+    download_url: https://huggingface.co/IDEA-Research/grounding-dino-base
+    supported_params:
+      <<: *flux
+      <<: *edit_prompt
+    features: [segmentation, inpaint_prompt, pure_color, style]
+
+  - id: grounded_sam_sdxl
+    name: GDINO + SAM + SDXL
+    provider: HiImage
+    tags: [auto_segment_edit]
+    description: GroundingDINO + SAM 精准分割 + SDXL Inpainting，分割边缘精细，高分辨率输出，需 12GB VRAM
+    recommended_for: 换色/换风格（高质量）
+    requires_reference: false
+    size_mb: 9500
+    badge: ""
+    hf_model_id: IDEA-Research/grounding-dino-base
+    download_url: https://huggingface.co/IDEA-Research/grounding-dino-base
+    supported_params:
+      <<: *sdxl_inpaint
+      <<: *edit_prompt
+    features: [segmentation, inpaint_prompt, pure_color, style]
+
+  - id: auto_segment_hsv
+    name: SegFormer + HSV 换色
+    provider: HiImage
+    tags: [auto_segment_edit]
+    description: 自动识别服装部位，HSV 色彩空间换色，亚秒级响应，保留布料光影
+    recommended_for: 换色（纯色）
+    requires_reference: false
+    size_mb: 400
+    badge: 推荐
+    hf_model_id: mattmdjaga/segformer_b2_clothes
+    download_url: https://huggingface.co/mattmdjaga/segformer_b2_clothes
+    supported_params:
+      <<: *hsv
+      <<: *edit_prompt
+    features: [segmentation, pure_color]
+
+  - id: auto_segment_sd15
+    name: SegFormer + SD 1.5
+    provider: HiImage + IOPaint
+    tags: [auto_segment_edit]
+    description: 自动分割后用 SD 1.5 Inpainting 替换，支持纹理/风格类指令
+    recommended_for: 换风格 / 换纹理
+    requires_reference: false
+    size_mb: 4400
+    badge: ""
+    hf_model_id: mattmdjaga/segformer_b2_clothes
+    download_url: https://huggingface.co/mattmdjaga/segformer_b2_clothes
+    supported_params:
+      <<: *sd_inpaint
+      <<: *edit_prompt
+    features: [segmentation, texture, style]
+
+  # ── 方案C：自由编辑（instruction_edit）──────────────────────────────────
+
+  - id: flux
+    name: FLUX.1-dev
+    provider: diffusers
+    tags: [instruction_edit]
+    description: Black Forest Labs 2024 SOTA，文字理解力极强，细节还原最佳，需 24GB+ VRAM
+    recommended_for: 自由编辑（最高画质）
+    requires_reference: false
+    size_mb: 24000
+    badge: 高质量
+    hf_model_id: black-forest-labs/FLUX.1-dev
+    download_url: https://huggingface.co/black-forest-labs/FLUX.1-dev
+    supported_params:
+      <<: *flux
+      strength:
+        type: float
+        default: 0.75
+        range: [0.1, 1.0]
+        desc: 图生图强度；越高越忽略原图内容，越低越保留原图结构
+    features: [instruction]
+
+  - id: sdxl_img2img
+    name: SDXL Img2Img
+    provider: diffusers
+    tags: [instruction_edit]
+    description: SDXL 图生图，1024px 高分辨率输出，画质明显优于 SD 1.5，需 12GB+ VRAM
+    recommended_for: 自由编辑（高分辨率）
+    requires_reference: false
+    size_mb: 7000
+    badge: ""
+    hf_model_id: stabilityai/stable-diffusion-xl-base-1.0
+    download_url: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0
+    supported_params:
+      <<: *sdxl_inpaint
+      strength:
+        type: float
+        default: 0.75
+        range: [0.1, 1.0]
+        desc: 图生图强度
+    features: [instruction]
+
+  - id: magicbrush
+    name: MagicBrush
+    provider: diffusers
+    tags: [instruction_edit]
+    description: 高质量指令编辑数据集微调的 IP2P，指令跟随更精准，兼顾速度与效果
+    recommended_for: 自由语义编辑（精准指令）
+    requires_reference: false
+    size_mb: 5000
+    badge: 推荐
+    hf_model_id: osunlp/MagicBrush
+    download_url: https://huggingface.co/osunlp/MagicBrush
+    supported_params:
+      <<: *ip2p
+    features: [instruction]
+
+  - id: instruct_pix2pix
+    name: InstructPix2Pix
+    provider: diffusers
+    tags: [instruction_edit]
+    description: 原版 timbrooks/instruct-pix2pix，SD 1.5 底座，显存需求低，适合快速预览
+    recommended_for: 自由语义编辑（快速）
+    requires_reference: false
+    size_mb: 5000
+    badge: ""
+    hf_model_id: timbrooks/instruct-pix2pix
+    download_url: https://huggingface.co/timbrooks/instruct-pix2pix
+    supported_params:
+      <<: *ip2p
+    features: [instruction]
+
+
+  # ── 去水印（watermark_removal）────────────────────────────────────────────
+  #
+  # IOPaint 快速本地模型（iopaint_mode: cli）：
+  #   - 权重内嵌于 iopaint 包，安装完即可用，无需单独下载
+  #   - 调用方式：iopaint run --model <iopaint_model_id> ...
+  #   - model_checker 对这类模型返回 "builtin"（不检测文件）
+  #
+  # IOPaint 扩散模型（iopaint_mode: server）：
+  #   - 权重存于 HuggingFace 缓存，首次使用时自动下载
+  #   - 调用方式：iopaint start --model <iopaint_model_id>（常驻 HTTP 服务，保活 5 分钟）
+  #   - model_checker 通过 scan_cache_dir() 检查 HF 缓存
+  #
+  # display_group 用于前端下拉分组，同组模型归于同一 <optgroup>
+
+  # ── 快速修复：本地推理，无需下载 ──────────────────────────────────────────
+
+  - id: wm_lama
+    name: LaMa（推荐·通用）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 综合最佳首选：速度快、质量好，适合绝大多数水印场景｜内存 ~500 MB，无需显卡
+    recommended_for: 去水印（通用首选）
+    requires_reference: false
+    size_mb: null          # 内嵌于 iopaint，无独立权重文件
+    badge: 推荐
+    iopaint_model_id: lama # 传给 iopaint --model 的参数
+    iopaint_mode: cli      # 调用方式：iopaint run（CLI 批处理）
+    display_group: 快速修复（本地推理）
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: wm_migan
+    name: MiGAN（GAN·快速）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 基于生成对抗网络，速度快，背景纹理较规则时效果好｜内存 ~600 MB，无需显卡
+    recommended_for: 去水印（规则纹理背景）
+    requires_reference: false
+    size_mb: null
+    badge: ""
+    iopaint_model_id: migan
+    iopaint_mode: cli
+    display_group: 快速修复（本地推理）
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: wm_zits
+    name: ZITS（边缘感知）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 边缘感知修复，文字/logo 边缘过渡自然｜内存 ~700 MB，无需显卡
+    recommended_for: 去水印（边缘清晰的 logo）
+    requires_reference: false
+    size_mb: null
+    badge: ""
+    iopaint_model_id: zits
+    iopaint_mode: cli
+    display_group: 快速修复（本地推理）
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: wm_fcf
+    name: FCF（快速填充）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: Fast Context-based Fill，背景简单/重复时效果佳｜内存 ~600 MB，无需显卡
+    recommended_for: 去水印（背景简单或重复）
+    requires_reference: false
+    size_mb: null
+    badge: ""
+    iopaint_model_id: fcf
+    iopaint_mode: cli
+    display_group: 快速修复（本地推理）
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: wm_mat
+    name: MAT（精细修复）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: Multi-scale Attention，质量最高但速度较慢｜内存 ~1.5 GB，无需显卡
+    recommended_for: 去水印（精细场景）
+    requires_reference: false
+    size_mb: null
+    badge: ""
+    iopaint_model_id: mat
+    iopaint_mode: cli
+    display_group: 快速修复（本地推理）
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: wm_ldm
+    name: LDM（轻量扩散）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 轻量级 Latent Diffusion，质量与速度均衡｜内存 ~1.5 GB，无需显卡
+    recommended_for: 去水印（均衡）
+    requires_reference: false
+    size_mb: null
+    badge: ""
+    iopaint_model_id: ldm
+    iopaint_mode: cli
+    display_group: 快速修复（本地推理）
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: wm_manga
+    name: Manga（漫画专用）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 针对漫画/线稿优化，线条清晰无模糊｜内存 ~500 MB，无需显卡
+    recommended_for: 去水印（漫画/线稿）
+    requires_reference: false
+    size_mb: null
+    badge: 动漫
+    iopaint_model_id: manga
+    iopaint_mode: cli
+    display_group: 快速修复（本地推理）
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: wm_cv2
+    name: CV2（传统算法）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: OpenCV 传统算法，无需 GPU，速度最快，质量有限｜内存 <100 MB，纯 CPU
+    recommended_for: 去水印（极速/无 GPU）
+    requires_reference: false
+    size_mb: null
+    badge: 快速
+    iopaint_model_id: cv2
+    iopaint_mode: cli
+    display_group: 快速修复（本地推理）
+    supported_params: {}
+    features: [inpaint_region]
+
+  # ── 专用扩散模型：首次使用自动下载 ────────────────────────────────────────
+
+  - id: wm_anytext
+    name: AnyText（文字水印专用）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 识别字体、颜色后重建背景，文字类水印效果显著优于 LaMa；常驻内存保活5分钟｜下载 ~3 GB，运行 ~10 GB 统一内存
+    recommended_for: 去水印（文字/字幕水印）
+    requires_reference: false
+    size_mb: 3000
+    badge: 推荐
+    hf_model_id: Sanster/AnyText           # HF 缓存检测用
+    iopaint_model_id: Sanster/AnyText       # 传给 iopaint --model 的参数
+    iopaint_mode: server                    # 扩散模型，走 HTTP Server 保活模式
+    device_override: cpu                    # AnyText 的 LDM/DDIM pipeline 依赖
+                                            # torch.float64 cast 与 cumsum 等 MPS
+                                            # 不支持的操作，强制回退 CPU 避免 500
+    display_group: 专用模型（首次使用自动下载）
+    download_url: https://huggingface.co/Sanster/AnyText
+    supported_params: {}
+    features: [inpaint_region]
+
+  - id: wm_powerpaint_v1
+    name: PowerPaint V1（最强通用）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 支持文字引导（如 'remove watermark'），综合效果最强，iopaint 原生支持；常驻内存保活5分钟｜下载 ~5 GB，运行 ~12 GB 统一内存
+    recommended_for: 去水印（通用最强）
+    requires_reference: false
+    size_mb: 5000
+    badge: ""
+    hf_model_id: Sanster/PowerPaint-V1-stable-diffusion-inpainting
+    iopaint_model_id: Sanster/PowerPaint-V1-stable-diffusion-inpainting
+    iopaint_mode: server
+    display_group: 专用模型（首次使用自动下载）
+    download_url: https://huggingface.co/Sanster/PowerPaint-V1-stable-diffusion-inpainting
+    supported_params:
+      prompt:
+        type: str
+        default: ""
+        desc: 修复引导词，例：remove watermark / clean background
+    features: [inpaint_region, inpaint_prompt]
+
+  # ── SD 1.5 扩散模型：高质量，首次下载较大 ──────────────────────────────────
+
+  - id: wm_sd15
+    name: SD 1.5 Inpainting（通用）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: Stable Diffusion 1.5 官方 inpainting，复杂/渐变背景效果自然，兼容性最佳；常驻内存保活5分钟｜下载 ~4 GB，运行 ~8 GB 统一内存
+    recommended_for: 去水印（复杂渐变背景）
+    requires_reference: false
+    size_mb: 4000
+    badge: ""
+    hf_model_id: runwayml/stable-diffusion-inpainting
+    iopaint_model_id: runwayml/stable-diffusion-inpainting
+    iopaint_mode: server
+    display_group: 扩散模型 SD 1.5（高质量·首次下载较大）
+    download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
+    supported_params:
+      <<: *sd_inpaint
+    features: [inpaint_region, inpaint_prompt]
+
+  - id: wm_realistic_vision
+    name: Realistic Vision V5.1（写实照片）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 写实照片/人像/风景真实感最强，V5.1 比 V3 细节更好；常驻内存保活5分钟｜下载 ~4 GB，运行 ~8 GB 统一内存
+    recommended_for: 去水印（写实照片/人像）
+    requires_reference: false
+    size_mb: 4000
+    badge: ""
+    hf_model_id: Uminosachi/realisticVisionV51_v51VAE-inpainting
+    iopaint_model_id: Uminosachi/realisticVisionV51_v51VAE-inpainting
+    iopaint_mode: server
+    display_group: 扩散模型 SD 1.5（高质量·首次下载较大）
+    download_url: https://huggingface.co/Uminosachi/realisticVisionV51_v51VAE-inpainting
+    supported_params:
+      <<: *sd_inpaint
+    features: [inpaint_region, inpaint_prompt]
+
+  - id: wm_dreamshaper
+    name: DreamShaper（艺术风格）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 艺术感强，人像/插画/幻想场景下背景重建最自然；常驻内存保活5分钟｜下载 ~4 GB，运行 ~8 GB 统一内存
+    recommended_for: 去水印（艺术/插画场景）
+    requires_reference: false
+    size_mb: 4000
+    badge: ""
+    hf_model_id: redstonehero/dreamshaper-inpainting
+    iopaint_model_id: redstonehero/dreamshaper-inpainting
+    iopaint_mode: server
+    display_group: 扩散模型 SD 1.5（高质量·首次下载较大）
+    download_url: https://huggingface.co/redstonehero/dreamshaper-inpainting
+    supported_params:
+      <<: *sd_inpaint
+    features: [inpaint_region, inpaint_prompt]
+
+  - id: wm_anything_v4
+    name: Anything V4（动漫/插画）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 二次元/动漫/CG 插图专用，线条与色彩风格高度一致；常驻内存保活5分钟｜下载 ~4 GB，运行 ~8 GB 统一内存
+    recommended_for: 去水印（动漫/CG）
+    requires_reference: false
+    size_mb: 4000
+    badge: 动漫
+    hf_model_id: Sanster/anything-4.0-inpainting
+    iopaint_model_id: Sanster/anything-4.0-inpainting
+    iopaint_mode: server
+    display_group: 扩散模型 SD 1.5（高质量·首次下载较大）
+    download_url: https://huggingface.co/Sanster/anything-4.0-inpainting
+    supported_params:
+      <<: *sd_inpaint
+    features: [inpaint_region, inpaint_prompt]
+
+  # ── SDXL 扩散模型：超高质量 ──────────────────────────────────────────────
+
+  - id: wm_sdxl
+    name: SDXL Inpainting（高分辨率）
+    provider: IOPaint
+    tags: [watermark_removal]
+    description: 2K+ 图像细节最佳，语义理解最强，速度最慢；常驻内存保活5分钟｜下载 ~7 GB，运行 ~16 GB 统一内存
+    recommended_for: 去水印（高分辨率/2K+）
+    requires_reference: false
+    size_mb: 7000
+    badge: 高质量
+    hf_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    iopaint_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    iopaint_mode: server
+    display_group: 扩散模型 SDXL（超高质量·2K+）
+    download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    supported_params:
+      <<: *sdxl_inpaint
+    features: [inpaint_region, inpaint_prompt]
+
+
+  # ── 超分辨率（upscale）────────────────────────────────────────────────────
+  #
+  # provider: realesrgan — 使用 Real-ESRGAN 超分辨率库
+  # 权重文件路径：models/realesrgan/<weight_filename>（相对于 PROJECT_ROOT）
+  # local_path 同时设置，供 model_checker 直接检测文件是否存在
+  #
+  # 网络架构说明：
+  #   RRDBNet         标准大模型（RRDB dense block），num_block 控制深度
+  #                   x4plus/x2plus/RealESRNet_x4plus: num_block=23（标准）
+  #                   x4plus_anime_6B: num_block=6（更小，动漫专用）
+  #   SRVGGNetCompact 轻量 VGG 风格，num_conv 控制深度
+  #                   general-x4v3: num_conv=32
+  #                   animevideov3: num_conv=16
+
+  # ── 通用超分辨率 ──────────────────────────────────────────────────────────
+
+  - id: RealESRGAN_x4plus
+    name: 4x 通用照片（推荐）
+    provider: realesrgan
+    tags: [upscale]
+    description: 通用场景，综合细节恢复最佳，适合照片/截图；强 GAN 锐化，细节感强｜模型 ~65 MB
+    recommended_for: 超分辨率（通用照片）
+    requires_reference: false
+    size_mb: 65
+    badge: 推荐
+    scale: 4                                     # 放大倍率
+    weight_filename: RealESRGAN_x4plus.pth       # 权重文件名（存于 models/realesrgan/）
+    local_path: models/realesrgan/RealESRGAN_x4plus.pth  # 供 model_checker 使用
+    arch: RRDBNet                                # 网络架构
+    num_block: 23                                # RRDBNet dense block 数
+    display_group: 通用超分辨率                   # 前端分组标签
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
+    supported_params: {}
+    features: [upscale]
+
+  - id: RealESRGAN_x2plus
+    name: 2x 通用照片
+    provider: realesrgan
+    tags: [upscale]
+    description: 2 倍放大，速度更快，文件更小，放大幅度要求不高时优先选此｜模型 ~65 MB
+    recommended_for: 超分辨率（2倍放大）
+    requires_reference: false
+    size_mb: 65
+    badge: ""
+    scale: 2
+    weight_filename: RealESRGAN_x2plus.pth
+    local_path: models/realesrgan/RealESRGAN_x2plus.pth
+    arch: RRDBNet
+    num_block: 23
+    display_group: 通用超分辨率
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth
+    supported_params: {}
+    features: [upscale]
+
+  # ── 精细化增强（去噪/去模糊）──────────────────────────────────────────────
+
+  - id: realesr-general-x4v3
+    name: 4x 精细化增强·轻量（推荐）
+    provider: realesrgan
+    tags: [upscale]
+    description: 专为真实世界压缩/模糊图设计：同时去噪+去模糊+放大，效果优于 x4plus，体积仅 17 MB｜速度最快
+    recommended_for: 超分辨率（低质量/压缩/模糊图）
+    requires_reference: false
+    size_mb: 17
+    badge: 推荐
+    scale: 4
+    weight_filename: realesr-general-x4v3.pth
+    local_path: models/realesrgan/realesr-general-x4v3.pth
+    arch: SRVGGNetCompact                        # 轻量 VGG 风格
+    num_conv: 32                                 # SRVGGNetCompact conv 层数
+    display_group: 精细化增强（去噪/去模糊）        # 前端分组标签
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth
+    supported_params: {}
+    features: [upscale]
+
+  - id: RealESRNet_x4plus
+    name: 4x 自然细化（无 GAN）
+    provider: realesrgan
+    tags: [upscale]
+    description: 无 GAN 判别器，避免过度锐化伪影，色彩还原最自然；人像/风景/需要忠实还原的场景首选｜模型 ~65 MB
+    recommended_for: 超分辨率（人像/风景，色彩自然）
+    requires_reference: false
+    size_mb: 65
+    badge: ""
+    scale: 4
+    weight_filename: RealESRNet_x4plus.pth
+    local_path: models/realesrgan/RealESRNet_x4plus.pth
+    arch: RRDBNet
+    num_block: 23
+    display_group: 精细化增强（去噪/去模糊）
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth
+    supported_params: {}
+    features: [upscale]
+
+  # ── 动漫/插画 ────────────────────────────────────────────────────────────
+
+  - id: RealESRGAN_x4plus_anime_6B
+    name: 4x 动漫/插画（静图）
+    provider: realesrgan
+    tags: [upscale]
+    description: 针对动漫线稿/赛璐璐风格插画优化，线条锐利、无晕染｜模型 ~18 MB
+    recommended_for: 超分辨率（动漫静图/插画）
+    requires_reference: false
+    size_mb: 18
+    badge: 动漫
+    scale: 4
+    weight_filename: RealESRGAN_x4plus_anime_6B.pth
+    local_path: models/realesrgan/RealESRGAN_x4plus_anime_6B.pth
+    arch: RRDBNet
+    num_block: 6                                 # anime 小模型，仅 6 个 block
+    display_group: 动漫/插画                      # 前端分组标签
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
+    supported_params: {}
+    features: [upscale]
+
+  - id: realesr-animevideov3
+    name: 4x 动漫视频/帧序列
+    provider: realesrgan
+    tags: [upscale]
+    description: 动漫视频逐帧处理专用：更少闪烁、更好时间一致性；也可用于动漫截帧精细化｜模型 ~8 MB
+    recommended_for: 超分辨率（动漫视频帧）
+    requires_reference: false
+    size_mb: 8
+    badge: 动漫
+    scale: 4
+    weight_filename: realesr-animevideov3.pth
+    local_path: models/realesrgan/realesr-animevideov3.pth
+    arch: SRVGGNetCompact
+    num_conv: 16                                 # animevideo 更轻量，仅 16 conv
+    display_group: 动漫/插画
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth
+    supported_params: {}
+    features: [upscale]
+
+
+# ==============================================================================
+# 模式分组
+# ==============================================================================
+
+mode_groups:
+
+  - id: background_replace
+    name: 换背景
+    icon: image
+    description: 智能抠图后替换背景图
+    default_model: birefnet
+    needs_reference: true
+    reference_label: 新背景图
+    needs_roi: false
+    needs_prompt: false
+
+  - id: outfit_swap
+    name: 换装模拟
+    icon: shirt
+    description: 在指定区域替换服装纹理
+    default_model: powerpaint
+    needs_reference: true
+    reference_label: 目标服装图
+    needs_roi: false
+    needs_prompt: false
+
+  - id: face_swap
+    name: 换脸模拟
+    icon: user
+    description: 在人脸区域替换目标人脸（仅用于合法创作）
+    default_model: gfpgan
+    needs_reference: true
+    reference_label: 目标人脸图
+    needs_roi: false
+    needs_prompt: false
+
+  - id: virtual_tryon
+    name: 虚拟试穿
+    icon: sparkles
+    description: 将服装自然穿上人物照（AI 近似方案）
+    default_model: sd15
+    needs_reference: true
+    reference_label: 服装图
+    needs_roi: false
+    needs_prompt: false
+
+  - id: prompt_inpaint
+    name: 精准替换
+    icon: crosshair
+    description: 手动框选区域，输入文字描述，SD 1.5 按描述替换选定区域
+    default_model: powerpaint_prompt
+    needs_reference: false
+    needs_roi: true
+    needs_prompt: true
+    prompt_label: 替换描述
+    prompt_hint: "例：a red down jacket / 一件红色羽绒服"
+
+  - id: auto_segment_edit
+    name: 智能定位
+    icon: wand
+    description: 输入中文指令自动识别服装部位并换色/换风格，无需手动框选
+    default_model: auto_segment_hsv
+    needs_reference: false
+    needs_roi: false
+    needs_prompt: true
+    prompt_label: 编辑指令
+    prompt_hint: "例：将上衣换成黑色 / 把裤子改成牛仔风格"
+
+  - id: instruction_edit
+    name: 自由编辑
+    icon: message
+    description: 自然语言指令驱动全图语义编辑，无需参考图或框选区域
+    default_model: magicbrush
+    needs_reference: false
+    needs_roi: false
+    needs_prompt: true
+    prompt_label: 编辑指令
+    prompt_hint: "例：make the background a forest / 将背景换成夜晚城市"
+
+  - id: watermark_removal
+    name: 去水印
+    icon: eraser
+    description: AI 智能填充去除图片水印，支持快速本地模型与高质量扩散模型
+    default_model: wm_lama
+    needs_reference: false
+    needs_roi: false      # ROI 由前端水印检测框选提供，模式本身不强制要求
+    needs_prompt: false
+
+  - id: upscale
+    name: 超分辨率
+    icon: zoom-in
+    description: Real-ESRGAN 智能放大图像，支持 2x/4x，多种场景优化
+    default_model: RealESRGAN_x4plus
+    needs_reference: false
+    needs_roi: false
+    needs_prompt: false

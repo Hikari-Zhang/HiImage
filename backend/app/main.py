@@ -83,4 +83,4 @@ app.include_router(logs.router, prefix="/api", tags=["logs"])
 app.include_router(postprocess.router, prefix="/api", tags=["postprocess"])
 app.include_router(synthesis.router, prefix="/api", tags=["synthesis"])
 app.include_router(models_router_module.router, prefix="/api", tags=["models"])
-app.include_router(ws_router)
+app.include_router(ws_router, prefix="/api")  # → /api/ws/progress

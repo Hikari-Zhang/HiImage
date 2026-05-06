@@ -215,17 +215,30 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
 
     await progress_manager.send_progress(10, "正在初始化模型...")
 
+    loop = asyncio.get_event_loop()
+
+    def _make_progress_callback():
+        """创建线程安全的进度回调（子线程 → 主线程事件循环）"""
+        def callback(percent: int, message: str):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    progress_manager.send_progress(percent, message),
+                    loop
+                )
+            except Exception as e:
+                log_manager.error(f"进度上报失败: {e}", source="inpaint")
+        return callback
+
     def _process():
         inpainter = Inpainter(
             model_name=req.model,
             device=req.device,
             dilation=req.dilation,
             disable_nsfw=req.disable_nsfw,
-            progress_callback=lambda percent, message: progress_manager._queue_progress(percent, message),
+            progress_callback=_make_progress_callback(),
         )
         return inpainter.remove_watermark_with_mask(image, mask)
 
-    loop = asyncio.get_event_loop()
     await progress_manager.send_progress(20, "正在处理...")
 
     try:

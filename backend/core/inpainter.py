@@ -133,6 +133,27 @@ class Inpainter:
         )
         self._cleanup_old_tmp()
 
+    def _cleanup_old_tmp(self, max_age_hours: int = 24):
+        """
+        清理 tmp/ 目录中超过 max_age_hours 小时的旧临时目录（iopaint_* 前缀）。
+        仅在初始化时调用一次，防止多次失败后残留目录堆积。
+        """
+        import time
+        if not os.path.exists(self._project_tmp):
+            return
+        now = time.time()
+        cutoff = now - max_age_hours * 3600
+        try:
+            for entry in os.scandir(self._project_tmp):
+                if entry.is_dir() and entry.name.startswith('iopaint_'):
+                    try:
+                        if entry.stat().st_mtime < cutoff:
+                            shutil.rmtree(entry.path, ignore_errors=True)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
     # ------------------------------------------------------------------
     # 公开接口
     # ------------------------------------------------------------------
