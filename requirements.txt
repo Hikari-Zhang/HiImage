@@ -1,0 +1,9 @@
+# ==============================================================
+# HiImage - Python dependencies
+# Install from project root:
+#   source venv/bin/activate
+#   pip install -r backend/requirements.txt
+#   python scripts/post_install.py
+# ==============================================================
+
+-r backend/requirements.txt

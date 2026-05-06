@@ -29,14 +29,14 @@ class InpaintStep:
     device: str = "mps"
     dilation: int = 10
     disable_nsfw: bool = False
-    iopaint_path: str = "iopaint"
+    iopaint_path: Optional[str] = None
 
 
 @dataclass
 class PostprocessStep:
     method: str = "none"       # none / poisson / gfpgan / lama_refine
     device: str = "mps"
-    iopaint_path: str = "iopaint"
+    iopaint_path: Optional[str] = None
     enabled: bool = True
 
 

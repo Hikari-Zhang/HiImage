@@ -18,6 +18,7 @@ from app.routers.inpaint import decode_image, encode_image
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.config import get
+from core.model_server import _detect_iopaint_path
 
 router = APIRouter()
 executor = ThreadPoolExecutor(max_workers=1)
@@ -70,7 +71,7 @@ async def run_synthesis(req: SynthesisRequest):
     )
     await progress_manager.send_progress(5, f"正在初始化 [{req.mode}] 处理...")
 
-    iopaint_path = get("inpaint.iopaint_path", "iopaint")
+    iopaint_path = get("inpaint.iopaint_path") or _detect_iopaint_path()
 
     def _process():
         from core.synthesizer import Synthesizer

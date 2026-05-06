@@ -10,8 +10,19 @@ import os
 import sys
 import uuid
 import shutil
+from pathlib import Path
 
 from core.model_server import is_diffusion_model, inpaint_via_server
+
+
+# 自动检测 iopaint 可执行文件的路径（从当前 Python 环境）
+def _detect_iopaint_path() -> str:
+    """从当前 Python 环境的 bin 目录查找 iopaint"""
+    python_dir = Path(sys.executable).parent
+    iopaint_path = python_dir / "iopaint"
+    if iopaint_path.exists():
+        return str(iopaint_path)
+    return "iopaint"  # fallback
 
 
 # 模型目录：按推荐优先级分组
@@ -82,7 +93,7 @@ class Inpainter:
         :param sd_seed: 随机种子
         """
         self.model_name = model_name
-        self.iopaint_path = iopaint_path or 'iopaint'
+        self.iopaint_path = iopaint_path or _detect_iopaint_path()
         self.device = device
         self.dilation = dilation
         self.disable_nsfw = disable_nsfw
@@ -216,8 +227,7 @@ class Inpainter:
             '--model', self.model_name,
             '--device', self.device,
         ]
-        if self.disable_nsfw:
-            cmd.append('--disable-nsfw')
+        # --disable-nsfw 已在 iopaint 1.6.0 中移除，不再传递
 
         print(f"执行命令: {' '.join(cmd)}")
 

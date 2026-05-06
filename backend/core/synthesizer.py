@@ -424,7 +424,7 @@ class Synthesizer:
         mode: str,
         model_id: str,
         device: str = "mps",
-        iopaint_path: str = "iopaint",
+        iopaint_path: Optional[str] = None,
         prompt: str = "",
     ):
         self.mode = mode

@@ -47,7 +47,7 @@ def fix_background(
     mask: np.ndarray,
     method: PostMethod = "poisson",
     device: str = "mps",
-    iopaint_path: str = "iopaint",
+    iopaint_path: Optional[str] = None,
 ) -> np.ndarray:
     """
     对 inpainting 结果做后处理修复。
@@ -217,7 +217,7 @@ def _lama_refine(
     inpainted_rgb: np.ndarray,
     mask: np.ndarray,
     device: str = "mps",
-    iopaint_path: str = "iopaint",
+    iopaint_path: Optional[str] = None,
 ) -> np.ndarray:
     """
     用 LaMa 对 inpainting 结果做二次精修：

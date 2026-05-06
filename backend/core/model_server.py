@@ -16,12 +16,22 @@ import urllib.request
 import urllib.error
 import json
 import sys
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import cv2
 
 import app.config as _cfg
+
+
+def _detect_iopaint_path() -> str:
+    """从当前 Python 环境的 bin 目录查找 iopaint"""
+    python_dir = Path(sys.executable).parent
+    iopaint_path = python_dir / "iopaint"
+    if iopaint_path.exists():
+        return str(iopaint_path)
+    return "iopaint"  # fallback
 
 # 哪些模型走 Server 模式（扩散模型，加载慢）
 _DIFFUSION_PREFIXES = ('runwayml/', 'Sanster/', 'diffusers/', 'Uminosachi/', 'redstonehero/', 'Fantasy-Studio/')
@@ -57,7 +67,7 @@ class _ModelServer:
         self._current_nsfw: Optional[bool] = None
         self._last_used: float = 0.0
         self._idle_timer: Optional[threading.Timer] = None
-        self._iopaint_path = 'iopaint'
+        self._iopaint_path = _detect_iopaint_path()
         self._log_lines: list = []   # 缓存子进程最近输出，供错误诊断
 
     # ------------------------------------------------------------------
