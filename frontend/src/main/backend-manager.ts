@@ -190,7 +190,26 @@ export class BackendManager {
       })
     }
 
-    // 第一步：SIGTERM 优雅终止，等待 5 秒
+    // 第一步：发送终止信号，等待优雅退出
+    // Windows 没有 SIGTERM，直接走 taskkill；macOS/Linux 先 SIGTERM 等 5 秒
+    if (process.platform === 'win32') {
+      // Windows：taskkill /T 杀掉整个进程树（包含 uvicorn workers + iopaint subprocesses）
+      await new Promise<void>((resolve) => {
+        const killer = spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { shell: true })
+        killer.on('close', () => resolve())
+        // 最多等 5 秒
+        setTimeout(resolve, 5000)
+      })
+      const exited = await waitForExit(2000)
+      if (exited) {
+        console.log('[BackendManager] Backend stopped (Windows taskkill)')
+      } else {
+        console.warn('[BackendManager] Backend may still be running after taskkill')
+      }
+      return
+    }
+
+    // macOS/Linux：先 SIGTERM 优雅终止，等待 5 秒
     try {
       proc.kill('SIGTERM')
     } catch {
@@ -204,35 +223,22 @@ export class BackendManager {
     }
 
     // 第二步：SIGKILL 强制终止整个进程组
-    console.log('[BackendManager] Process still running, force killing...')
+    // detached:true 保证 Python 是进程组组长，kill(-pid) 可以杀掉整个进程树
+    console.log('[BackendManager] Process still running, force killing process group...')
     try {
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { shell: true })
-      } else {
-        // detached:true 保证 Python 是进程组组长，-pid 可以杀掉整个进程树
-        try {
-          process.kill(-pid, 'SIGKILL')
-          console.log(`[BackendManager] Killed process group -${pid}`)
-        } catch (e) {
-          // 进程组不存在（可能已退出），降级直接 kill 主进程
-          console.warn(`[BackendManager] kill(-${pid}) failed, trying direct:`, e)
-          try { proc.kill('SIGKILL') } catch { /* 已退出 */ }
-        }
-      }
-    } catch (err) {
-      console.error('[BackendManager] Error force-killing backend:', err)
+      process.kill(-pid, 'SIGKILL')
+      console.log(`[BackendManager] Killed process group -${pid}`)
+    } catch (e) {
+      // 进程组不存在（可能已退出），降级直接 kill 主进程
+      console.warn(`[BackendManager] kill(-${pid}) failed, trying direct kill:`, e)
+      try { proc.kill('SIGKILL') } catch { /* 已退出 */ }
     }
 
     const exitedForced = await waitForExit(3000)
     if (exitedForced) {
       console.log('[BackendManager] Backend force-killed')
     } else {
-      // 最后兜底：直接用系统 kill -9 <pid>（不用进程组）
-      console.warn('[BackendManager] Still running after SIGKILL, trying direct kill...')
-      try {
-        process.kill(pid, 'SIGKILL')
-      } catch { /* 已退出 */ }
-      await waitForExit(2000)
+      console.warn('[BackendManager] Process still alive after SIGKILL, giving up')
     }
   }
 
