@@ -7,6 +7,7 @@ IOPaint Server 进程管理器（单例）
   - 切换模型或设备时立即重启
 """
 import os
+import signal
 import time
 import threading
 import subprocess
@@ -33,7 +34,8 @@ def _detect_iopaint_path() -> str:
         return str(iopaint_path)
     return "iopaint"  # fallback
 
-# 哪些模型走 Server 模式（扩散模型，加载慢）
+# 旧版前缀匹配列表：仅用于向后兼容（当直接传入 iopaint_model_id 且不在注册表中时）
+# 新模型请在 core/models.yaml 中添加 iopaint_mode: server，无需修改此处
 _DIFFUSION_PREFIXES = ('runwayml/', 'Sanster/', 'diffusers/', 'Uminosachi/', 'redstonehero/', 'Fantasy-Studio/')
 
 SERVER_HOST = '127.0.0.1'
@@ -48,9 +50,38 @@ def _port() -> int:
 def _startup_timeout() -> int:
     return int(_cfg.get('server.startup_timeout', 120))
 
+def _low_mem() -> bool:
+    return bool(_cfg.get('server.low_mem', True))
 
-def is_diffusion_model(model_name: str) -> bool:
-    return model_name.startswith(_DIFFUSION_PREFIXES)
+def _cpu_offload() -> bool:
+    return bool(_cfg.get('server.cpu_offload', False))
+
+def _cpu_textencoder() -> bool:
+    return bool(_cfg.get('server.cpu_textencoder', False))
+
+
+def is_diffusion_model(model_id: str) -> bool:
+    """
+    判断模型是否需要走 iopaint HTTP Server 保活模式（扩散模型）。
+
+    检查顺序：
+      1. 通过注册表 registry ID（如 "wm_anytext"）查找 iopaint_mode 字段
+      2. 通过 iopaint_model_id 反向查找（兼容直接传入 "Sanster/AnyText" 的旧代码）
+      3. 回退到前缀匹配（_DIFFUSION_PREFIXES，兼容注册表之外的场景）
+    """
+    try:
+        from core.model_registry import MODEL_BY_ID, MODELS
+        # 优先：按 registry ID 查找（如 "wm_anytext"）
+        if model_id in MODEL_BY_ID:
+            return MODEL_BY_ID[model_id].get("iopaint_mode") == "server"
+        # 次之：通过 iopaint_model_id 反向查找（兼容直接传入 "Sanster/AnyText" 的旧调用）
+        for m in MODELS:
+            if m.get("iopaint_model_id") == model_id:
+                return m.get("iopaint_mode") == "server"
+    except Exception:
+        pass
+    # 最终回退：前缀匹配（向后兼容，不在注册表中的模型）
+    return model_id.startswith(_DIFFUSION_PREFIXES)
 
 
 class _ModelServer:
@@ -124,6 +155,13 @@ class _ModelServer:
         ]
         if disable_nsfw:
             cmd.append('--disable-nsfw-checker')
+        # 显存优化参数（从 settings.json 读取，默认值偏向省显存）
+        if _low_mem():
+            cmd.append('--low-mem')
+        if _cpu_offload():
+            cmd.append('--cpu-offload')
+        if _cpu_textencoder():
+            cmd.append('--cpu-textencoder')
 
         # 继承当前环境变量，并注入 HuggingFace 凭据和镜像配置
         # PYTHONUNBUFFERED=1 禁用 Python 输出缓冲，确保下载进度实时显示
@@ -139,13 +177,16 @@ class _ModelServer:
 
         print(f"[ModelServer] 启动服务: {' '.join(cmd)}")
         self._log_lines = []   # 重置日志缓冲
-        self._proc = subprocess.Popen(
-            cmd,
+        popen_kwargs = dict(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=env,
             text=True,
         )
+        # macOS/Linux: 新进程组，便于 os.killpg 一次杀光
+        if hasattr(os, 'setsid'):
+            popen_kwargs['start_new_session'] = True
+        self._proc = subprocess.Popen(cmd, **popen_kwargs)
         self._current_model = model_name
         self._current_device = device
         self._current_nsfw = disable_nsfw
@@ -157,18 +198,27 @@ class _ModelServer:
         self._wait_ready()
 
     def _stop_unlocked(self):
-        """停止当前进程（已持锁）"""
+        """停止当前进程及其子进程（已持锁）"""
         if self._idle_timer is not None:
             self._idle_timer.cancel()
             self._idle_timer = None
 
         if self._proc is not None and self._proc.poll() is None:
-            print(f"[ModelServer] 停止服务 (model={self._current_model})")
+            pid = self._proc.pid
+            print(f"[ModelServer] 停止服务 (model={self._current_model}, pid={pid})")
+            # 先尝试 SIGTERM
             self._proc.terminate()
             try:
                 self._proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                self._proc.kill()
+                # SIGTERM 无效，用 SIGKILL 强杀进程组（macOS/Linux）
+                print(f"[ModelServer] SIGTERM 超时，发送 SIGKILL 到进程组 pgid={pid}")
+                try:
+                    os.killpg(os.getpgid(pid), 0)  # 检查进程组是否存在
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    # 进程组已不存在，直接 kill 子进程
+                    self._proc.kill()
                 self._proc.wait()
         self._proc = None
         self._current_model = None
