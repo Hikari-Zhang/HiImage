@@ -1,5 +1,5 @@
 """
-系统路由 - 健康检查、模型列表
+系统路由 - 健康检查、设备检测、模型列表
 """
 from fastapi import APIRouter
 
@@ -12,6 +12,54 @@ router = APIRouter()
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "version": "2.0.0"}
+
+
+@router.get("/devices")
+async def available_devices():
+    """检测当前环境中各计算设备的可用性"""
+    mps_available = False
+    cuda_available = False
+    cuda_count = 0
+    cuda_name = ""
+
+    try:
+        import torch
+        mps_available = bool(
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
+        cuda_available = bool(torch.cuda.is_available())
+        if cuda_available:
+            cuda_count = torch.cuda.device_count()
+            try:
+                cuda_name = torch.cuda.get_device_name(0)
+            except Exception:
+                cuda_name = "CUDA Device"
+    except ImportError:
+        pass
+
+    return {
+        "devices": [
+            {
+                "id": "mps",
+                "label": "MPS",
+                "desc": "Apple Silicon",
+                "available": mps_available,
+            },
+            {
+                "id": "cpu",
+                "label": "CPU",
+                "desc": "通用（较慢）",
+                "available": True,
+            },
+            {
+                "id": "cuda",
+                "label": "CUDA",
+                "desc": cuda_name or "NVIDIA GPU",
+                "available": cuda_available,
+                "device_count": cuda_count,
+            },
+        ]
+    }
 
 
 @router.get("/models/inpaint")

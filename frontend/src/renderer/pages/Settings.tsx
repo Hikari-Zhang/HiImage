@@ -5,6 +5,7 @@ import PageHeader from '../components/layout/PageHeader'
 import { showToast } from '../components/ui'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useBackendStore } from '../stores/useBackendStore'
+import { useBackendAPI } from '../hooks/useBackendAPI'
 
 type ConnectionMode = 'local' | 'remote'
 
@@ -27,6 +28,7 @@ export default function Settings() {
   const backendURL = useBackendStore((s) => s.backendURL)
   const setBackendURL = useBackendStore((s) => s.setBackendURL)
   const store = useSettingsStore()
+  const { getDevices } = useBackendAPI()
 
   // 本地 draft state — 用户编辑中但尚未保存的值
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>('local')
@@ -47,6 +49,12 @@ export default function Settings() {
   const [cpuOffload, setCpuOffload] = useState(store.cpuOffload)
   const [cpuTextencoder, setCpuTextencoder] = useState(store.cpuTextencoder)
   const [isSaving, setIsSaving] = useState(false)
+
+  // 设备可用性（从后端检测）
+  const [deviceAvailability, setDeviceAvailability] = useState<
+    Record<string, { available: boolean; desc: string }>
+  >({})
+  const [devicesLoading, setDevicesLoading] = useState(true)
 
   // 初始化：从 Electron 主进程读取连接配置，从后端读取应用设置
   useEffect(() => {
@@ -74,13 +82,24 @@ export default function Settings() {
       setCpuOffload(s.cpuOffload)
       setCpuTextencoder(s.cpuTextencoder)
     })
-  }, [backendURL])
 
-  const devices = [
-    { id: 'mps', label: 'MPS', desc: 'Apple Silicon' },
-    { id: 'cpu', label: 'CPU', desc: 'Universal' },
-    { id: 'cuda', label: 'CUDA', desc: 'NVIDIA GPU' },
-  ]
+    // 检测计算设备可用性
+    setDevicesLoading(true)
+    getDevices()
+      .then((data) => {
+        if (data?.devices) {
+          const map: Record<string, { available: boolean; desc: string }> = {}
+          for (const d of data.devices) {
+            map[d.id] = { available: d.available, desc: d.desc }
+          }
+          setDeviceAvailability(map)
+        }
+      })
+      .catch(() => {
+        // 后端不可达时不阻断页面，所有设备视为可用
+      })
+      .finally(() => setDevicesLoading(false))
+  }, [backendURL])
 
   const handleTestConnection = async () => {
     setConnectionStatus('testing')
@@ -315,23 +334,48 @@ export default function Settings() {
         <section className="bg-bg-tertiary rounded-lg p-4">
           <h3 className="text-sm font-medium mb-3">计算设备</h3>
           <div className="grid grid-cols-3 gap-3">
-            {devices.map((d) => (
-              <button
-                key={d.id}
-                onClick={() => setDevice(d.id)}
-                className={clsx(
-                  'p-3 rounded-md border text-center transition-all',
-                  device === d.id
-                    ? 'bg-bg-active border-border-focus'
-                    : 'bg-bg-primary border-border-subtle hover:border-fg-secondary'
-                )}
-              >
-                <div className={clsx('text-xs font-medium', device === d.id ? 'text-fg-accent' : 'text-fg-primary')}>
-                  {d.label}
-                </div>
-                <div className="text-[11px] text-fg-secondary mt-0.5">{d.desc}</div>
-              </button>
-            ))}
+            {devicesLoading
+              ? Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="p-3 rounded-md border border-border-subtle bg-bg-primary animate-pulse h-[60px]" />
+                ))
+              : [
+                  { id: 'mps', label: 'MPS', fallbackDesc: 'Apple Silicon' },
+                  { id: 'cpu', label: 'CPU', fallbackDesc: '通用（较慢）' },
+                  { id: 'cuda', label: 'CUDA', fallbackDesc: 'NVIDIA GPU' },
+                ].map((d) => {
+                  const info = deviceAvailability[d.id]
+                  // 如果后端未响应（info 为 undefined），不禁用（降级）
+                  const isAvailable = info === undefined ? true : info.available
+                  const desc = info?.desc || d.fallbackDesc
+                  const isSelected = device === d.id
+                  return (
+                    <button
+                      key={d.id}
+                      onClick={() => isAvailable && setDevice(d.id)}
+                      disabled={!isAvailable}
+                      title={!isAvailable ? `${d.label} 在当前环境不可用` : undefined}
+                      className={clsx(
+                        'p-3 rounded-md border text-center transition-all',
+                        isSelected && isAvailable
+                          ? 'bg-bg-active border-border-focus'
+                          : isAvailable
+                            ? 'bg-bg-primary border-border-subtle hover:border-fg-secondary'
+                            : 'bg-bg-primary border-border-subtle opacity-40 cursor-not-allowed'
+                      )}
+                    >
+                      <div className={clsx(
+                        'text-xs font-medium',
+                        isSelected && isAvailable ? 'text-fg-accent' : isAvailable ? 'text-fg-primary' : 'text-fg-secondary'
+                      )}>
+                        {d.label}
+                      </div>
+                      <div className="text-[11px] text-fg-secondary mt-0.5 leading-tight">
+                        {isAvailable ? desc : '不支持'}
+                      </div>
+                    </button>
+                  )
+                })
+            }
           </div>
         </section>
 

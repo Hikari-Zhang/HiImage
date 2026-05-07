@@ -187,9 +187,21 @@ export function useBackendAPI() {
     return res.json() as Promise<{ image: string; width: number; height: number }>
   }
 
+  /**
+   * 获取计算设备可用性
+   */
+  const getDevices = async () => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/devices`)
+    if (!res.ok) return null
+    return res.json() as Promise<{
+      devices: { id: string; label: string; desc: string; available: boolean; device_count?: number }[]
+    }>
+  }
+
   return {
     detectWatermark, inpaint, upscale, runPipeline,
     getPostprocessMethods, getInpaintModels, getUpscaleModels,
-    getSynthesisModes, getSynthesisModels, runSynthesis,
+    getSynthesisModes, getSynthesisModels, runSynthesis, getDevices,
   }
 }
