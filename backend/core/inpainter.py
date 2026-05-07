@@ -21,12 +21,14 @@ from core.model_server import is_diffusion_model, inpaint_via_server
 
 # 自动检测 iopaint 可执行文件的路径（从当前 Python 环境）
 def _detect_iopaint_path() -> str:
-    """从当前 Python 环境的 bin 目录查找 iopaint"""
+    """从当前 Python 环境的 Scripts/bin 目录查找 iopaint"""
     python_dir = Path(sys.executable).parent
-    iopaint_path = python_dir / "iopaint"
-    if iopaint_path.exists():
-        return str(iopaint_path)
-    return "iopaint"  # fallback
+    # Windows: Scripts\iopaint.exe；macOS/Linux: bin/iopaint
+    candidates = [python_dir / "iopaint.exe", python_dir / "iopaint"]
+    for p in candidates:
+        if p.exists():
+            return str(p)
+    return "iopaint"  # fallback: 依赖 PATH
 
 
 def _build_model_groups() -> list:
