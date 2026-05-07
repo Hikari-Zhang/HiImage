@@ -1,11 +1,11 @@
 # HiImage
 
-AI 驱动的图像处理桌面工具，基于 Electron + FastAPI 构建。
+AI 驱动的图像处理桌面工具，基于 Electron + FastAPI 构建。所有模型配置统一在 `backend/core/models.yaml` 维护，无需修改代码即可新增模型。
 
-- **去水印** — 15+ 模型（LaMa / SD / PowerPaint / AnyText 等），支持 ROI 框选和自动检测
-- **超分辨率** — Real-ESRGAN 2x / 4x 放大，通用照片和动漫专属模型
-- **智能合成** — 7 种合成模式：换背景 / 换装 / 换脸 / 虚拟试穿 / 指令编辑
-- **内存优化** — 低内存模式、CPU 显存卸载、Text Encoder 分离，可在设置页配置
+- **去水印** — 快速模型（LaMa 等，无需下载）+ 扩散模型（AnyText / SD / PowerPaint 等，首次自动下载）
+- **超分辨率** — Real-ESRGAN 2x / 4x 放大，通用照片、精细化增强、动漫专属三类模型
+- **智能合成** — 7 种合成模式：换背景 / 换装 / 换脸 / 虚拟试穿 / 精准替换 / 智能定位 / 自由编辑
+- **内存优化** — 低内存模式、CPU 显存卸载、Text Encoder CPU 运行，可在设置页配置
 
 ---
 
@@ -91,14 +91,8 @@ docker compose down       # 停止服务
 4. 点击「开始处理」，实时查看进度
 5. 对比原图与结果，保存为 PNG/JPG
 
-**模型选择建议：**
-
-| 场景 | 推荐模型 |
-|------|----------|
-| 快速处理 | LaMa、MiGAN、ZITS（CPU 可用） |
-| 文字/字幕水印 | AnyText |
-| 复杂渐变背景 | SD Inpainting、SDXL Inpainting |
-| 最强通用效果 | PowerPaint V1 |
+**快速模型（本地推理，无需下载）**：LaMa（推荐通用）、MiGAN（规则纹理）、ZITS（边缘清晰）、FCF（背景简单）、MAT（精细场景）、LDM（均衡）、Manga（漫画/线稿）、CV2（极速无GPU）
+**扩散模型（首次使用自动下载，常驻内存保活）**：AnyText（文字水印专用）、PowerPaint V1（通用最强）、SD 1.5 Inpainting（复杂渐变背景）、Realistic Vision（写实照片）、DreamShaper（艺术插画）、Anything V4（动漫/CG）、SDXL Inpainting（2K+高分辨率）
 
 ### 超分辨率
 
@@ -106,6 +100,17 @@ docker compose down       # 停止服务
 2. 选择放大倍率（2x / 4x）和 Real-ESRGAN 模型
 3. 点击「开始处理」
 4. 预览对比结果并保存
+
+**模型选择建议：**
+
+| 类别 | 推荐模型 | 适用场景 |
+|------|----------|----------|
+| 通用超分辨率 | RealESRGAN_x4plus | 通用照片（推荐） |
+| 通用超分辨率 | RealESRGAN_x2plus | 2倍放大，速度更快 |
+| 精细化增强 | realesr-general-x4v3（推荐） | 去噪+去模糊+放大，体积小(17MB) |
+| 精细化增强 | RealESRNet_x4plus | 无GAN锐化，色彩还原自然 |
+| 动漫/插画 | RealESRGAN_x4plus_anime_6B（推荐） | 线条锐利，体积小(18MB) |
+| 动漫/插画 | realesr-animevideo | 视频帧专用，闪烁少(8MB) |
 
 ### 智能合成
 
