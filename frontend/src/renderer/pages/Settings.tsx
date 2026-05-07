@@ -52,7 +52,7 @@ export default function Settings() {
 
   // 设备可用性（从后端检测）
   const [deviceAvailability, setDeviceAvailability] = useState<
-    Record<string, { available: boolean; desc: string }>
+    Record<string, { available: boolean; desc: string; reason?: string }>
   >({})
   const [devicesLoading, setDevicesLoading] = useState(true)
 
@@ -90,7 +90,7 @@ export default function Settings() {
         if (data?.devices) {
           const map: Record<string, { available: boolean; desc: string }> = {}
           for (const d of data.devices) {
-            map[d.id] = { available: d.available, desc: d.desc }
+            map[d.id] = { available: d.available, desc: d.desc, reason: d.reason }
           }
           setDeviceAvailability(map)
         }
@@ -344,16 +344,16 @@ export default function Settings() {
                   { id: 'cuda', label: 'CUDA', fallbackDesc: 'NVIDIA GPU' },
                 ].map((d) => {
                   const info = deviceAvailability[d.id]
-                  // 如果后端未响应（info 为 undefined），不禁用（降级）
                   const isAvailable = info === undefined ? true : info.available
                   const desc = info?.desc || d.fallbackDesc
+                  const reason = info?.reason
                   const isSelected = device === d.id
                   return (
                     <button
                       key={d.id}
                       onClick={() => isAvailable && setDevice(d.id)}
                       disabled={!isAvailable}
-                      title={!isAvailable ? `${d.label} 在当前环境不可用` : undefined}
+                      title={!isAvailable && reason ? reason : undefined}
                       className={clsx(
                         'p-3 rounded-md border text-center transition-all',
                         isSelected && isAvailable
@@ -370,13 +370,25 @@ export default function Settings() {
                         {d.label}
                       </div>
                       <div className="text-[11px] text-fg-secondary mt-0.5 leading-tight">
-                        {isAvailable ? desc : '不支持'}
+                        {isAvailable ? desc : '不可用'}
                       </div>
                     </button>
                   )
                 })
             }
           </div>
+          {/* 不可用设备的诊断说明 */}
+          {!devicesLoading && Object.entries(deviceAvailability)
+            .filter(([, info]) => !info.available && info.reason)
+            .map(([id, info]) => (
+              <div key={id} className="mt-2 bg-bg-primary border border-border-subtle rounded p-2.5">
+                <p className="text-[11px] text-fg-secondary leading-relaxed">
+                  <strong className="text-fg-primary">{id.toUpperCase()} 不可用：</strong>
+                  {info.reason}
+                </p>
+              </div>
+            ))
+          }
         </section>
 
         {/* Server Config */}

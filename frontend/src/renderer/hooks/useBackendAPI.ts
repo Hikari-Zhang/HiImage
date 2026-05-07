@@ -195,7 +195,7 @@ export function useBackendAPI() {
     const res = await fetch(`${url}/api/devices`)
     if (!res.ok) return null
     return res.json() as Promise<{
-      devices: { id: string; label: string; desc: string; available: boolean; device_count?: number }[]
+      devices: { id: string; label: string; desc: string; available: boolean; reason?: string; device_count?: number }[]
     }>
   }
 
