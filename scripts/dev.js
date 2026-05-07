@@ -46,12 +46,120 @@ function runSync(cmd, args, opts) {
   return execSync(cmd + ' ' + args.join(' '), { ...opts, stdio: 'inherit', shell: true });
 }
 
+/**
+ * 检测当前平台应该安装哪个版本的 PyTorch。
+ * 返回 { indexUrl, torchSpec, label }
+ *   indexUrl  : pip --index-url 参数，null 表示用默认源（macOS）
+ *   torchSpec : pip install 的 torch 包名，如 "torch==2.7.0" 或 "torch"
+ *   cuTag     : 期望版本字符串中包含的标签，如 "cu128"、"cpu"，null 表示不检查
+ *   label     : 供日志显示的描述
+ */
+function detectTorchConfig() {
+  // macOS → 标准 pip（Apple Silicon 走 MPS，Intel Mac 走 CPU，torch 自动处理）
+  if (process.platform === 'darwin') {
+    const arch = process.arch === 'arm64' ? 'Apple Silicon (MPS)' : 'Intel (CPU)';
+    return { indexUrl: null, torchSpec: 'torch', cuTag: null, label: `macOS ${arch}` };
+  }
+
+  // Windows / Linux：尝试用 nvidia-smi 检测 CUDA 版本
+  try {
+    const out = execSync('nvidia-smi', { stdio: 'pipe', encoding: 'utf8' });
+    const match = out.match(/CUDA Version:\s*([\d.]+)/);
+    if (match) {
+      const cuda = parseFloat(match[1]);
+      log(`   nvidia-smi detected CUDA ${match[1]}`);
+
+      if (cuda >= 12.8) {
+        // Blackwell (RTX 50 系) 需要 cu128 + torch 2.7.0+
+        return {
+          indexUrl: 'https://download.pytorch.org/whl/cu128',
+          torchSpec: 'torch==2.7.0',
+          cuTag: 'cu128',
+          label: `CUDA ${match[1]} → cu128 (RTX 50系 / Blackwell)`,
+        };
+      } else if (cuda >= 12.0) {
+        return {
+          indexUrl: 'https://download.pytorch.org/whl/cu124',
+          torchSpec: 'torch',
+          cuTag: 'cu124',
+          label: `CUDA ${match[1]} → cu124`,
+        };
+      } else if (cuda >= 11.8) {
+        return {
+          indexUrl: 'https://download.pytorch.org/whl/cu118',
+          torchSpec: 'torch',
+          cuTag: 'cu118',
+          label: `CUDA ${match[1]} → cu118`,
+        };
+      }
+    }
+  } catch {
+    // nvidia-smi 不存在或执行失败 → 没有 NVIDIA GPU
+  }
+
+  // 没有检测到 GPU → CPU only
+  return {
+    indexUrl: 'https://download.pytorch.org/whl/cpu',
+    torchSpec: 'torch',
+    cuTag: 'cpu',
+    label: 'CPU only (no GPU detected)',
+  };
+}
+
+/**
+ * 检查 venv 中已安装的 torch 是否符合目标平台。
+ * 返回 true 表示已正确安装，无需重装；false 表示需要安装/重装。
+ */
+function isTorchCorrect(venvPython, config) {
+  try {
+    const version = execSync(
+      `"${venvPython}" -c "import torch; print(torch.__version__)"`,
+      { stdio: 'pipe', encoding: 'utf8' }
+    ).trim();
+
+    if (!config.cuTag) {
+      // macOS：只要能 import 就行
+      log(`   torch already installed: ${version}`);
+      return true;
+    }
+
+    if (version.includes(`+${config.cuTag}`)) {
+      log(`   torch already correct: ${version}`);
+      return true;
+    }
+
+    log(`   torch version mismatch: installed=${version}, need +${config.cuTag}`);
+    return false;
+  } catch {
+    log('   torch not installed in venv');
+    return false;
+  }
+}
+
+/**
+ * 安装适合当前平台的 PyTorch。
+ */
+function installTorch(pip, config) {
+  const args = [
+    'install',
+    config.torchSpec,
+    'torchvision',
+    'torchaudio',
+    '--force-reinstall',
+  ];
+  if (config.indexUrl) {
+    args.push('--index-url', config.indexUrl);
+  }
+  log(`   pip ${args.join(' ')}`);
+  runSync(pip, args);
+}
+
 async function main() {
   log('🚀 Starting HiImage development mode...');
   log('📁 Project root: ' + ROOT);
 
   // --- Python 检测 ---
-  log('🐍 Detecting Python...');
+  log('\n🐍 Detecting Python...');
   const python = findPython();
   if (!python) {
     log('❌ Python not found! Install Python 3.10+ and add to PATH.');
@@ -65,22 +173,38 @@ async function main() {
   const venvPython = process.platform === 'win32'
     ? path.join(venvPath, 'Scripts', 'python.exe')
     : path.join(venvPath, 'bin', 'python');
-
-  if (!fs.existsSync(venvPath)) {
-    log('  Creating virtual environment...');
-    runSync(python, ['-m', 'venv', venvPath]);
-  }
-
-  // --- 安装后端依赖 ---
-  log('  Installing backend dependencies...');
   const pip = process.platform === 'win32'
     ? path.join(venvPath, 'Scripts', 'pip.exe')
     : path.join(venvPath, 'bin', 'pip');
+
+  if (!fs.existsSync(venvPath)) {
+    log('\n📦 Creating virtual environment...');
+    runSync(python, ['-m', 'venv', venvPath]);
+  }
+
+  // --- 检测 GPU 环境并安装对应 PyTorch ---
+  log('\n🔍 Detecting GPU environment...');
+  const torchConfig = detectTorchConfig();
+  log(`   Target: ${torchConfig.label}`);
+
+  if (isTorchCorrect(venvPython, torchConfig)) {
+    log('   ✅ PyTorch already up-to-date, skipping.');
+  } else {
+    log(`\n📦 Installing PyTorch [${torchConfig.label}]...`);
+    installTorch(pip, torchConfig);
+  }
+
+  // --- 安装后端依赖 ---
+  log('\n📦 Installing backend dependencies...');
   const reqFile = path.join(ROOT, 'backend', 'requirements.txt');
   runSync(pip, ['install', '-r', reqFile]);
 
+  // --- post-install 补丁 ---
+  log('\n🔧 Applying post-install patches...');
+  runSync(venvPython, [path.join(ROOT, 'scripts', 'post_install.py')]);
+
   // --- 启动后端 ---
-  log('⚡ Starting Backend (FastAPI on port 8787)...');
+  log('\n⚡ Starting Backend (FastAPI on port 8787)...');
   const uvicorn = process.platform === 'win32'
     ? [path.join(venvPath, 'Scripts', 'python.exe'), '-m', 'uvicorn']
     : [path.join(venvPath, 'bin', 'python'), '-m', 'uvicorn'];
@@ -112,7 +236,7 @@ async function main() {
   }
 
   // --- 启动前端 ---
-  log('🖥️  Starting Frontend...');
+  log('\n🖥️  Starting Frontend...');
   // 通知 Electron 后端已由 dev.js 管理，不要重复启动
   const frontendEnv = { ...process.env, HIMAGE_BACKEND_MANAGED: '1' };
   const frontend = spawn('npm', ['run', 'dev'], {

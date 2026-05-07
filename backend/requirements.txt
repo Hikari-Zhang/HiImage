@@ -1,15 +1,38 @@
 # ==============================================================
 # HiImage Backend - Python Dependencies
 #
-# For new machines (100% reproducible), use requirements-locked.txt:
-#   source venv/bin/activate
-#   pip install -r backend/requirements-locked.txt
+# ⚠️  STEP 1: Install PyTorch for your platform FIRST (before this file):
+#
+#   Windows / Linux — NVIDIA GPU (RTX 50系 / CUDA 12.8):
+#     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+#
+#   Windows / Linux — NVIDIA GPU (RTX 40系 及更早 / CUDA 12.4):
+#     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+#
+#   macOS (Apple Silicon, MPS):
+#     pip install torch torchvision torchaudio
+#
+#   CPU only:
+#     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+#
+# STEP 2: Install backend dependencies:
+#   pip install -r backend/requirements.txt
+#
+# STEP 3: Apply post-install patches:
 #   python scripts/post_install.py
 #
-# For development (human-maintainable), use this file:
-#   pip install -r backend/requirements.txt
-#   python scripts/post_install.py
+# For 100% reproducible installs, use platform-specific locked files:
+#   macOS ARM64 (MPS):      pip install -r backend/requirements-locked-macos.txt
+#   Windows/Linux CUDA 12.4: pip install -r backend/requirements-locked-cuda124.txt
 # ==============================================================
+
+# ---- PyTorch (platform-specific, must be installed BEFORE this file — see above) ----
+# Minimum versions; actual version depends on your platform/CUDA:
+#   macOS MPS: torch>=2.1.0 (standard pip install)
+#   CUDA 12.4: torch>=2.1.0+cu124
+#   CUDA 12.8: torch>=2.7.0+cu128  (required for RTX 50系 / Blackwell)
+torch>=2.1.0
+torchvision>=0.16.0
 
 # ---- FastAPI stack (must match iopaint 1.6.0 deps) ----
 # DO NOT pin websockets>=12.0 — gradio-client 0.12.0 requires websockets<12.0
@@ -19,9 +42,14 @@ pydantic>=2.5.2
 python-multipart>=0.0.9
 
 # ---- Image processing ----
+# numpy: gradio 4.21.0 声明 ~=1.0，但 numpy 2.x 实际兼容，pip 冲突警告可忽略
 numpy>=1.26.0
 opencv-python>=4.10.0
-Pillow==9.5.0
+# Pillow: iopaint 1.6.0 声明 ==9.5.0，gradio 4.21.0 声明 <11.0，
+#         但 9.5–12.x 实际均可正常运行。
+#         新版 torch (2.4+) 在 Windows 会将 Pillow 升至 12+，此处放宽以允许。
+#         pip 冲突警告可忽略（iopaint/gradio 功能不受影响）。
+Pillow>=9.5.0
 PyYAML>=6.0          # 运行时读取 core/models.yaml（已随 transformers/diffusers 安装）
 
 # ---- AI models (pinned to verified versions) ----

@@ -1,7 +1,9 @@
 # ==============================================================
-# HiImage Backend - Fully Pinned Requirements
+# HiImage Backend - Fully Pinned Requirements (macOS ARM64 / MPS)
 #
-# Generated from a working venv on macOS ARM64 / Python 3.9
+# Platform: macOS ARM64 (Apple Silicon), Python 3.9
+# Device:   Apple MPS
+#
 # Install:
 #   source venv/bin/activate
 #   pip install -r backend/requirements-locked.txt
@@ -9,6 +11,8 @@
 #
 # NOTE: After installation, run post_install.py to patch basicsr
 #       for torchvision >= 0.16 compatibility.
+#
+# For other platforms, see requirements.txt for torch install instructions.
 # ==============================================================
 
 IOPaint==1.6.0

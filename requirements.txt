@@ -1,9 +1,10 @@
 # ==============================================================
 # HiImage - Python dependencies
+#
 # Install from project root:
-#   source venv/bin/activate
-#   pip install -r backend/requirements.txt
-#   python scripts/post_install.py
+#   Step 1: Install PyTorch for your platform (see backend/requirements.txt)
+#   Step 2: pip install -r backend/requirements.txt
+#   Step 3: python scripts/post_install.py
 # ==============================================================
 
 -r backend/requirements.txt
