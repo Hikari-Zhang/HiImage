@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from fastapi.responses import StreamingResponse
 
 from core.model_checker import ModelChecker
 from core.model_registry import MODELS, MODE_GROUPS
+
+logger = logging.getLogger("models")
 
 router = APIRouter(prefix="/models", tags=["models"])
 
@@ -154,6 +157,7 @@ async def _download_generator(request: Request):
         if not (m.get("provider") == "IOPaint" and m.get("iopaint_mode") == "cli")
     ]
 
+    logger.info(f"[一键下载] 开始：共 {len(downloadable)} 个可下载模型")
     yield _sse("start", {"total": len(downloadable), "message": f"共 {len(downloadable)} 个可下载模型，正在检测..."})
 
     ok_count = 0
@@ -174,6 +178,7 @@ async def _download_generator(request: Request):
 
         if result.status == "ok":
             skip_count += 1
+            logger.debug(f"[一键下载] 跳过 {name}（已存在）")
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
                 "status": "skipped", "message": f"已存在，跳过 ({result.message})"
@@ -183,6 +188,7 @@ async def _download_generator(request: Request):
         # 开始下载 — 通过 asyncio.Queue 从工作线程接收进度
         progress_queue: asyncio.Queue = asyncio.Queue()
 
+        logger.info(f"[一键下载] 开始下载：{name} ({idx + 1}/{len(downloadable)})")
         yield _sse("model", {
             "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
             "status": "downloading", "message": "准备下载...",
@@ -250,6 +256,7 @@ async def _download_generator(request: Request):
                 raise exc
 
             ok_count += 1
+            logger.info(f"[一键下载] 完成：{name}")
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
                 "status": "done", "message": "下载完成",
@@ -258,17 +265,23 @@ async def _download_generator(request: Request):
 
         except Exception as e:
             fail_count += 1
+            logger.error(f"[一键下载] 失败：{name} — {e}", exc_info=True)
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
                 "status": "error", "message": f"下载失败: {str(e)[:200]}",
                 "speed": "", "downloaded": "", "total_size": "",
             })
 
+    summary_msg = f"完成：{ok_count} 个下载成功，{skip_count} 个已跳过，{fail_count} 个失败"
+    if fail_count > 0:
+        logger.warning(f"[一键下载] {summary_msg}")
+    else:
+        logger.info(f"[一键下载] {summary_msg}")
     yield _sse("finish", {
         "ok": ok_count,
         "skipped": skip_count,
         "failed": fail_count,
-        "message": f"完成：{ok_count} 个下载成功，{skip_count} 个已跳过，{fail_count} 个失败"
+        "message": summary_msg
     })
 
 
@@ -563,11 +576,13 @@ async def _download_single_generator(request: Request, model_id: str):
     name = cfg.get("name", model_id)
     provider = cfg.get("provider", "")
 
+    logger.info(f"[单模型下载] 开始：{name} (id={model_id})")
     yield _sse("start", {"total": 1, "message": f"准备下载 {name}..."})
 
     # 检测当前状态
     result = await loop.run_in_executor(None, checker.check_model, model_id)
     if result.status == "ok":
+        logger.debug(f"[单模型下载] 跳过 {name}（已存在）")
         yield _sse("model", {
             "id": model_id, "name": name, "index": 1, "total": 1,
             "status": "skipped", "message": f"已存在，跳过 ({result.message})"
@@ -635,9 +650,11 @@ async def _download_single_generator(request: Request, model_id: str):
             "status": "done", "message": "下载完成",
             "speed": "", "downloaded": "", "total_size": "",
         })
+        logger.info(f"[单模型下载] 完成：{name}")
         yield _sse("finish", {"ok": 1, "skipped": 0, "failed": 0, "message": f"{name} 下载完成"})
 
     except Exception as e:
+        logger.error(f"[单模型下载] 失败：{name} — {e}", exc_info=True)
         yield _sse("model", {
             "id": model_id, "name": name, "index": 1, "total": 1,
             "status": "error", "message": f"下载失败: {str(e)[:200]}",
@@ -750,15 +767,18 @@ async def delete_model_files(model_id: str):
                 else:
                     not_found.append(f"HF cache dir 不存在: {hub_dir}")
             except Exception as e:
+                logger.error(f"[删除模型] 扫描 HF 缓存失败：{cfg.get('name', model_id)} — {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=f"扫描 HF 缓存失败: {e}")
 
     if not deleted and not_found:
+        logger.warning(f"[删除模型] 未找到可删除的文件：{model_id}")
         return {
             "ok": False,
             "message": f"未找到可删除的文件",
             "not_found": not_found,
         }
 
+    logger.info(f"[删除模型] {cfg.get('name', model_id)}：已删除 {len(deleted)} 个文件/目录")
     return {
         "ok": True,
         "message": f"已删除 {len(deleted)} 个文件/目录",
