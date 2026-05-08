@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell, ipcMain, dialog } from 'electron'
 import { join, extname } from 'path'
-import { homedir } from 'os'
+import { homedir, platform } from 'os'
 import { mkdir, writeFile, readFile } from 'fs/promises'
 import { BackendManager } from './backend-manager'
 
@@ -23,6 +23,14 @@ const backendManager = new BackendManager()
 
 function createWindow(): void {
   const isMac = process.platform === 'darwin'
+  const isWin = process.platform === 'win32'
+
+  // 图标路径：打包后用 process.resourcesPath，开发时用相对于项目根的路径
+  const iconName = isWin ? 'icon.ico' : isMac ? 'icon.icns' : 'icon-512.png'
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'icons', iconName)
+    : join(__dirname, '../../../../assets/icons', iconName)
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -30,6 +38,7 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     backgroundColor: '#1e1e1e',
+    icon: iconPath,
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     ...(isMac && { trafficLightPosition: { x: 12, y: 12 } }),
     webPreferences: {

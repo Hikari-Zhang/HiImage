@@ -40,6 +40,7 @@
   "build": {
     "appId": "com.hikari.hiimage",
     "productName": "HiImage",
+    "icon": "../assets/icons/icon.png",
     "mac": {
       "target": [
         "dmg"
@@ -47,9 +48,20 @@
       "arch": [
         "arm64"
       ],
-      "category": "public.app-category.graphics-design"
+      "category": "public.app-category.graphics-design",
+      "icon": "../assets/icons/icon.icns"
+    },
+    "win": {
+      "icon": "../assets/icons/icon.ico"
+    },
+    "linux": {
+      "icon": "../assets/icons/icon-512.png"
     },
     "extraResources": [
+      {
+        "from": "../assets/icons",
+        "to": "icons"
+      },
       {
         "from": "../backend/dist/hiimage-backend",
         "to": "backend"
