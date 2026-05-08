@@ -6,8 +6,10 @@ import { showToast } from '../components/ui'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
+import ModelManager from './ModelManager'
 
 type ConnectionMode = 'local' | 'remote'
+type SettingsTab = 'general' | 'models'
 
 // 默认值（用于「恢复默认」）
 const DEFAULTS = {
@@ -17,6 +19,7 @@ const DEFAULTS = {
   startupTimeout: 1800,
   hfEndpoint: 'https://huggingface.co',
   hfToken: '',
+  githubMirror: '',
   defaultDilation: 10,
   disableNsfw: true,
   lowMem: true,
@@ -29,6 +32,8 @@ export default function Settings() {
   const setBackendURL = useBackendStore((s) => s.setBackendURL)
   const store = useSettingsStore()
   const { getDevices } = useBackendAPI()
+
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general')
 
   // 本地 draft state — 用户编辑中但尚未保存的值
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>('local')
@@ -43,6 +48,7 @@ export default function Settings() {
   const [startupTimeout, setStartupTimeout] = useState(String(store.startupTimeout))
   const [hfEndpoint, setHfEndpoint] = useState(store.hfEndpoint)
   const [hfToken, setHfToken] = useState(store.hfToken)
+  const [githubMirror, setGithubMirror] = useState(store.githubMirror)
   const [dilation, setDilation] = useState(String(store.defaultDilation))
   const [disableNsfw, setDisableNsfw] = useState(store.disableNsfw)
   const [lowMem, setLowMem] = useState(store.lowMem)
@@ -76,6 +82,7 @@ export default function Settings() {
       setStartupTimeout(String(s.startupTimeout))
       setHfEndpoint(s.hfEndpoint)
       setHfToken(s.hfToken)
+      setGithubMirror(s.githubMirror)
       setDilation(String(s.defaultDilation))
       setDisableNsfw(s.disableNsfw)
       setLowMem(s.lowMem)
@@ -88,7 +95,7 @@ export default function Settings() {
     getDevices()
       .then((data) => {
         if (data?.devices) {
-          const map: Record<string, { available: boolean; desc: string }> = {}
+          const map: Record<string, { available: boolean; desc: string; reason?: string }> = {}
           for (const d of data.devices) {
             map[d.id] = { available: d.available, desc: d.desc, reason: d.reason }
           }
@@ -169,6 +176,7 @@ export default function Settings() {
         startupTimeout: Number(startupTimeout) || DEFAULTS.startupTimeout,
         hfEndpoint,
         hfToken,
+        githubMirror,
         defaultDilation: Number(dilation) || DEFAULTS.defaultDilation,
         disableNsfw,
         lowMem,
@@ -192,6 +200,7 @@ export default function Settings() {
     setStartupTimeout(String(DEFAULTS.startupTimeout))
     setHfEndpoint(DEFAULTS.hfEndpoint)
     setHfToken(DEFAULTS.hfToken)
+    setGithubMirror(DEFAULTS.githubMirror)
     setDilation(String(DEFAULTS.defaultDilation))
     setDisableNsfw(DEFAULTS.disableNsfw)
     setLowMem(DEFAULTS.lowMem)
@@ -204,7 +213,32 @@ export default function Settings() {
     <div className="flex-1 flex flex-col min-h-0">
       <PageHeader title="设置" />
 
-      {/* Content */}
+      {/* 页签栏 */}
+      <div className="flex border-b border-border-subtle flex-shrink-0 px-4">
+        {([
+          { key: 'general', label: '通用设置' },
+          { key: 'models',  label: '模型管理' },
+        ] as { key: SettingsTab; label: string }[]).map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={clsx(
+              'px-4 py-2.5 text-xs font-medium border-b-2 -mb-px transition-colors',
+              activeTab === tab.key
+                ? 'border-border-focus text-fg-accent'
+                : 'border-transparent text-fg-secondary hover:text-fg-primary'
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* 模型管理页签 */}
+      {activeTab === 'models' && <ModelManager />}
+
+      {/* 通用设置页签 */}
+      {activeTab === 'general' && (
       <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4 max-w-[640px]">
         {/* Connection Mode */}
         <section className="bg-bg-tertiary rounded-lg p-4">
@@ -564,12 +598,29 @@ export default function Settings() {
                 className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
               />
             </div>
+            <div>
+              <label className="text-xs text-fg-secondary mb-1 block">
+                GitHub 镜像加速
+                <span className="ml-1 text-[10px] text-fg-tertiary">（用于 rembg 抠图模型下载）</span>
+              </label>
+              <input
+                type="text"
+                value={githubMirror}
+                onChange={(e) => setGithubMirror(e.target.value)}
+                placeholder="例：https://mirror.ghproxy.com"
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+            </div>
             <div className="bg-bg-primary rounded p-2.5 border border-border-subtle">
               <p className="text-[11px] text-fg-secondary leading-relaxed">
-                <strong className="text-fg-primary">国内镜像：</strong>
-                如无法访问 HuggingFace，可将 Endpoint 改为
-                <code className="bg-bg-hover px-1 rounded text-fg-accent mx-1">https://hf-mirror.com</code>
-                加速模型下载。
+                <strong className="text-fg-primary">HF 镜像：</strong>
+                无法访问 HuggingFace 时，将 Endpoint 改为
+                <code className="bg-bg-hover px-1 rounded text-fg-accent mx-1">https://hf-mirror.com</code>。
+                <br />
+                <strong className="text-fg-primary">GitHub 镜像：</strong>
+                抠图模型（BiRefNet / IS-Net 等）从 GitHub 下载，如速度慢可填入
+                <code className="bg-bg-hover px-1 rounded text-fg-accent mx-1">https://mirror.ghproxy.com</code>
+                加速。下载功能在「模型管理」页签中。
               </p>
             </div>
           </div>
@@ -594,6 +645,7 @@ export default function Settings() {
           </button>
         </div>
       </div>
+      )}
     </div>
   )
 }

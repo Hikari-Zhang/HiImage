@@ -192,9 +192,9 @@ models:
     requires_reference: false
     size_mb: 100
     badge: 推荐
-    hf_model_id: ZhengPeng7/BiRefNet
-    download_url: https://huggingface.co/ZhengPeng7/BiRefNet
-    rembg_model_name: birefnet-general    # ~/.u2net/birefnet-general.onnx
+    rembg_session_name: birefnet-general
+    onnx_filename: BiRefNet-general-epoch_244.onnx
+    github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-epoch_244.onnx
     supported_params: {}
     features: [matting]
 
@@ -207,9 +207,9 @@ models:
     requires_reference: false
     size_mb: 176
     badge: ""
-    hf_model_id: briaai/RMBG-2.0
-    download_url: https://huggingface.co/briaai/RMBG-2.0
-    rembg_model_name: briaai/RMBG-2.0    # ~/.u2net/briaai/RMBG-2.0.onnx
+    rembg_session_name: bria-rmbg
+    onnx_filename: bria-rmbg-2.0.onnx
+    github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx
     supported_params: {}
     features: [matting]
 
@@ -222,9 +222,9 @@ models:
     requires_reference: false
     size_mb: 120
     badge: ""
-    hf_model_id: danielgatis/rembg
-    download_url: https://huggingface.co/danielgatis/rembg
-    rembg_model_name: isnet-general-use   # ~/.u2net/isnet-general-use.onnx
+    rembg_session_name: isnet-general-use
+    onnx_filename: isnet-general-use.onnx
+    github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx
     supported_params: {}
     features: [matting]
 
@@ -237,9 +237,9 @@ models:
     requires_reference: false
     size_mb: 120
     badge: 动漫
-    hf_model_id: danielgatis/rembg
-    download_url: https://huggingface.co/danielgatis/rembg
-    rembg_model_name: isnet-anime         # ~/.u2net/isnet-anime.onnx
+    rembg_session_name: isnet-anime
+    onnx_filename: isnet-anime.onnx
+    github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-anime.onnx
     supported_params: {}
     features: [matting]
 
@@ -252,9 +252,9 @@ models:
     requires_reference: false
     size_mb: 176
     badge: ""
-    hf_model_id: danielgatis/rembg
-    download_url: https://huggingface.co/danielgatis/rembg
-    rembg_model_name: u2net               # ~/.u2net/u2net.onnx
+    rembg_session_name: u2net
+    onnx_filename: u2net.onnx
+    github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx
     supported_params: {}
     features: [matting]
 
@@ -265,11 +265,11 @@ models:
     description: 轻量实时人像抠图，速度极快，适合批量与预览
     recommended_for: 换背景（快速）
     requires_reference: false
-    size_mb: 25
+    size_mb: 26
     badge: 快速
-    hf_model_id: danielgatis/rembg
-    download_url: https://huggingface.co/danielgatis/rembg
-    rembg_model_name: modnet_portrait_matting  # ~/.u2net/modnet_portrait_matting.onnx
+    rembg_session_name: u2net_human_seg
+    onnx_filename: u2net_human_seg.onnx
+    github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx
     supported_params: {}
     features: [matting]
 

@@ -54,7 +54,7 @@ class ModelChecker:
 
     def __init__(self, project_root: Optional[Path] = None):
         # 默认为 backend/ 目录的父级（即 PROJECT_ROOT）
-        self.project_root = project_root or Path(__file__).parent.parent
+        self.project_root = project_root or Path(__file__).parent.parent.parent
         self.models_dir = self.project_root / "models"
 
         # HF_HOME 由 app/main.py 在启动时设置；此处读取环境变量，回退到默认值
@@ -115,21 +115,23 @@ class ModelChecker:
 
     def _check_rembg(self, cfg: dict) -> ModelCheckResult:
         """
-        rembg 模型：检查 ~/.u2net/<rembg_model_name>.onnx 是否存在且大小合理。
+        rembg 模型：检查 ~/.u2net/<onnx_filename> 是否存在且大小合理。
 
-        rembg_model_name 示例：
-          birefnet      → birefnet-general
-          u2net         → u2net
-          modnet        → modnet_portrait_matting
-          isnet         → isnet-general-use
-          isnet_anime   → isnet-anime
-          rmbg          → briaai/RMBG-2.0   （带子目录）
+        onnx_filename 示例：
+          birefnet      → BiRefNet-general-epoch_244.onnx
+          u2net         → u2net.onnx
+          modnet        → u2net_human_seg.onnx
+          isnet         → isnet-general-use.onnx
+          rmbg          → bria-rmbg-2.0.onnx
         """
         u2net_home = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
-        rembg_model_name = cfg.get("rembg_model_name", cfg["id"])
+        onnx_filename = cfg.get("onnx_filename")
+        if not onnx_filename:
+            # 向后兼容旧字段
+            session_name = cfg.get("rembg_session_name", cfg.get("rembg_model_name", cfg["id"]))
+            onnx_filename = f"{session_name}.onnx"
 
-        # 处理带斜杠的模型名（如 briaai/RMBG-2.0 → 子目录）
-        onnx_path = u2net_home / f"{rembg_model_name}.onnx"
+        onnx_path = u2net_home / onnx_filename
         return self._check_file(cfg, onnx_path)
 
     def _check_local_path(self, cfg: dict) -> ModelCheckResult:

@@ -1,13 +1,21 @@
 """
 模型完整性健康检查端点
 
-GET /api/models/health              → 检测所有注册模型的完整性
-GET /api/models/health/{model_id}   → 检测单个模型的完整性
-GET /api/models/list                → 返回所有注册模型的元数据（含当前状态）
+GET    /api/models/health              → 检测所有注册模型的完整性
+GET    /api/models/health/{model_id}   → 检测单个模型的完整性
+GET    /api/models/list                → 返回所有注册模型的元数据（含当前状态）
+GET    /api/models/download            → SSE 流：一键下载所有缺失模型，实时推送进度
+DELETE /api/models/{model_id}/files    → 删除指定模型的本地权重文件（不修改 models.yaml）
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+import json
+import os
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from core.model_checker import ModelChecker
 from core.model_registry import MODELS, MODE_GROUPS
@@ -98,4 +106,662 @@ async def models_list():
     return {
         "models": result,
         "mode_groups": MODE_GROUPS,
+    }
+
+
+# ── 一键下载所有缺失模型（SSE 流） ──────────────────────────────────────────
+
+def _sse(event: str, data: dict) -> str:
+    """构造一条 SSE 消息。"""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _fmt_speed(bytes_per_sec: float) -> str:
+    """将字节/秒格式化为人类可读字符串。"""
+    if bytes_per_sec >= 1024 * 1024:
+        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+    elif bytes_per_sec >= 1024:
+        return f"{bytes_per_sec / 1024:.0f} KB/s"
+    return f"{bytes_per_sec:.0f} B/s"
+
+
+def _fmt_size(total_bytes: int) -> str:
+    if total_bytes >= 1024 * 1024 * 1024:
+        return f"{total_bytes / (1024**3):.1f} GB"
+    elif total_bytes >= 1024 * 1024:
+        return f"{total_bytes / (1024**2):.0f} MB"
+    elif total_bytes >= 1024:
+        return f"{total_bytes / 1024:.0f} KB"
+    return f"{total_bytes} B"
+
+
+async def _download_generator(request: Request):
+    """
+    异步生成器：依次下载每个缺失/损坏的模型，逐条推送 SSE 事件。
+
+    SSE 事件类型：
+      start     → 开始处理（含总数）
+      model     → 单个模型状态变更（checking / skipped / downloading / done / error）
+                  downloading 状态时含 speed / downloaded / total_size 字段
+      finish    → 全部完成
+    """
+    checker = ModelChecker()
+    loop = asyncio.get_event_loop()
+
+    # 过滤出需要下载的模型（跳过内置模型）
+    downloadable = [
+        m for m in MODELS
+        if not (m.get("provider") == "IOPaint" and m.get("iopaint_mode") == "cli")
+    ]
+
+    yield _sse("start", {"total": len(downloadable), "message": f"共 {len(downloadable)} 个可下载模型，正在检测..."})
+
+    ok_count = 0
+    skip_count = 0
+    fail_count = 0
+
+    for idx, model_cfg in enumerate(downloadable):
+        # 客户端断开时停止
+        if await request.is_disconnected():
+            break
+
+        mid = model_cfg["id"]
+        name = model_cfg.get("name", mid)
+        provider = model_cfg.get("provider", "")
+
+        # 检测当前状态
+        result = await loop.run_in_executor(None, checker.check_model, mid)
+
+        if result.status == "ok":
+            skip_count += 1
+            yield _sse("model", {
+                "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
+                "status": "skipped", "message": f"已存在，跳过 ({result.message})"
+            })
+            continue
+
+        # 开始下载 — 通过 asyncio.Queue 从工作线程接收进度
+        progress_queue: asyncio.Queue = asyncio.Queue()
+
+        yield _sse("model", {
+            "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
+            "status": "downloading", "message": "准备下载...",
+            "speed": "", "downloaded": "", "total_size": "",
+        })
+
+        # 在线程池中运行下载，进度通过 queue 传回
+        def _put(data: dict):
+            loop.call_soon_threadsafe(progress_queue.put_nowait, data)
+
+        if provider == "rembg":
+            future = loop.run_in_executor(None, _download_rembg, model_cfg, _put)
+        elif model_cfg.get("local_path") and model_cfg.get("download_url") and not model_cfg.get("hf_model_id"):
+            future = loop.run_in_executor(None, _download_direct, model_cfg, _put)
+        elif model_cfg.get("hf_model_id"):
+            future = loop.run_in_executor(None, _download_hf, model_cfg, _put)
+        else:
+            yield _sse("model", {
+                "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
+                "status": "skipped", "message": "无下载来源，跳过"
+            })
+            skip_count += 1
+            continue
+
+        # 边等待 future 完成，边消费 queue 中的进度消息
+        _SENTINEL = object()
+
+        async def _drain():
+            while True:
+                try:
+                    item = progress_queue.get_nowait()
+                    if item is _SENTINEL:
+                        break
+                    yield item
+                except asyncio.QueueEmpty:
+                    await asyncio.sleep(0.3)
+
+        try:
+            # 持续消费进度，直到 future 结束
+            while not future.done():
+                await asyncio.sleep(0.2)
+                # 消费当前 queue 中所有待处理的进度消息
+                while not progress_queue.empty():
+                    item = progress_queue.get_nowait()
+                    if isinstance(item, dict):
+                        yield _sse("model", {
+                            "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
+                            "status": "downloading",
+                            **item,
+                        })
+
+            # future 结束后再清空一次剩余队列
+            while not progress_queue.empty():
+                item = progress_queue.get_nowait()
+                if isinstance(item, dict):
+                    yield _sse("model", {
+                        "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
+                        "status": "downloading",
+                        **item,
+                    })
+
+            # 检查是否有异常
+            exc = future.exception()
+            if exc:
+                raise exc
+
+            ok_count += 1
+            yield _sse("model", {
+                "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
+                "status": "done", "message": "下载完成",
+                "speed": "", "downloaded": "", "total_size": "",
+            })
+
+        except Exception as e:
+            fail_count += 1
+            yield _sse("model", {
+                "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
+                "status": "error", "message": f"下载失败: {str(e)[:200]}",
+                "speed": "", "downloaded": "", "total_size": "",
+            })
+
+    yield _sse("finish", {
+        "ok": ok_count,
+        "skipped": skip_count,
+        "failed": fail_count,
+        "message": f"完成：{ok_count} 个下载成功，{skip_count} 个已跳过，{fail_count} 个失败"
+    })
+
+
+def _download_rembg(cfg: dict, progress_cb=None) -> None:
+    """
+    下载 rembg ONNX 模型到 ~/.u2net/。
+
+    完全绕过 rembg 的 pooch 机制，使用 urllib 直接下载 ONNX 文件，
+    支持实时速度/进度回调，支持通过 network.github_mirror 配置镜像加速。
+
+    GitHub Releases 镜像示例（settings.json）：
+      "network": { "github_mirror": "https://mirror.ghproxy.com" }
+
+    下载后写入 ~/.u2net/<onnx_filename>，与 rembg 的 U2NET_HOME 保持一致。
+    """
+    import time
+    import urllib.request
+    from pathlib import Path
+    from app.config import get as get_config
+
+    onnx_filename = cfg.get("onnx_filename")
+    if not onnx_filename:
+        # 向后兼容
+        session_name = cfg.get("rembg_session_name", cfg.get("rembg_model_name", cfg["id"]))
+        onnx_filename = f"{session_name}.onnx"
+
+    github_url = cfg.get("github_download_url", "")
+    if not github_url:
+        raise ValueError(f"rembg 模型缺少 github_download_url 字段: {cfg['id']!r}")
+
+    # 支持 GitHub 镜像加速（如 https://mirror.ghproxy.com）
+    github_mirror = get_config("network.github_mirror", "").rstrip("/")
+    if github_mirror:
+        # 将原始 GitHub URL 拼接到镜像前面
+        # e.g. https://mirror.ghproxy.com/https://github.com/...
+        url = f"{github_mirror}/{github_url}"
+    else:
+        url = github_url
+
+    u2net_home = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
+    u2net_home.mkdir(parents=True, exist_ok=True)
+    dest = u2net_home / onnx_filename
+
+    # 文件已存在且大小合理则跳过（避免重复下载）
+    size_mb = cfg.get("size_mb", 0) or 0
+    if dest.exists() and size_mb:
+        existing_mb = dest.stat().st_size / (1024 * 1024)
+        if existing_mb >= size_mb * 0.5:
+            if progress_cb:
+                progress_cb({"message": f"文件已存在，跳过", "speed": "", "downloaded": "", "total_size": ""})
+            return
+
+    req = urllib.request.Request(url, headers={"User-Agent": "HiImage/2.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            content_length = resp.headers.get("Content-Length")
+            total_bytes = int(content_length) if content_length else 0
+
+            downloaded = 0
+            start_time = time.monotonic()
+            last_report_time = start_time
+            last_report_bytes = 0
+
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = resp.read(256 * 1024)  # 256KB
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+
+                    now = time.monotonic()
+                    elapsed = now - last_report_time
+                    if elapsed >= 0.5 and progress_cb:
+                        speed = (downloaded - last_report_bytes) / elapsed
+                        last_report_time = now
+                        last_report_bytes = downloaded
+                        pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
+                        progress_cb({
+                            "message": f"{onnx_filename} {pct}",
+                            "speed": _fmt_speed(speed),
+                            "downloaded": _fmt_size(downloaded),
+                            "total_size": _fmt_size(total_bytes) if total_bytes else "?",
+                        })
+    except Exception as e:
+        # 下载失败时删除可能的残缺文件
+        if dest.exists():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        raise RuntimeError(
+            f"下载 {onnx_filename} 失败: {e}\n"
+            f"原始地址: {github_url}\n"
+            f"如访问 GitHub 困难，可在设置 → 网络 中配置 GitHub 镜像加速地址\n"
+            f"（如 https://mirror.ghproxy.com）"
+        ) from e
+
+
+def _download_hf(cfg: dict, progress_cb=None) -> None:
+    """
+    通过 huggingface_hub 逐文件下载 HF 模型，支持实时速度回调。
+
+    - 遵循 HF_ENDPOINT 环境变量（镜像站支持）
+    - 遵循 HF_TOKEN 环境变量（门控模型授权）
+    - 401/403 时抛出友好错误信息
+    """
+    import time
+    import urllib.request
+    from huggingface_hub import list_repo_files, hf_hub_url
+    from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+    from app.config import MODELS_DIR
+
+    hf_cache = str(Path(MODELS_DIR) / "huggingface")
+    token = os.environ.get("HF_TOKEN") or None
+    repo_id = cfg["hf_model_id"]
+
+    IGNORE_SUFFIXES = {".msgpack", ".h5"}
+    IGNORE_PREFIXES = ("flax_model", "tf_model")
+
+    try:
+        # 获取文件列表
+        try:
+            all_files = list(list_repo_files(repo_id, token=token))
+        except GatedRepoError:
+            name = cfg.get("name", repo_id)
+            raise RuntimeError(
+                f"{name} 是门控模型，需要先在 HuggingFace 网站同意使用协议，"
+                f"并在设置中填写 HF Token（https://huggingface.co/{repo_id}）"
+            )
+        except RepositoryNotFoundError:
+            raise RuntimeError(
+                f"仓库 {repo_id} 不存在或无访问权限，请检查模型 ID 或 HF Token"
+            )
+
+        # 过滤不需要的文件
+        files = [
+            f for f in all_files
+            if not any(f.endswith(s) for s in IGNORE_SUFFIXES)
+            and not any(f.startswith(p) for p in IGNORE_PREFIXES)
+        ]
+
+        # 构建本地缓存目录（简化路径，不用 huggingface_hub 复杂的 blob 结构）
+        repo_dir = Path(hf_cache) / "manual" / repo_id.replace("/", "--")
+        repo_dir.mkdir(parents=True, exist_ok=True)
+
+        total_files = len(files)
+        for file_idx, filename in enumerate(files):
+            dest = repo_dir / filename
+            dest.parent.mkdir(parents=True, exist_ok=True)
+
+            if dest.exists():
+                if progress_cb:
+                    progress_cb({
+                        "message": f"文件已存在，跳过 ({file_idx + 1}/{total_files}): {filename}",
+                        "speed": "", "downloaded": "", "total_size": "",
+                    })
+                continue
+
+            url = hf_hub_url(repo_id=repo_id, filename=filename)
+            headers = {"User-Agent": "HiImage/2.0"}
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                content_length = resp.headers.get("Content-Length")
+                total_bytes = int(content_length) if content_length else 0
+
+                downloaded = 0
+                start_time = time.monotonic()
+                last_report_time = start_time
+                last_report_bytes = 0
+
+                with open(dest, "wb") as f:
+                    while True:
+                        chunk = resp.read(256 * 1024)  # 256KB chunks
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+
+                        now = time.monotonic()
+                        elapsed_since_last = now - last_report_time
+                        if elapsed_since_last >= 0.5 and progress_cb:  # 每 0.5s 推一次
+                            speed = (downloaded - last_report_bytes) / elapsed_since_last
+                            last_report_time = now
+                            last_report_bytes = downloaded
+
+                            pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
+                            progress_cb({
+                                "message": f"({file_idx + 1}/{total_files}) {filename} {pct}",
+                                "speed": _fmt_speed(speed),
+                                "downloaded": _fmt_size(downloaded),
+                                "total_size": _fmt_size(total_bytes) if total_bytes else "?",
+                            })
+
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(str(e)) from e
+
+
+def _download_direct(cfg: dict, progress_cb=None) -> None:
+    """通过 urllib 直接下载单文件模型（如 Real-ESRGAN .pth 文件），支持速度回调。"""
+    import time
+    import urllib.request
+    from app.config import PROJECT_ROOT
+
+    dest = Path(PROJECT_ROOT) / cfg["local_path"]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    url = cfg["download_url"]
+    req = urllib.request.Request(url, headers={"User-Agent": "HiImage/2.0"})
+
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        content_length = resp.headers.get("Content-Length")
+        total_bytes = int(content_length) if content_length else 0
+
+        downloaded = 0
+        start_time = time.monotonic()
+        last_report_time = start_time
+        last_report_bytes = 0
+
+        with open(dest, "wb") as f:
+            while True:
+                chunk = resp.read(256 * 1024)  # 256KB chunks
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+
+                now = time.monotonic()
+                elapsed_since_last = now - last_report_time
+                if elapsed_since_last >= 0.5 and progress_cb:
+                    speed = (downloaded - last_report_bytes) / elapsed_since_last
+                    last_report_time = now
+                    last_report_bytes = downloaded
+
+                    pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
+                    progress_cb({
+                        "message": pct,
+                        "speed": _fmt_speed(speed),
+                        "downloaded": _fmt_size(downloaded),
+                        "total_size": _fmt_size(total_bytes) if total_bytes else "?",
+                    })
+
+
+@router.get("/download")
+async def models_download(request: Request):
+    """
+    SSE 流：一键下载所有缺失/损坏的模型。
+
+    客户端通过 EventSource 连接此接口，接收实时进度推送。
+    事件类型：start / model / finish
+    """
+    return StreamingResponse(
+        _download_generator(request),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # 禁止 Nginx 缓冲
+        },
+    )
+
+
+async def _download_single_generator(request: Request, model_id: str):
+    """
+    异步生成器：下载指定单个模型，推送 SSE 事件。
+    事件类型与 _download_generator 保持一致：start / model / finish
+    """
+    from core.model_registry import MODEL_BY_ID
+
+    cfg = MODEL_BY_ID.get(model_id)
+    if not cfg:
+        yield _sse("finish", {
+            "ok": 0, "skipped": 0, "failed": 1,
+            "message": f"未知模型 ID: {model_id!r}"
+        })
+        return
+
+    # IOPaint 内置模型无需下载
+    if cfg.get("provider") == "IOPaint" and cfg.get("iopaint_mode") == "cli":
+        yield _sse("finish", {
+            "ok": 0, "skipped": 1, "failed": 0,
+            "message": "内置模型无需下载"
+        })
+        return
+
+    checker = ModelChecker()
+    loop = asyncio.get_event_loop()
+    name = cfg.get("name", model_id)
+    provider = cfg.get("provider", "")
+
+    yield _sse("start", {"total": 1, "message": f"准备下载 {name}..."})
+
+    # 检测当前状态
+    result = await loop.run_in_executor(None, checker.check_model, model_id)
+    if result.status == "ok":
+        yield _sse("model", {
+            "id": model_id, "name": name, "index": 1, "total": 1,
+            "status": "skipped", "message": f"已存在，跳过 ({result.message})"
+        })
+        yield _sse("finish", {"ok": 0, "skipped": 1, "failed": 0, "message": "模型已存在，无需重新下载"})
+        return
+
+    progress_queue: asyncio.Queue = asyncio.Queue()
+
+    yield _sse("model", {
+        "id": model_id, "name": name, "index": 1, "total": 1,
+        "status": "downloading", "message": "准备下载...",
+        "speed": "", "downloaded": "", "total_size": "",
+    })
+
+    def _put(data: dict):
+        loop.call_soon_threadsafe(progress_queue.put_nowait, data)
+
+    if provider == "rembg":
+        future = loop.run_in_executor(None, _download_rembg, cfg, _put)
+    elif cfg.get("local_path") and cfg.get("download_url") and not cfg.get("hf_model_id"):
+        future = loop.run_in_executor(None, _download_direct, cfg, _put)
+    elif cfg.get("hf_model_id"):
+        future = loop.run_in_executor(None, _download_hf, cfg, _put)
+    else:
+        yield _sse("model", {
+            "id": model_id, "name": name, "index": 1, "total": 1,
+            "status": "skipped", "message": "无下载来源，跳过"
+        })
+        yield _sse("finish", {"ok": 0, "skipped": 1, "failed": 0, "message": "该模型无可用下载来源"})
+        return
+
+    try:
+        while not future.done():
+            if await request.is_disconnected():
+                future.cancel()
+                return
+            await asyncio.sleep(0.2)
+            # 消费当前 queue 中所有待处理的进度消息
+            while not progress_queue.empty():
+                item = progress_queue.get_nowait()
+                if isinstance(item, dict):
+                    yield _sse("model", {
+                        "id": model_id, "name": name, "index": 1, "total": 1,
+                        "status": "downloading",
+                        **item,
+                    })
+
+        # 清空剩余队列
+        while not progress_queue.empty():
+            item = progress_queue.get_nowait()
+            if isinstance(item, dict):
+                yield _sse("model", {
+                    "id": model_id, "name": name, "index": 1, "total": 1,
+                    "status": "downloading",
+                    **item,
+                })
+
+        exc = future.exception()
+        if exc:
+            raise exc
+
+        yield _sse("model", {
+            "id": model_id, "name": name, "index": 1, "total": 1,
+            "status": "done", "message": "下载完成",
+            "speed": "", "downloaded": "", "total_size": "",
+        })
+        yield _sse("finish", {"ok": 1, "skipped": 0, "failed": 0, "message": f"{name} 下载完成"})
+
+    except Exception as e:
+        yield _sse("model", {
+            "id": model_id, "name": name, "index": 1, "total": 1,
+            "status": "error", "message": f"下载失败: {str(e)[:200]}",
+            "speed": "", "downloaded": "", "total_size": "",
+        })
+        yield _sse("finish", {"ok": 0, "skipped": 0, "failed": 1, "message": f"下载失败: {str(e)[:100]}"})
+
+
+@router.get("/download/{model_id}")
+async def model_download_single(model_id: str, request: Request):
+    """
+    SSE 流：下载单个指定模型。
+
+    客户端通过 EventSource 连接此接口，接收实时进度推送。
+    事件类型：start / model / finish
+    """
+    return StreamingResponse(
+        _download_single_generator(request, model_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.delete("/{model_id}/files")
+async def delete_model_files(model_id: str):
+    """
+    删除指定模型的本地权重文件（不修改 models.yaml）。
+
+    - rembg   → 删除 ~/.u2net/<rembg_model_name>.onnx
+    - 本地文件 → 删除 PROJECT_ROOT/<local_path>
+    - HF 缓存 → 删除 huggingface cache 中对应的 repo 目录
+    - IOPaint cli 内置模型 → 无文件可删，直接返回提示
+    """
+    from core.model_registry import MODEL_BY_ID
+    from app.config import PROJECT_ROOT, MODELS_DIR
+    import shutil
+
+    cfg = MODEL_BY_ID.get(model_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
+
+    provider = cfg.get("provider", "")
+
+    # IOPaint 内置模型（cli 模式）：无独立文件
+    if provider == "IOPaint" and cfg.get("iopaint_mode") == "cli":
+        return {"ok": True, "message": "内置模型无需删除文件（随 iopaint 包安装）"}
+
+    deleted: list[str] = []
+    not_found: list[str] = []
+
+    # ── rembg 模型 ──────────────────────────────────────────────────────────
+    if provider == "rembg":
+        u2net_home = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
+        rembg_name = cfg.get("rembg_model_name", model_id)
+
+        # 可能是子目录形式（如 briaai/RMBG-2.0）
+        onnx_path = u2net_home / f"{rembg_name}.onnx"
+        onnx_dir = u2net_home / rembg_name  # 子目录形式
+
+        if onnx_path.exists():
+            onnx_path.unlink()
+            deleted.append(str(onnx_path))
+        elif onnx_dir.exists() and onnx_dir.is_dir():
+            shutil.rmtree(onnx_dir)
+            deleted.append(str(onnx_dir))
+        else:
+            not_found.append(str(onnx_path))
+
+    # ── 本地路径文件（realesrgan/facexlib 等）──────────────────────────────
+    if cfg.get("local_path"):
+        local = Path(PROJECT_ROOT) / cfg["local_path"]
+        # 安全检查：只允许删 models/ 目录下的文件
+        try:
+            local.resolve().relative_to(Path(PROJECT_ROOT).resolve() / "models")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"路径安全检查失败，拒绝删除: {local}")
+
+        if local.exists():
+            local.unlink()
+            deleted.append(str(local))
+        else:
+            not_found.append(str(local))
+
+    # ── HuggingFace 缓存（diffusers / IOPaint server / HiImage 等）──────────
+    if cfg.get("hf_model_id") and not cfg.get("local_path"):
+        hf_cache_dir = Path(MODELS_DIR) / "huggingface"
+        manual_dir = hf_cache_dir / "manual" / cfg["hf_model_id"].replace("/", "--")
+
+        # 1. 优先删手动下载目录（_download_hf 使用的路径）
+        if manual_dir.exists():
+            shutil.rmtree(manual_dir)
+            deleted.append(str(manual_dir))
+        else:
+            # 2. 尝试通过 huggingface_hub scan_cache_dir 找标准缓存目录
+            try:
+                from huggingface_hub import scan_cache_dir as hf_scan
+                hub_dir = hf_cache_dir / "hub"
+                if hub_dir.exists():
+                    cache_info = hf_scan(hub_dir)
+                    for repo in cache_info.repos:
+                        if repo.repo_id == cfg["hf_model_id"]:
+                            shutil.rmtree(repo.repo_path)
+                            deleted.append(str(repo.repo_path))
+                            break
+                    else:
+                        not_found.append(f"HF cache: {cfg['hf_model_id']}")
+                else:
+                    not_found.append(f"HF cache dir 不存在: {hub_dir}")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"扫描 HF 缓存失败: {e}")
+
+    if not deleted and not_found:
+        return {
+            "ok": False,
+            "message": f"未找到可删除的文件",
+            "not_found": not_found,
+        }
+
+    return {
+        "ok": True,
+        "message": f"已删除 {len(deleted)} 个文件/目录",
+        "deleted": deleted,
+        "not_found": not_found,
     }

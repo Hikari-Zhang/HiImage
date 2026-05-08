@@ -17,6 +17,7 @@ class SettingsUpdate(BaseModel):
     server_startup_timeout: Optional[int] = None
     hf_endpoint: Optional[str] = None
     hf_token: Optional[str] = None
+    github_mirror: Optional[str] = None
     default_dilation: Optional[int] = None
     disable_nsfw: Optional[bool] = None
     # 内存优化选项（扩散模型）
@@ -36,6 +37,7 @@ async def get_settings():
         "server_startup_timeout": all_settings.get("server.startup_timeout", 1800),
         "hf_endpoint": all_settings.get("network.hf_endpoint", "https://huggingface.co"),
         "hf_token": all_settings.get("network.hf_token", ""),
+        "github_mirror": all_settings.get("network.github_mirror", ""),
         "default_dilation": all_settings.get("inpaint.default_dilation", 10),
         "disable_nsfw": all_settings.get("inpaint.disable_nsfw", True),
         "low_mem": all_settings.get("server.low_mem", True),
@@ -61,6 +63,8 @@ async def update_settings(data: SettingsUpdate):
         current["network.hf_endpoint"] = data.hf_endpoint
     if data.hf_token is not None:
         current["network.hf_token"] = data.hf_token
+    if data.github_mirror is not None:
+        current["network.github_mirror"] = data.github_mirror
     if data.default_dilation is not None:
         current["inpaint.default_dilation"] = data.default_dilation
     if data.disable_nsfw is not None:

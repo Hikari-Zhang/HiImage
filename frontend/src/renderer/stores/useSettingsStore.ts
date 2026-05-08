@@ -1,5 +1,28 @@
 import { create } from 'zustand'
 
+// ── 下载相关类型 ──────────────────────────────────────────────────────────────
+export type DownloadRunStatus = 'idle' | 'running' | 'done' | 'error'
+export type ModelDownloadItem = {
+  id: string
+  name: string
+  index: number
+  total: number
+  status: 'checking' | 'skipped' | 'downloading' | 'done' | 'error'
+  message: string
+  speed?: string       // 下载速度，如 "1.2 MB/s"
+  downloaded?: string  // 已下载大小，如 "32 MB"
+  total_size?: string  // 文件总大小，如 "65 MB"
+}
+
+/** 单模型行内下载进度（跨页签持久） */
+export type RowDownloadState = {
+  status: 'idle' | 'downloading' | 'done' | 'error'
+  message: string
+  speed: string
+  downloaded: string
+  total_size: string
+}
+
 interface SettingsState {
   // Global
   device: string
@@ -31,8 +54,19 @@ interface SettingsState {
   // Network
   hfEndpoint: string
   hfToken: string
+  githubMirror: string
 
   isLoading: boolean
+
+  // ── 一键下载全部状态（跨页签持久化）────────────────────────────────────────
+  downloadStatus: DownloadRunStatus
+  downloadModels: ModelDownloadItem[]
+  downloadSummary: string
+  downloadTotal: number
+  downloadPanelOpen: boolean
+
+  // ── 单模型行内下载状态（跨页签持久化）──────────────────────────────────────
+  rowDownloads: Record<string, RowDownloadState>
 
   // Actions
   setDevice: (device: string) => void
@@ -47,6 +81,18 @@ interface SettingsState {
   setSettings: (settings: Partial<SettingsState>) => void
   loadSettings: (backendURL: string) => Promise<void>
   saveSettings: (backendURL: string) => Promise<void>
+
+  // 一键下载 actions
+  setDownloadStatus: (s: DownloadRunStatus) => void
+  setDownloadModels: (updater: ModelDownloadItem[] | ((prev: ModelDownloadItem[]) => ModelDownloadItem[])) => void
+  setDownloadSummary: (s: string) => void
+  setDownloadTotal: (n: number) => void
+  setDownloadPanelOpen: (v: boolean) => void
+  resetDownload: () => void
+
+  // 单模型行内下载 actions
+  setRowDownload: (modelId: string, patch: Partial<RowDownloadState>) => void
+  clearRowDownload: (modelId: string) => void
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -67,7 +113,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   cpuTextencoder: false,
   hfEndpoint: 'https://huggingface.co',
   hfToken: '',
+  githubMirror: '',
   isLoading: false,
+
+  // 一键下载状态初始值
+  downloadStatus: 'idle',
+  downloadModels: [],
+  downloadSummary: '',
+  downloadTotal: 0,
+  downloadPanelOpen: false,
+
+  // 单模型行内下载状态初始值
+  rowDownloads: {},
 
   setDevice: (device) => set({ device }),
   setInpaintModel: (model) => set({ inpaintModel: model }),
@@ -81,6 +138,37 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setSettings: (settings) => set(settings),
 
+  // 一键下载 actions
+  setDownloadStatus: (s) => set({ downloadStatus: s }),
+  setDownloadModels: (updater) =>
+    set((state) => ({
+      downloadModels:
+        typeof updater === 'function' ? updater(state.downloadModels) : updater,
+    })),
+  setDownloadSummary: (s) => set({ downloadSummary: s }),
+  setDownloadTotal: (n) => set({ downloadTotal: n }),
+  setDownloadPanelOpen: (v) => set({ downloadPanelOpen: v }),
+  resetDownload: () =>
+    set({ downloadStatus: 'idle', downloadModels: [], downloadSummary: '', downloadTotal: 0 }),
+
+  // 单模型行内下载 actions
+  setRowDownload: (modelId, patch) =>
+    set((state) => ({
+      rowDownloads: {
+        ...state.rowDownloads,
+        [modelId]: {
+          ...(state.rowDownloads[modelId] ?? { status: 'idle' as const, message: '', speed: '', downloaded: '', total_size: '' }),
+          ...patch,
+        },
+      },
+    })),
+  clearRowDownload: (modelId) =>
+    set((state) => {
+      const next = { ...state.rowDownloads }
+      delete next[modelId]
+      return { rowDownloads: next }
+    }),
+
   loadSettings: async (backendURL) => {
     set({ isLoading: true })
     try {
@@ -93,6 +181,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         startupTimeout: data.server_startup_timeout ?? 1800,
         hfEndpoint: data.hf_endpoint ?? 'https://huggingface.co',
         hfToken: data.hf_token ?? '',
+        githubMirror: data.github_mirror ?? '',
         defaultDilation: data.default_dilation ?? 10,
         disableNsfw: data.disable_nsfw ?? true,
         lowMem: data.low_mem ?? true,
@@ -119,6 +208,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           server_startup_timeout: state.startupTimeout,
           hf_endpoint: state.hfEndpoint,
           hf_token: state.hfToken,
+          github_mirror: state.githubMirror,
         default_dilation: state.defaultDilation,
         disable_nsfw: state.disableNsfw,
         low_mem: state.lowMem,
@@ -132,3 +222,4 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 }))
+

@@ -81,8 +81,8 @@ _MODEL_ARCH, _MODEL_NUM_BLOCK, _MODEL_NUM_CONV = _dicts
 # 扁平化 model_id 列表（向后兼容旧接口）
 AVAILABLE_UPSCALE_MODELS = [entry[0] for entry in UPSCALE_MODEL_LIST]
 
-# 项目内模型缓存目录
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 项目内模型缓存目录（backend/core/ → backend/ → HiImage/）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _WEIGHTS_DIR = os.path.join(_PROJECT_ROOT, 'models', 'realesrgan')
 
 

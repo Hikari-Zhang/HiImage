@@ -145,15 +145,17 @@ class Synthesizer:
         h, w = source_rgb.shape[:2]
 
         # Step 1: 抠图（输出 RGBA）
+        # model_map: model_id → rembg session 注册名（cls.name()）
+        # 注意：这里的值必须与 rembg sessions 字典的 key 完全一致
         model_map = {
             # 高质量（推荐）
             "birefnet":    "birefnet-general",
-            "rmbg":        "briaai/RMBG-2.0",
+            "rmbg":        "bria-rmbg",          # bria_rmbg.py: name() → "bria-rmbg"
             "isnet":       "isnet-general-use",
             "isnet_anime": "isnet-anime",
             # 通用 / 快速
             "u2net":       "u2net",
-            "modnet":      "modnet_portrait_matting",
+            "modnet":      "u2net_human_seg",     # rembg 无 modnet session，用轻量人像替代
         }
         rembg_model = model_map.get(self.model_id, "birefnet-general")
 

@@ -1,0 +1,85 @@
+================================================================================
+REAL-ESRGAN MODEL LOADING - QUICK REFERENCE
+================================================================================
+
+PRIMARY FILE: /Users/hikari/Documents/Git/HiImage/backend/core/upscaler.py
+
+CRITICAL LINES:
+- Line 85-86:   Path calculation (_PROJECT_ROOT, _WEIGHTS_DIR)
+- Line 89-90:   _get_weight_path() function
+- Line 158:     upscale() triggers _ensure_model_loaded()
+- Line 174-185: _ensure_model_loaded() - lazy loading logic
+- Line 180:     Get weight path
+- Line 181-183: Check if weights exist, download if needed
+- Line 187-252: _build_upsampler() - actual model loading
+- Line 243:     RealESRGANer(model_path=weight_path) - ACTUAL PYTORCH LOADING
+
+================================================================================
+PATH RESOLUTION
+================================================================================
+
+_WEIGHTS_DIR = /Users/hikari/Documents/Git/HiImage/backend/models/realesrgan
+
+This is calculated dynamically from:
+  __file__ = /Users/hikari/Documents/Git/HiImage/backend/core/upscaler.py
+  dirname(dirname(__file__)) = /Users/hikari/Documents/Git/HiImage/backend
+
+Final weight file path: _WEIGHTS_DIR + filename from models.yaml
+Example: /Users/hikari/Documents/Git/HiImage/backend/models/realesrgan/RealESRGAN_x4plus.pth
+
+================================================================================
+IMPORTANT MISMATCH
+================================================================================
+
+config.py defines:
+  MODELS_DIR = /Users/hikari/Documents/Git/HiImage/models
+
+But upscaler.py uses:
+  _WEIGHTS_DIR = /Users/hikari/Documents/Git/HiImage/backend/models/realesrgan
+
+These are DIFFERENT paths! upscaler.py does NOT use config.py's MODELS_DIR
+
+================================================================================
+ENTRY POINTS
+================================================================================
+
+1. API Endpoint: POST /upscale
+   File: /Users/hikari/Documents/Git/HiImage/backend/app/routers/upscale.py
+   Line 66-80: upscale_image()
+   Line 68: Imports Upscaler
+   Line 80: Creates Upscaler instance
+   Line 81: Calls upscaler.upscale() - triggers model loading
+
+2. Pipeline: 
+   File: /Users/hikari/Documents/Git/HiImage/backend/core/pipeline.py
+   Line 144-146: If upscale enabled
+   Line 145: Creates Upscaler instance
+   Line 146: Calls upscaler.upscale()
+
+================================================================================
+EXECUTION FLOW
+================================================================================
+
+upscale() [L158] 
+  └─> _ensure_model_loaded() [L174]
+      ├─> weight_path = _get_weight_path() [L180]
+      ├─> if not exists: _download_weight() [L181-183]
+      └─> _build_upsampler(weight_path) [L185]
+          ├─> Create architecture (RRDBNet/SRVGGNetCompact) [L210-229]
+          ├─> Import RealESRGANer [L197]
+          └─> RealESRGANer(model_path=weight_path, ...) [L241-250]
+              └─> PyTorch loads weights from disk
+      └─> upsampler.enhance() [L164]
+
+================================================================================
+MODEL ARCHITECTURE SELECTION
+================================================================================
+
+From models.yaml fields:
+- arch: "RRDBNet" or "SRVGGNetCompact"
+- num_block: typically 23 for standard, 6 for anime_6B
+- num_conv: 32 for general, 16 for animevideo
+
+Selected in _build_upsampler() [L206-229]
+
+================================================================================
