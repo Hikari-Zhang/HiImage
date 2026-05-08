@@ -10,6 +10,7 @@ import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
+import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import type { ROI } from '../stores/useImageStore'
 
 type CanvasTool = 'draw' | 'pan'
@@ -39,6 +40,7 @@ export default function WatermarkRemoval() {
     setPostprocessMethod, setPostprocessEnabled, setUpscaleEnabled, setUpscaleModel,
   } = useSettingsStore()
   const { inpaintGroups, upscaleGroups } = useModelStore()
+  const { options: deviceOptions } = useDeviceOptions()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
@@ -428,11 +430,7 @@ export default function WatermarkRemoval() {
             value={device}
             onChange={(e) => setDevice(e.target.value)}
             size="sm"
-            options={[
-              { value: 'mps', label: 'MPS (Apple Silicon)' },
-              { value: 'cpu', label: 'CPU' },
-              { value: 'cuda', label: 'CUDA (NVIDIA)' },
-            ]}
+            options={deviceOptions}
           />
 
           {/* Dilation */}

@@ -13,6 +13,7 @@ import { useImageStore } from '../stores/useImageStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
+import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import type { ROI } from '../stores/useImageStore'
 
 type CanvasTool = 'draw' | 'pan'
@@ -330,6 +331,7 @@ export default function SmartSynthesis() {
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { device, setDevice } = useSettingsStore()
   const { runSynthesis } = useBackendAPI()
+  const { options: deviceOptions } = useDeviceOptions()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
@@ -828,11 +830,7 @@ export default function SmartSynthesis() {
             value={device}
             onChange={(e) => setDevice(e.target.value)}
             size="sm"
-            options={[
-              { value: 'mps', label: 'MPS (Apple Silicon)' },
-              { value: 'cpu', label: 'CPU' },
-              { value: 'cuda', label: 'CUDA (NVIDIA)' },
-            ]}
+            options={deviceOptions}
           />
 
           {/* 操作按钮 */}

@@ -11,7 +11,7 @@ type ConnectionMode = 'local' | 'remote'
 
 // 默认值（用于「恢复默认」）
 const DEFAULTS = {
-  device: 'mps',
+  device: 'cpu',
   serverPort: 51821,
   keepaliveSeconds: 300,
   startupTimeout: 1800,

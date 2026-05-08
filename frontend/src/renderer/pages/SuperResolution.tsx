@@ -7,12 +7,14 @@ import { useProcessStore } from '../stores/useProcessStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
+import { useDeviceOptions } from '../hooks/useDeviceOptions'
 
 export default function SuperResolution() {
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { upscale } = useBackendAPI()
   const { device, upscaleModel, setDevice, setUpscaleModel } = useSettingsStore()
   const { upscaleGroups } = useModelStore()
+  const { options: deviceOptions } = useDeviceOptions()
 
   const [sourceImage, setSourceImage] = useState<string | null>(null)
   const [resultImage, setResultImage] = useState<string | null>(null)
@@ -240,11 +242,7 @@ export default function SuperResolution() {
             value={device}
             onChange={(e) => setDevice(e.target.value)}
             size="sm"
-            options={[
-              { value: 'mps', label: 'MPS (Apple Silicon)' },
-              { value: 'cpu', label: 'CPU' },
-              { value: 'cuda', label: 'CUDA (NVIDIA)' },
-            ]}
+            options={deviceOptions}
           />
 
           {/* Image info */}

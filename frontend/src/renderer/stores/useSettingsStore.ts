@@ -50,7 +50,7 @@ interface SettingsState {
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
-  device: 'mps',
+  device: 'cpu',
   disableNsfw: true,
   inpaintModel: 'lama',
   defaultDilation: 10,
@@ -87,7 +87,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const res = await fetch(`${backendURL}/api/settings`)
       const data = await res.json()
       set({
-        device: data.device ?? 'mps',
+        device: data.device ?? 'cpu',
         serverPort: data.server_port ?? 51821,
         keepaliveSeconds: data.server_keepalive ?? 300,
         startupTimeout: data.server_startup_timeout ?? 1800,
