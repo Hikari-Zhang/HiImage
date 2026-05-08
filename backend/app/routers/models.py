@@ -151,13 +151,22 @@ async def _download_generator(request: Request):
     checker = ModelChecker()
     loop = asyncio.get_event_loop()
 
-    # 过滤出需要下载的模型（跳过内置模型）
-    downloadable = [
+    # IOPaint cli 模型（需要下载权重但由 iopaint 自动管理），单独记录跳过原因
+    cli_models = [
         m for m in MODELS
-        if not (m.get("provider") == "IOPaint" and m.get("iopaint_mode") == "cli")
+        if m.get("provider") == "IOPaint" and m.get("iopaint_mode") == "cli"
     ]
+    # 过滤出需要下载的模型
+    downloadable = [m for m in MODELS if m not in cli_models]
 
-    logger.info(f"[一键下载] 开始：共 {len(downloadable)} 个可下载模型")
+    if cli_models:
+        logger.info(
+            f"[一键下载] 跳过 {len(cli_models)} 个 IOPaint cli 模型"
+            f"（首次使用时由 iopaint 自动下载）："
+            f" {', '.join(m.get('name', m['id']) for m in cli_models)}"
+        )
+
+    logger.info(f"[一键下载] 开始：共 {len(downloadable)} 个可下载模型，{len(cli_models)} 个 IOPaint 内置跳过")
     yield _sse("start", {"total": len(downloadable), "message": f"共 {len(downloadable)} 个可下载模型，正在检测..."})
 
     ok_count = 0
@@ -167,6 +176,7 @@ async def _download_generator(request: Request):
     for idx, model_cfg in enumerate(downloadable):
         # 客户端断开时停止
         if await request.is_disconnected():
+            logger.warning("[一键下载] 客户端断开连接，终止下载")
             break
 
         mid = model_cfg["id"]
@@ -174,21 +184,28 @@ async def _download_generator(request: Request):
         provider = model_cfg.get("provider", "")
 
         # 检测当前状态
+        logger.debug(f"[一键下载] 检测 ({idx + 1}/{len(downloadable)}): {name}")
         result = await loop.run_in_executor(None, checker.check_model, mid)
 
         if result.status == "ok":
             skip_count += 1
-            logger.debug(f"[一键下载] 跳过 {name}（已存在）")
+            logger.info(f"[一键下载] 已存在，跳过 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
                 "status": "skipped", "message": f"已存在，跳过 ({result.message})"
             })
             continue
 
+        if result.status == "corrupted":
+            logger.warning(f"[一键下载] 文件损坏，重新下载 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
+        elif result.status == "partial":
+            logger.warning(f"[一键下载] 下载不完整，重新下载 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
+        else:
+            logger.info(f"[一键下载] 缺失，开始下载 ({idx + 1}/{len(downloadable)}): {name}")
+
         # 开始下载 — 通过 asyncio.Queue 从工作线程接收进度
         progress_queue: asyncio.Queue = asyncio.Queue()
 
-        logger.info(f"[一键下载] 开始下载：{name} ({idx + 1}/{len(downloadable)})")
         yield _sse("model", {
             "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
             "status": "downloading", "message": "准备下载...",
@@ -200,12 +217,16 @@ async def _download_generator(request: Request):
             loop.call_soon_threadsafe(progress_queue.put_nowait, data)
 
         if provider == "rembg":
+            logger.info(f"[一键下载] 使用 rembg 下载 ONNX 权重: {name}")
             future = loop.run_in_executor(None, _download_rembg, model_cfg, _put)
         elif model_cfg.get("local_path") and model_cfg.get("download_url") and not model_cfg.get("hf_model_id"):
+            logger.info(f"[一键下载] 直接下载权重文件: {name} → {model_cfg['local_path']}")
             future = loop.run_in_executor(None, _download_direct, model_cfg, _put)
         elif model_cfg.get("hf_model_id"):
+            logger.info(f"[一键下载] 从 HuggingFace 下载: {name} (repo: {model_cfg['hf_model_id']})")
             future = loop.run_in_executor(None, _download_hf, model_cfg, _put)
         else:
+            logger.warning(f"[一键下载] 无下载来源，跳过: {name} (id={mid}, provider={provider})")
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
                 "status": "skipped", "message": "无下载来源，跳过"
@@ -213,27 +234,29 @@ async def _download_generator(request: Request):
             skip_count += 1
             continue
 
-        # 边等待 future 完成，边消费 queue 中的进度消息
-        _SENTINEL = object()
-
-        async def _drain():
-            while True:
-                try:
-                    item = progress_queue.get_nowait()
-                    if item is _SENTINEL:
-                        break
-                    yield item
-                except asyncio.QueueEmpty:
-                    await asyncio.sleep(0.3)
-
         try:
             # 持续消费进度，直到 future 结束
+            _last_log_pct = -1
             while not future.done():
                 await asyncio.sleep(0.2)
                 # 消费当前 queue 中所有待处理的进度消息
                 while not progress_queue.empty():
                     item = progress_queue.get_nowait()
                     if isinstance(item, dict):
+                        # 每 10% 向日志写一次进度（避免日志刷屏）
+                        msg = item.get("message", "")
+                        if "%" in msg:
+                            try:
+                                pct = int(msg.split("%")[0].split()[-1])
+                                if pct // 10 > _last_log_pct // 10:
+                                    _last_log_pct = pct
+                                    logger.debug(
+                                        f"[下载进度] {name}: {pct}%"
+                                        f" {item.get('downloaded','')} / {item.get('total_size','')}"
+                                        f" @ {item.get('speed','')}"
+                                    )
+                            except (ValueError, IndexError):
+                                pass
                         yield _sse("model", {
                             "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
                             "status": "downloading",
@@ -256,7 +279,7 @@ async def _download_generator(request: Request):
                 raise exc
 
             ok_count += 1
-            logger.info(f"[一键下载] 完成：{name}")
+            logger.info(f"[一键下载] ✓ 下载完成 ({idx + 1}/{len(downloadable)}): {name}")
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
                 "status": "done", "message": "下载完成",
@@ -265,7 +288,7 @@ async def _download_generator(request: Request):
 
         except Exception as e:
             fail_count += 1
-            logger.error(f"[一键下载] 失败：{name} — {e}", exc_info=True)
+            logger.error(f"[一键下载] ✗ 下载失败 ({idx + 1}/{len(downloadable)}): {name} — {e}", exc_info=True)
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
                 "status": "error", "message": f"下载失败: {str(e)[:200]}",
@@ -315,30 +338,36 @@ def _download_rembg(cfg: dict, progress_cb=None) -> None:
     # 支持 GitHub 镜像加速（如 https://mirror.ghproxy.com）
     github_mirror = get_config("network.github_mirror", "").rstrip("/")
     if github_mirror:
-        # 将原始 GitHub URL 拼接到镜像前面
-        # e.g. https://mirror.ghproxy.com/https://github.com/...
         url = f"{github_mirror}/{github_url}"
+        logger.info(f"[rembg 下载] 使用镜像加速: {github_mirror} → {onnx_filename}")
     else:
         url = github_url
+        logger.info(f"[rembg 下载] 直接下载: {onnx_filename}")
 
     u2net_home = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
     u2net_home.mkdir(parents=True, exist_ok=True)
     dest = u2net_home / onnx_filename
+
+    logger.debug(f"[rembg 下载] 目标路径: {dest}")
 
     # 文件已存在且大小合理则跳过（避免重复下载）
     size_mb = cfg.get("size_mb", 0) or 0
     if dest.exists() and size_mb:
         existing_mb = dest.stat().st_size / (1024 * 1024)
         if existing_mb >= size_mb * 0.5:
+            logger.info(f"[rembg 下载] 文件已存在（{existing_mb:.0f} MB），跳过: {onnx_filename}")
             if progress_cb:
                 progress_cb({"message": f"文件已存在，跳过", "speed": "", "downloaded": "", "total_size": ""})
             return
 
+    logger.info(f"[rembg 下载] 开始下载: {url}")
     req = urllib.request.Request(url, headers={"User-Agent": "HiImage/2.0"})
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
             content_length = resp.headers.get("Content-Length")
             total_bytes = int(content_length) if content_length else 0
+            if total_bytes:
+                logger.info(f"[rembg 下载] 文件大小: {_fmt_size(total_bytes)}")
 
             downloaded = 0
             start_time = time.monotonic()
@@ -366,13 +395,23 @@ def _download_rembg(cfg: dict, progress_cb=None) -> None:
                             "downloaded": _fmt_size(downloaded),
                             "total_size": _fmt_size(total_bytes) if total_bytes else "?",
                         })
+
+        elapsed_total = time.monotonic() - start_time
+        avg_speed = downloaded / elapsed_total if elapsed_total > 0 else 0
+        logger.info(
+            f"[rembg 下载] 完成: {onnx_filename}"
+            f" ({_fmt_size(downloaded)}, 耗时 {elapsed_total:.1f}s, 均速 {_fmt_speed(avg_speed)})"
+        )
+
     except Exception as e:
         # 下载失败时删除可能的残缺文件
         if dest.exists():
             try:
                 dest.unlink()
+                logger.warning(f"[rembg 下载] 已删除残缺文件: {dest}")
             except OSError:
                 pass
+        logger.error(f"[rembg 下载] 失败: {onnx_filename} — {e}")
         raise RuntimeError(
             f"下载 {onnx_filename} 失败: {e}\n"
             f"原始地址: {github_url}\n"
@@ -398,12 +437,17 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
     hf_cache = str(Path(MODELS_DIR) / "huggingface")
     token = os.environ.get("HF_TOKEN") or None
     repo_id = cfg["hf_model_id"]
+    name = cfg.get("name", repo_id)
+
+    hf_endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+    logger.info(f"[HF 下载] 开始: {name} (repo: {repo_id}, endpoint: {hf_endpoint})")
 
     IGNORE_SUFFIXES = {".msgpack", ".h5"}
     IGNORE_PREFIXES = ("flax_model", "tf_model")
 
     try:
         # 获取文件列表
+        logger.info(f"[HF 下载] 获取文件列表: {repo_id}")
         try:
             all_files = list(list_repo_files(repo_id, token=token))
         except GatedRepoError:
@@ -424,16 +468,22 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
             and not any(f.startswith(p) for p in IGNORE_PREFIXES)
         ]
 
+        logger.info(f"[HF 下载] 共 {len(files)} 个文件需要下载 (过滤掉 {len(all_files) - len(files)} 个): {repo_id}")
+
         # 构建本地缓存目录（简化路径，不用 huggingface_hub 复杂的 blob 结构）
         repo_dir = Path(hf_cache) / "manual" / repo_id.replace("/", "--")
         repo_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"[HF 下载] 本地缓存目录: {repo_dir}")
 
         total_files = len(files)
+        skipped_files = 0
         for file_idx, filename in enumerate(files):
             dest = repo_dir / filename
             dest.parent.mkdir(parents=True, exist_ok=True)
 
             if dest.exists():
+                skipped_files += 1
+                logger.debug(f"[HF 下载] 已存在，跳过 ({file_idx + 1}/{total_files}): {filename}")
                 if progress_cb:
                     progress_cb({
                         "message": f"文件已存在，跳过 ({file_idx + 1}/{total_files}): {filename}",
@@ -446,42 +496,69 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
             if token:
                 headers["Authorization"] = f"Bearer {token}"
 
+            logger.info(f"[HF 下载] 下载文件 ({file_idx + 1}/{total_files}): {filename}")
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=300) as resp:
-                content_length = resp.headers.get("Content-Length")
-                total_bytes = int(content_length) if content_length else 0
+            try:
+                with urllib.request.urlopen(req, timeout=300) as resp:
+                    content_length = resp.headers.get("Content-Length")
+                    total_bytes = int(content_length) if content_length else 0
+                    if total_bytes:
+                        logger.debug(f"[HF 下载] 文件大小: {_fmt_size(total_bytes)} — {filename}")
 
-                downloaded = 0
-                start_time = time.monotonic()
-                last_report_time = start_time
-                last_report_bytes = 0
+                    downloaded = 0
+                    start_time = time.monotonic()
+                    last_report_time = start_time
+                    last_report_bytes = 0
 
-                with open(dest, "wb") as f:
-                    while True:
-                        chunk = resp.read(256 * 1024)  # 256KB chunks
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        downloaded += len(chunk)
+                    with open(dest, "wb") as f:
+                        while True:
+                            chunk = resp.read(256 * 1024)  # 256KB chunks
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                            downloaded += len(chunk)
 
-                        now = time.monotonic()
-                        elapsed_since_last = now - last_report_time
-                        if elapsed_since_last >= 0.5 and progress_cb:  # 每 0.5s 推一次
-                            speed = (downloaded - last_report_bytes) / elapsed_since_last
-                            last_report_time = now
-                            last_report_bytes = downloaded
+                            now = time.monotonic()
+                            elapsed_since_last = now - last_report_time
+                            if elapsed_since_last >= 0.5 and progress_cb:  # 每 0.5s 推一次
+                                speed = (downloaded - last_report_bytes) / elapsed_since_last
+                                last_report_time = now
+                                last_report_bytes = downloaded
 
-                            pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
-                            progress_cb({
-                                "message": f"({file_idx + 1}/{total_files}) {filename} {pct}",
-                                "speed": _fmt_speed(speed),
-                                "downloaded": _fmt_size(downloaded),
-                                "total_size": _fmt_size(total_bytes) if total_bytes else "?",
-                            })
+                                pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
+                                progress_cb({
+                                    "message": f"({file_idx + 1}/{total_files}) {filename} {pct}",
+                                    "speed": _fmt_speed(speed),
+                                    "downloaded": _fmt_size(downloaded),
+                                    "total_size": _fmt_size(total_bytes) if total_bytes else "?",
+                                })
+
+                    elapsed_file = time.monotonic() - start_time
+                    avg_speed = downloaded / elapsed_file if elapsed_file > 0 else 0
+                    logger.info(
+                        f"[HF 下载] 文件完成 ({file_idx + 1}/{total_files}): {filename}"
+                        f" ({_fmt_size(downloaded)}, {elapsed_file:.1f}s, {_fmt_speed(avg_speed)})"
+                    )
+            except Exception as file_err:
+                # 删除残缺文件
+                if dest.exists():
+                    try:
+                        dest.unlink()
+                        logger.warning(f"[HF 下载] 已删除残缺文件: {dest}")
+                    except OSError:
+                        pass
+                logger.error(f"[HF 下载] 文件下载失败 ({file_idx + 1}/{total_files}): {filename} — {file_err}")
+                raise RuntimeError(f"下载文件 {filename} 失败: {file_err}") from file_err
+
+        if skipped_files == total_files:
+            logger.info(f"[HF 下载] 所有文件已存在，无需下载: {name}")
+        else:
+            logger.info(f"[HF 下载] 全部完成: {name} ({total_files - skipped_files} 个新下载, {skipped_files} 个已存在)")
 
     except RuntimeError:
         raise
     except Exception as e:
+        logger.error(f"[HF 下载] 未预期错误: {name} — {e}")
         raise RuntimeError(str(e)) from e
 
 
@@ -495,39 +572,63 @@ def _download_direct(cfg: dict, progress_cb=None) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     url = cfg["download_url"]
+    name = cfg.get("name", cfg.get("id", url))
+    logger.info(f"[直接下载] 开始: {name} → {dest.name} ({url})")
+
     req = urllib.request.Request(url, headers={"User-Agent": "HiImage/2.0"})
 
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        content_length = resp.headers.get("Content-Length")
-        total_bytes = int(content_length) if content_length else 0
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            content_length = resp.headers.get("Content-Length")
+            total_bytes = int(content_length) if content_length else 0
+            if total_bytes:
+                logger.info(f"[直接下载] 文件大小: {_fmt_size(total_bytes)} — {dest.name}")
 
-        downloaded = 0
-        start_time = time.monotonic()
-        last_report_time = start_time
-        last_report_bytes = 0
+            downloaded = 0
+            start_time = time.monotonic()
+            last_report_time = start_time
+            last_report_bytes = 0
 
-        with open(dest, "wb") as f:
-            while True:
-                chunk = resp.read(256 * 1024)  # 256KB chunks
-                if not chunk:
-                    break
-                f.write(chunk)
-                downloaded += len(chunk)
+            with open(dest, "wb") as f:
+                while True:
+                    chunk = resp.read(256 * 1024)  # 256KB chunks
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
 
-                now = time.monotonic()
-                elapsed_since_last = now - last_report_time
-                if elapsed_since_last >= 0.5 and progress_cb:
-                    speed = (downloaded - last_report_bytes) / elapsed_since_last
-                    last_report_time = now
-                    last_report_bytes = downloaded
+                    now = time.monotonic()
+                    elapsed_since_last = now - last_report_time
+                    if elapsed_since_last >= 0.5 and progress_cb:
+                        speed = (downloaded - last_report_bytes) / elapsed_since_last
+                        last_report_time = now
+                        last_report_bytes = downloaded
 
-                    pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
-                    progress_cb({
-                        "message": pct,
-                        "speed": _fmt_speed(speed),
-                        "downloaded": _fmt_size(downloaded),
-                        "total_size": _fmt_size(total_bytes) if total_bytes else "?",
-                    })
+                        pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
+                        progress_cb({
+                            "message": pct,
+                            "speed": _fmt_speed(speed),
+                            "downloaded": _fmt_size(downloaded),
+                            "total_size": _fmt_size(total_bytes) if total_bytes else "?",
+                        })
+
+        elapsed_total = time.monotonic() - start_time
+        avg_speed = downloaded / elapsed_total if elapsed_total > 0 else 0
+        logger.info(
+            f"[直接下载] 完成: {dest.name}"
+            f" ({_fmt_size(downloaded)}, 耗时 {elapsed_total:.1f}s, 均速 {_fmt_speed(avg_speed)})"
+        )
+
+    except Exception as e:
+        # 删除残缺文件
+        if dest.exists():
+            try:
+                dest.unlink()
+                logger.warning(f"[直接下载] 已删除残缺文件: {dest}")
+            except OSError:
+                pass
+        logger.error(f"[直接下载] 失败: {dest.name} — {e}")
+        raise
 
 
 @router.get("/download")
@@ -563,11 +664,15 @@ async def _download_single_generator(request: Request, model_id: str):
         })
         return
 
-    # IOPaint 内置模型无需下载
+    # IOPaint cli 模型：首次使用由 iopaint 自动下载，此接口无法主动触发
     if cfg.get("provider") == "IOPaint" and cfg.get("iopaint_mode") == "cli":
+        logger.info(
+            f"[单模型下载] 跳过 IOPaint cli 模型: {name}"
+            f"（iopaint 将在首次使用时自动下载权重，size_mb={cfg.get('size_mb')} MB）"
+        )
         yield _sse("finish", {
             "ok": 0, "skipped": 1, "failed": 0,
-            "message": "内置模型无需下载"
+            "message": "IOPaint 内置模型将在首次使用时自动下载，无需手动触发"
         })
         return
 
@@ -582,7 +687,7 @@ async def _download_single_generator(request: Request, model_id: str):
     # 检测当前状态
     result = await loop.run_in_executor(None, checker.check_model, model_id)
     if result.status == "ok":
-        logger.debug(f"[单模型下载] 跳过 {name}（已存在）")
+        logger.info(f"[单模型下载] 已存在，跳过: {name} — {result.message}")
         yield _sse("model", {
             "id": model_id, "name": name, "index": 1, "total": 1,
             "status": "skipped", "message": f"已存在，跳过 ({result.message})"
@@ -602,12 +707,16 @@ async def _download_single_generator(request: Request, model_id: str):
         loop.call_soon_threadsafe(progress_queue.put_nowait, data)
 
     if provider == "rembg":
+        logger.info(f"[单模型下载] 使用 rembg 下载 ONNX 权重: {name}")
         future = loop.run_in_executor(None, _download_rembg, cfg, _put)
     elif cfg.get("local_path") and cfg.get("download_url") and not cfg.get("hf_model_id"):
+        logger.info(f"[单模型下载] 直接下载权重文件: {name} → {cfg['local_path']}")
         future = loop.run_in_executor(None, _download_direct, cfg, _put)
     elif cfg.get("hf_model_id"):
+        logger.info(f"[单模型下载] 从 HuggingFace 下载: {name} (repo: {cfg['hf_model_id']})")
         future = loop.run_in_executor(None, _download_hf, cfg, _put)
     else:
+        logger.warning(f"[单模型下载] 无下载来源，跳过: {name} (id={model_id}, provider={provider})")
         yield _sse("model", {
             "id": model_id, "name": name, "index": 1, "total": 1,
             "status": "skipped", "message": "无下载来源，跳过"
