@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, type MutableRefObject } from 'react'
 import { CheckCircle2, XCircle, AlertCircle, Loader2, Trash2, RefreshCw, Package, Download, ChevronDown, ChevronUp } from 'lucide-react'
 import { clsx } from 'clsx'
 import { showToast } from '../components/ui'
@@ -55,6 +55,118 @@ const BADGE_COLOR: Record<string, string> = {
   动漫:   'bg-pink-500/20 text-pink-400',
 }
 
+// ── 模块级 SSE 单例（生命周期独立于组件，切换页签不中断）────────────────────
+// 一键下载连接
+let globalEsRef: EventSource | null = null
+// 单模型下载连接（key = model id）
+const globalRowEsRef: Record<string, EventSource> = {}
+
+// 存储具名事件处理函数引用，确保 removeEventListener 能精准移除旧监听
+type AllHandlers = { start?: (e: Event) => void; model?: (e: Event) => void; finish?: (e: Event) => void }
+let globalEsHandlers: AllHandlers = {}
+
+type RowHandlers = { model?: (e: Event) => void; finish?: (e: Event) => void }
+const globalRowEsHandlers: Record<string, RowHandlers> = {}
+
+/** 为一键下载 EventSource 绑定事件监听（可重复调用以接管已有连接） */
+function bindDownloadAllListeners(
+  es: EventSource,
+  loadModelsRef: MutableRefObject<() => void>,
+) {
+  // 移除旧的具名监听（防止重复注册堆积）
+  if (globalEsHandlers.start)  es.removeEventListener('start',  globalEsHandlers.start)
+  if (globalEsHandlers.model)  es.removeEventListener('model',  globalEsHandlers.model)
+  if (globalEsHandlers.finish) es.removeEventListener('finish', globalEsHandlers.finish)
+  es.onerror = null
+
+  globalEsHandlers.start = (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    useSettingsStore.getState().setDownloadTotal(data.total)
+    useSettingsStore.getState().setDownloadSummary(data.message)
+  }
+  globalEsHandlers.model = (e) => {
+    const item = JSON.parse((e as MessageEvent).data)
+    useSettingsStore.getState().setDownloadModels((prev) => {
+      const idx = prev.findIndex((m) => m.id === item.id)
+      if (idx >= 0) { const next = [...prev]; next[idx] = item; return next }
+      return [...prev, item]
+    })
+  }
+  globalEsHandlers.finish = (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    useSettingsStore.getState().setDownloadSummary(data.message)
+    useSettingsStore.getState().setDownloadStatus(data.failed > 0 ? 'error' : 'done')
+    es.close(); globalEsRef = null; globalEsHandlers = {}
+    loadModelsRef.current()
+  }
+
+  es.addEventListener('start',  globalEsHandlers.start)
+  es.addEventListener('model',  globalEsHandlers.model)
+  es.addEventListener('finish', globalEsHandlers.finish)
+  es.onerror = () => {
+    useSettingsStore.getState().setDownloadModels((prev) =>
+      prev.map((item) =>
+        item.status === 'downloading'
+          ? { ...item, status: 'error', message: '连接中断', speed: '', downloaded: '', total_size: '' }
+          : item
+      )
+    )
+    useSettingsStore.getState().setDownloadSummary('连接中断，请检查后端是否在运行')
+    useSettingsStore.getState().setDownloadStatus('error')
+    es.close(); globalEsRef = null; globalEsHandlers = {}
+  }
+}
+
+/** 为单模型 EventSource 绑定事件监听（可重复调用以接管已有连接） */
+function bindRowListeners(
+  es: EventSource,
+  mid: string,
+  loadModelsRef: MutableRefObject<() => void>,
+) {
+  // 移除旧的具名监听（防止重复注册堆积）
+  const prev = globalRowEsHandlers[mid]
+  if (prev?.model)  es.removeEventListener('model',  prev.model)
+  if (prev?.finish) es.removeEventListener('finish', prev.finish)
+  es.onerror = null
+
+  const handlers: RowHandlers = {}
+  globalRowEsHandlers[mid] = handlers
+
+  handlers.model = (e) => {
+    const item = JSON.parse((e as MessageEvent).data)
+    useSettingsStore.getState().setRowDownload(mid, {
+      status: item.status === 'error' ? 'error' : item.status === 'done' || item.status === 'skipped' ? 'done' : 'downloading',
+      message: item.message ?? '',
+      speed: item.speed ?? '',
+      downloaded: item.downloaded ?? '',
+      total_size: item.total_size ?? '',
+    })
+  }
+  handlers.finish = (e) => {
+    const data = JSON.parse((e as MessageEvent).data)
+    const finalStatus = data.failed > 0 ? 'error' : 'done'
+    useSettingsStore.getState().setRowDownload(mid, {
+      status: finalStatus, message: data.message, speed: '', downloaded: '', total_size: '',
+    })
+    es.close(); delete globalRowEsRef[mid]; delete globalRowEsHandlers[mid]
+    if (finalStatus === 'done') {
+      showToast('success', data.message)
+      setTimeout(() => loadModelsRef.current(), 500)
+    } else {
+      showToast('error', data.message)
+    }
+  }
+
+  es.addEventListener('model',  handlers.model)
+  es.addEventListener('finish', handlers.finish)
+  es.onerror = () => {
+    useSettingsStore.getState().setRowDownload(mid, {
+      status: 'error', message: '连接中断', speed: '', downloaded: '', total_size: '',
+    })
+    es.close(); delete globalRowEsRef[mid]; delete globalRowEsHandlers[mid]
+  }
+}
+
 // ── 主组件 ────────────────────────────────────────────────────────────────────
 
 export default function ModelManager() {
@@ -68,9 +180,6 @@ export default function ModelManager() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
-  // SSE 连接引用（组件本地，不需要持久化）
-  const rowEsRef = useRef<Record<string, EventSource>>({})
-
   // 下载相关（从全局 store 读取，跨页签保持）
   const downloadStatus = store.downloadStatus
   const downloadModels = store.downloadModels
@@ -80,7 +189,8 @@ export default function ModelManager() {
   // 单模型行内下载状态（从全局 store 读取，跨页签保持）
   const rowDownloads = store.rowDownloads
   const downloadListRef = useRef<HTMLDivElement>(null)
-  const esRef = useRef<EventSource | null>(null)
+  // loadModels 引用转发（让模块级 SSE 回调始终调用最新的 loadModels）
+  const loadModelsRef = useRef<() => void>(() => {})
 
   // ── 加载模型列表 ──────────────────────────────────────────────────────────
 
@@ -102,35 +212,58 @@ export default function ModelManager() {
     }
   }, [backendURL])
 
+  // 始终同步最新的 loadModels 到 ref，供模块级 SSE 回调使用
+  useEffect(() => { loadModelsRef.current = loadModels }, [loadModels])
+
   useEffect(() => { loadModels() }, [loadModels])
 
-  // ── 组件挂载时：检查后台仍在"下载中"的模型是否已完成 ──────────────────────
+  // ── 组件挂载时：接管后台正在运行的 SSE 连接 & 恢复孤立的行内下载状态 ───────
 
   useEffect(() => {
-    const checkPending = async () => {
-      const pending = Object.entries(useSettingsStore.getState().rowDownloads)
-        .filter(([, v]) => v.status === 'downloading')
-      if (pending.length === 0) return
-
+    const resume = async () => {
       const url = window.electronAPI?.getBackendURL
         ? await window.electronAPI.getBackendURL()
         : backendURL
 
-      for (const [mid] of pending) {
+      // 1. 一键下载：连接仍 OPEN，重新绑定事件监听
+      if (globalEsRef && globalEsRef.readyState !== EventSource.CLOSED) {
+        bindDownloadAllListeners(globalEsRef, loadModelsRef)
+      }
+
+      // 2. 单模型：重新绑定已有 OPEN 连接的监听器
+      for (const [mid, es] of Object.entries(globalRowEsRef)) {
+        if (es.readyState !== EventSource.CLOSED) {
+          bindRowListeners(es, mid, loadModelsRef)
+        } else {
+          delete globalRowEsRef[mid]
+        }
+      }
+
+      // 3. 行内 downloading 状态但已无对应连接 → 查询实际状态
+      const orphaned = Object.entries(useSettingsStore.getState().rowDownloads)
+        .filter(([mid, v]) => v.status === 'downloading' && !globalRowEsRef[mid])
+      for (const [mid] of orphaned) {
         try {
           const res = await fetch(`${url}/api/models/health/${encodeURIComponent(mid)}`)
-          if (!res.ok) continue
+          if (!res.ok) throw new Error()
           const data = await res.json()
           if (data.status === 'ok') {
             useSettingsStore.getState().setRowDownload(mid, {
               status: 'done', message: '下载完成', speed: '', downloaded: '', total_size: '',
             })
+          } else {
+            useSettingsStore.getState().setRowDownload(mid, {
+              status: 'error', message: '下载未完成，请重试', speed: '', downloaded: '', total_size: '',
+            })
           }
-          // 如果还是 missing，保持 downloading 状态（可能仍在后台下载）
-        } catch { /* 忽略检查失败 */ }
+        } catch {
+          useSettingsStore.getState().setRowDownload(mid, {
+            status: 'error', message: '状态检查失败，请重试', speed: '', downloaded: '', total_size: '',
+          })
+        }
       }
     }
-    checkPending()
+    resume()
   }, [backendURL])
 
   // ── 单模型下载逻辑 ────────────────────────────────────────────────────────
@@ -142,48 +275,21 @@ export default function ModelManager() {
 
   /** 建立单模型 SSE 连接（新下载 or 切换页签后重连） */
   const connectRowSSE = useCallback(async (mid: string) => {
-    // 已有连接则不重复建立
-    if (rowEsRef.current[mid]) return
+    // 已有 OPEN 连接则不重复建立
+    if (globalRowEsRef[mid] && globalRowEsRef[mid].readyState !== EventSource.CLOSED) return
 
     const url = await getBackendUrl()
     const es = new EventSource(`${url}/api/models/download/${encodeURIComponent(mid)}`)
-    rowEsRef.current[mid] = es
-
-    es.addEventListener('model', (e) => {
-      const item = JSON.parse(e.data)
-      useSettingsStore.getState().setRowDownload(mid, {
-        status: item.status === 'error' ? 'error' : item.status === 'done' || item.status === 'skipped' ? 'done' : 'downloading',
-        message: item.message ?? '',
-        speed: item.speed ?? '',
-        downloaded: item.downloaded ?? '',
-        total_size: item.total_size ?? '',
-      })
-    })
-    es.addEventListener('finish', (e) => {
-      const data = JSON.parse(e.data)
-      const finalStatus = data.failed > 0 ? 'error' : 'done'
-      useSettingsStore.getState().setRowDownload(mid, { status: finalStatus, message: data.message, speed: '', downloaded: '', total_size: '' })
-      es.close(); delete rowEsRef.current[mid]
-      if (finalStatus === 'done') {
-        showToast('success', data.message)
-        setTimeout(loadModels, 500)
-      } else {
-        showToast('error', data.message)
-      }
-    })
-    es.onerror = () => {
-      // SSE 连接失败（服务端下载还没开始时可能触发）——标记错误
-      useSettingsStore.getState().setRowDownload(mid, { status: 'error', message: '连接中断', speed: '', downloaded: '', total_size: '' })
-      es.close(); delete rowEsRef.current[mid]
-    }
-  }, [backendURL, loadModels])
+    globalRowEsRef[mid] = es
+    bindRowListeners(es, mid, loadModelsRef)
+  }, [backendURL])
 
   const handleDownloadSingle = async (model: ModelEntry) => {
     const mid = model.id
     // 已在下载中则忽略
     if (rowDownloads[mid]?.status === 'downloading') return
     // 关闭旧连接
-    if (rowEsRef.current[mid]) { rowEsRef.current[mid].close(); delete rowEsRef.current[mid] }
+    if (globalRowEsRef[mid]) { globalRowEsRef[mid].close(); delete globalRowEsRef[mid] }
 
     store.setRowDownload(mid, { status: 'downloading', message: '准备下载...', speed: '', downloaded: '', total_size: '' })
     connectRowSSE(mid)
@@ -193,7 +299,7 @@ export default function ModelManager() {
 
   const handleDownloadAll = async () => {
     if (downloadStatus === 'running') return
-    if (esRef.current) { esRef.current.close(); esRef.current = null }
+    if (globalEsRef) { globalEsRef.close(); globalEsRef = null }
 
     store.setDownloadStatus('running')
     store.setDownloadModels([])
@@ -202,63 +308,38 @@ export default function ModelManager() {
 
     const url = await getBackendUrl()
     const es = new EventSource(`${url}/api/models/download`)
-    esRef.current = es
-
-    es.addEventListener('start', (e) => {
-      const data = JSON.parse(e.data)
-      store.setDownloadTotal(data.total)
-      store.setDownloadSummary(data.message)
-    })
-    es.addEventListener('model', (e) => {
-      const item = JSON.parse(e.data)
-      store.setDownloadModels((prev) => {
-        const idx = prev.findIndex((m) => m.id === item.id)
-        if (idx >= 0) { const next = [...prev]; next[idx] = item; return next }
-        return [...prev, item]
-      })
-      setTimeout(() => {
-        if (downloadListRef.current)
-          downloadListRef.current.scrollTop = downloadListRef.current.scrollHeight
-      }, 50)
-    })
-    es.addEventListener('finish', (e) => {
-      const data = JSON.parse(e.data)
-      store.setDownloadSummary(data.message)
-      store.setDownloadStatus(data.failed > 0 ? 'error' : 'done')
-      es.close(); esRef.current = null
-      // 下载完成后刷新状态列表
-      loadModels()
-    })
-    es.onerror = () => {
-      store.setDownloadSummary('连接中断，请检查后端是否在运行')
-      store.setDownloadStatus('error')
-      es.close(); esRef.current = null
-    }
+    globalEsRef = es
+    bindDownloadAllListeners(es, loadModelsRef)
   }
 
-  // 组件卸载时关闭 SSE（状态保留在 store）
-  useEffect(() => {
-    return () => {
-      if (esRef.current) {
-        esRef.current.close()
-        if (useSettingsStore.getState().downloadStatus === 'running') {
-          useSettingsStore.getState().setDownloadStatus('error')
-          useSettingsStore.getState().setDownloadSummary('连接已断开，请重新下载')
-        }
-      }
-      // 仅关闭 SSE 连接，不修改行内下载状态
-      // 对仍在 downloading 的行，清空速度/进度字段（后台进行中，无实时数据）
-      Object.entries(rowEsRef.current).forEach(([mid, es]) => {
-        es.close()
-        const cur = useSettingsStore.getState().rowDownloads[mid]
-        if (cur?.status === 'downloading') {
-          useSettingsStore.getState().setRowDownload(mid, {
-            message: '后台下载中，切回页面后可刷新查看结果', speed: '', downloaded: '', total_size: '',
-          })
-        }
-      })
-      rowEsRef.current = {}
+  // ── 取消一键下载 ────────────────────────────────────────────────────────────
+
+  const handleCancelDownloadAll = useCallback(() => {
+    if (globalEsRef) {
+      globalEsRef.close()
+      globalEsRef = null
     }
+    useSettingsStore.getState().setDownloadModels((prev) =>
+      prev.map((item) =>
+        item.status === 'downloading'
+          ? { ...item, status: 'error', message: '已取消', speed: '', downloaded: '', total_size: '' }
+          : item
+      )
+    )
+    store.setDownloadStatus('error')
+    store.setDownloadSummary('下载已取消')
+  }, [store])
+
+  // ── 取消单模型下载 ────────────────────────────────────────────────────────
+
+  const handleCancelSingle = useCallback((mid: string) => {
+    if (globalRowEsRef[mid]) {
+      globalRowEsRef[mid].close()
+      delete globalRowEsRef[mid]
+    }
+    useSettingsStore.getState().setRowDownload(mid, {
+      status: 'error', message: '已取消', speed: '', downloaded: '', total_size: '',
+    })
   }, [])
 
   // ── 分组逻辑 ─────────────────────────────────────────────────────────────
@@ -404,23 +485,24 @@ export default function ModelManager() {
               </button>
             )}
 
-            {/* 一键下载按钮 */}
-            <button
-              onClick={handleDownloadAll}
-              disabled={downloadStatus === 'running'}
-              className={clsx(
-                'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
-                downloadStatus === 'running'
-                  ? 'bg-bg-hover text-fg-secondary cursor-not-allowed'
-                  : 'bg-border-focus text-white hover:bg-blue-600'
-              )}
-            >
-              {downloadStatus === 'running'
-                ? <Loader2 size={12} className="animate-spin" />
-                : <Download size={12} />
-              }
-              {downloadStatus === 'running' ? '下载中...' : '一键下载全部'}
-            </button>
+            {/* 一键下载 / 取消 按钮 */}
+            {downloadStatus === 'running' ? (
+              <button
+                onClick={handleCancelDownloadAll}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors bg-status-error/20 text-status-error hover:bg-status-error/30"
+              >
+                <XCircle size={12} />
+                取消下载
+              </button>
+            ) : (
+              <button
+                onClick={handleDownloadAll}
+                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors bg-border-focus text-white hover:bg-blue-600"
+              >
+                <Download size={12} />
+                一键下载全部
+              </button>
+            )}
 
             <button
               onClick={loadModels}
@@ -522,6 +604,7 @@ export default function ModelManager() {
                   isConfirming={confirmDeleteId === model.id}
                   rowDownload={rowDownloads[model.id] ?? defaultRowState}
                   onDownload={(e) => { e.stopPropagation(); handleDownloadSingle(model) }}
+                  onCancel={(e) => { e.stopPropagation(); handleCancelSingle(model.id) }}
                   onDelete={(e) => { e.stopPropagation(); handleDelete(model) }}
                   onCancelConfirm={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
                 />
@@ -571,13 +654,14 @@ function GroupItem({
 // ── 模型行 ────────────────────────────────────────────────────────────────────
 
 function ModelRow({
-  model, isDeleting, isConfirming, rowDownload, onDownload, onDelete, onCancelConfirm,
+  model, isDeleting, isConfirming, rowDownload, onDownload, onCancel, onDelete, onCancelConfirm,
 }: {
   model: ModelEntry
   isDeleting: boolean
   isConfirming: boolean
   rowDownload: RowDownloadState
   onDownload: (e: React.MouseEvent) => void
+  onCancel: (e: React.MouseEvent) => void
   onDelete: (e: React.MouseEvent) => void
   onCancelConfirm: (e: React.MouseEvent) => void
 }) {
@@ -716,9 +800,15 @@ function ModelRow({
           </button>
         )}
 
-        {/* 下载中 spinner */}
+        {/* 下载中：取消按钮 */}
         {isRowDownloading && (
-          <Loader2 size={13} className="animate-spin text-fg-secondary mx-1.5" />
+          <button
+            onClick={onCancel}
+            title="取消下载"
+            className="p-1.5 rounded text-fg-secondary hover:text-status-error hover:bg-status-error/10 transition-colors"
+          >
+            <XCircle size={13} />
+          </button>
         )}
 
         {/* 删除区域 */}
