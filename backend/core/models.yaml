@@ -314,8 +314,8 @@ models:
     requires_reference: false
     size_mb: 4500
     badge: 推荐
-    hf_model_id: Sanster/PowerPaint-V2-brush
-    download_url: https://huggingface.co/Sanster/PowerPaint-V2-brush
+    hf_model_id: Sanster/PowerPaint_v2
+    download_url: https://huggingface.co/Sanster/PowerPaint_v2
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_region, texture, style]
@@ -329,8 +329,9 @@ models:
     requires_reference: true
     size_mb: 500
     badge: ""
-    hf_model_id: Sanster/big-lama
-    download_url: https://huggingface.co/Sanster/big-lama
+    iopaint_model_id: mat
+    iopaint_mode: cli      # IOPaint 首次调用时自动从 GitHub Releases 下载权重
+    download_url: https://github.com/Sanster/models/releases/download/add_mat/Places_512_FullData_G.pth
     supported_params: {}
     features: [inpaint_region]
 
@@ -341,10 +342,10 @@ models:
     description: 大感受野卷积修复，纹理延续自然，速度快，小显存也能跑
     recommended_for: 换装 / 区域修复
     requires_reference: true
-    size_mb: 200
+    size_mb: null           # 内嵌于 iopaint，无独立权重文件
     badge: ""
-    hf_model_id: Sanster/big-lama
-    download_url: https://huggingface.co/Sanster/big-lama
+    iopaint_model_id: lama
+    iopaint_mode: cli       # IOPaint CLI 内置模型，无需单独下载
     supported_params: {}
     features: [inpaint_region]
 
@@ -355,10 +356,10 @@ models:
     description: 基于 Transformer 的结构线修复，布料纹理/格纹/条纹重建出色
     recommended_for: 换装（纹理类服装）
     requires_reference: true
-    size_mb: 200
+    size_mb: null           # 内嵌于 iopaint，无独立权重文件
     badge: ""
-    hf_model_id: Sanster/zits_cleaning
-    download_url: https://huggingface.co/Sanster/zits_cleaning
+    iopaint_model_id: zits
+    iopaint_mode: cli       # IOPaint CLI 内置模型，无需单独下载
     supported_params: {}
     features: [inpaint_region, texture]
 
@@ -386,8 +387,7 @@ models:
     requires_reference: true
     size_mb: 340
     badge: 推荐
-    hf_model_id: xinntao/facexlib
-    download_url: https://github.com/TencentARC/GFPGAN/releases
+    download_url: https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth
     local_path: models/gfpgan/GFPGANv1.4.pth   # 相对于 PROJECT_ROOT
     supported_params:
       <<: *gfpgan
@@ -434,8 +434,8 @@ models:
     requires_reference: false
     size_mb: 4500
     badge: 推荐
-    hf_model_id: Sanster/PowerPaint-V2-brush
-    download_url: https://huggingface.co/Sanster/PowerPaint-V2-brush
+    hf_model_id: Sanster/PowerPaint_v2
+    download_url: https://huggingface.co/Sanster/PowerPaint_v2
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_prompt]

@@ -668,8 +668,8 @@ function ModelRow({
   // IOPaint 内置模型（cli 模式）无文件可删 / 下载
   const isBuiltin = model.provider === 'IOPaint' && model.iopaint_mode === 'cli'
   const canDelete = !isBuiltin && model.status === 'ok'
-  // 非内置 & 非已下载 & 非正在下载 → 可单独下载
-  const canDownload = !isBuiltin && model.status !== 'ok' && rowDownload.status !== 'downloading'
+  // 非内置 & 非已下载 & 下载状态为 idle → 可单独下载
+  const canDownload = !isBuiltin && model.status !== 'ok' && rowDownload.status === 'idle'
   const isRowDownloading = rowDownload.status === 'downloading'
 
   // 计算行内进度百分比
