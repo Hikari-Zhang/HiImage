@@ -277,7 +277,7 @@ models:
   # ── 换装 / 换脸 / 试穿（Inpainting 模型）────────────────────────────────
 
   - id: flux_fill
-    name: FLUX.1-Fill-dev
+    name: FLUX.1-Fill-dev（换装/试穿）
     provider: diffusers
     tags: [outfit_swap, virtual_tryon, face_swap]
     description: FLUX.1 官方 Inpainting 变体，语义理解力极强，细节还原最佳，需 16-24GB VRAM
@@ -307,7 +307,7 @@ models:
     features: [inpaint_region, texture]
 
   - id: powerpaint
-    name: PowerPaint v2
+    name: PowerPaint v2（换装/试穿）
     provider: IOPaint
     tags: [outfit_swap, virtual_tryon]
     description: 多任务 Inpainting，专为局部换装/试穿设计，结构保留优秀
@@ -397,7 +397,7 @@ models:
   # ── 方案A：精准替换（prompt_inpaint）────────────────────────────────────
 
   - id: flux_fill_prompt
-    name: FLUX.1-Fill-dev
+    name: FLUX.1-Fill-dev（文字引导）
     provider: diffusers
     tags: [prompt_inpaint]
     description: FLUX.1 Inpainting，2024 SOTA，文字理解力最强，细节还原极佳，需 16-24GB VRAM
@@ -427,7 +427,7 @@ models:
     features: [inpaint_prompt]
 
   - id: powerpaint_prompt
-    name: PowerPaint v2
+    name: PowerPaint v2（文字引导）
     provider: IOPaint
     tags: [prompt_inpaint]
     description: PowerPaint 文字引导，结构保留佳，替换自然，推荐首选
