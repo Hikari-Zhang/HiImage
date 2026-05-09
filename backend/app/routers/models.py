@@ -506,13 +506,17 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
                     except OSError:
                         pass
                 elif dest.suffix.lower() == ".safetensors":
-                    # 额外验证 safetensors 文件头完整性
+                    # 快速验证文件头（只读 8 字节），避免 safe_open 阻塞大文件
                     header_ok = False
                     try:
-                        from safetensors import safe_open  # type: ignore
-                        with safe_open(str(dest), framework="pt", device="cpu") as _sf:
-                            _ = list(_sf.keys())
-                        header_ok = True
+                        import struct as _struct
+                        with open(str(dest), "rb") as _f:
+                            _hdr = _f.read(8)
+                        if len(_hdr) == 8:
+                            _hlen = _struct.unpack("<Q", _hdr)[0]
+                            header_ok = (0 < _hlen <= 100 * 1024 * 1024)
+                        if not header_ok:
+                            raise ValueError("header length 异常")
                     except Exception as sf_err:
                         logger.warning(
                             f"[HF 下载] safetensors 文件头损坏，删除并重新下载: {filename} — {sf_err}"

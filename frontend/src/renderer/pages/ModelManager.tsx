@@ -78,24 +78,35 @@ export default function ModelManager() {
 
   const downloadListRef = useRef<HTMLDivElement>(null)
   const loadModelsRef = useRef<() => Promise<void>>(async () => {})
+  const loadingRef = useRef(false)  // 防止并发调用堆积
 
   // ── 加载模型列表 ────────────────────────────────────────────────────────────
 
   const loadModels = useCallback(async () => {
+    if (loadingRef.current) return  // 已在加载中，跳过
+    loadingRef.current = true
     setLoading(true)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 15000)  // 15s 超时
     try {
       const url = window.electronAPI?.getBackendURL
         ? await window.electronAPI.getBackendURL()
         : backendURL
-      const res = await fetch(`${url}/api/models/list`)
+      const res = await fetch(`${url}/api/models/list`, { signal: controller.signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json() as { models?: ModelEntry[]; mode_groups?: ModeGroup[] }
       setModels(data.models ?? [])
       setModeGroups(data.mode_groups ?? [])
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      showToast('error', `加载模型列表失败: ${msg}`)
+      if (e instanceof Error && e.name === 'AbortError') {
+        // 超时静默处理，不弹 Toast，loading 会在 finally 里清掉
+      } else {
+        const msg = e instanceof Error ? e.message : String(e)
+        showToast('error', `加载模型列表失败: ${msg}`)
+      }
     } finally {
+      clearTimeout(timer)
+      loadingRef.current = false
       setLoading(false)
     }
   }, [backendURL])
@@ -202,11 +213,11 @@ export default function ModelManager() {
     if (!bulkSession.active) return 'idle'
     if (bulkTasks.some((t) => t.status === 'downloading' || t.status === 'queued')) return 'running'
     if (bulkTasks.some((t) => t.status === 'error')) return 'error'
-    if (bulkTasks.every((t) => t.status === 'done' || t.status === 'cancelled')) return 'done'
+    if (bulkTasks.every((t) => t.status === 'done' || t.status === 'ok' || t.status === 'cancelled')) return 'done'
     return 'running'
   })()
 
-  const doneCount = bulkTasks.filter((t) => t.status === 'done').length
+  const doneCount = bulkTasks.filter((t) => t.status === 'done' || t.status === 'ok').length
   const errorCount = bulkTasks.filter((t) => t.status === 'error').length
 
   // ── 渲染 ─────────────────────────────────────────────────────────────────────
@@ -404,7 +415,7 @@ function BulkTaskRow({ task }: { task: DownloadTask }) {
         <span className="flex-shrink-0">
           {task.status === 'downloading' && <Loader2 size={11} className="animate-spin text-fg-accent" />}
           {task.status === 'queued'      && <Clock size={11} className="text-orange-400" />}
-          {task.status === 'done'        && <CheckCircle2 size={11} className="text-status-success" />}
+          {(task.status === 'done' || task.status === 'ok') && <CheckCircle2 size={11} className="text-status-success" />}
           {task.status === 'error'       && <XCircle size={11} className="text-status-error" />}
           {task.status === 'cancelled'   && <XCircle size={11} className="text-fg-secondary" />}
         </span>

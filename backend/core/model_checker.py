@@ -199,13 +199,19 @@ class ModelChecker:
                         expected_size_mb=size_mb,
                     )
 
-            # .safetensors 文件头验证
+            # .safetensors 文件头验证（只读前 8 字节 header length，避免阻塞大文件）
             for sf in weight_files:
                 if sf.suffix.lower() == ".safetensors":
                     try:
-                        from safetensors import safe_open  # type: ignore
-                        with safe_open(str(sf), framework="pt", device="cpu") as f:
-                            _ = list(f.keys())
+                        with open(str(sf), "rb") as _f:
+                            header_len_bytes = _f.read(8)
+                        if len(header_len_bytes) < 8:
+                            raise ValueError("文件过短，无法读取 header length")
+                        import struct
+                        header_len = struct.unpack("<Q", header_len_bytes)[0]
+                        # header length 合理性检查：不应超过 100MB
+                        if header_len == 0 or header_len > 100 * 1024 * 1024:
+                            raise ValueError(f"header length 异常: {header_len}")
                     except Exception as e:
                         return ModelCheckResult(
                             model_id=cfg["id"],
@@ -356,12 +362,17 @@ class ModelChecker:
                     expected_size_mb=size_mb,
                 )
 
-        # safetensors 文件头验证
+        # safetensors 文件头验证（只读前 8 字节，避免阻塞）
         if path.suffix == ".safetensors":
             try:
-                from safetensors import safe_open  # type: ignore
-                with safe_open(str(path), framework="pt", device="cpu") as f:
-                    _ = list(f.keys())  # 触发 header 解析（不加载 tensor 数据）
+                with open(str(path), "rb") as _f:
+                    header_len_bytes = _f.read(8)
+                if len(header_len_bytes) < 8:
+                    raise ValueError("文件过短，无法读取 header length")
+                import struct
+                header_len = struct.unpack("<Q", header_len_bytes)[0]
+                if header_len == 0 or header_len > 100 * 1024 * 1024:
+                    raise ValueError(f"header length 异常: {header_len}")
             except Exception as e:
                 return ModelCheckResult(
                     model_id=cfg["id"],
