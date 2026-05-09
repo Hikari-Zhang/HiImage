@@ -24,6 +24,8 @@ class SettingsUpdate(BaseModel):
     low_mem: Optional[bool] = None
     cpu_offload: Optional[bool] = None
     cpu_textencoder: Optional[bool] = None
+    # 下载配置
+    download_max_concurrent: Optional[int] = None
 
 
 @router.get("/settings")
@@ -43,6 +45,7 @@ async def get_settings():
         "low_mem": all_settings.get("server.low_mem", True),
         "cpu_offload": all_settings.get("server.cpu_offload", False),
         "cpu_textencoder": all_settings.get("server.cpu_textencoder", False),
+        "download_max_concurrent": all_settings.get("download.max_concurrent", 3),
     }
 
 
@@ -75,6 +78,8 @@ async def update_settings(data: SettingsUpdate):
         current["server.cpu_offload"] = data.cpu_offload
     if data.cpu_textencoder is not None:
         current["server.cpu_textencoder"] = data.cpu_textencoder
+    if data.download_max_concurrent is not None:
+        current["download.max_concurrent"] = max(1, min(10, data.download_max_concurrent))
 
     save(current)
     return {"status": "ok", "message": "设置已保存"}

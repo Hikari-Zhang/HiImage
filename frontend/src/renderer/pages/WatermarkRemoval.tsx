@@ -5,12 +5,15 @@ import ImageCanvas from '../components/ImageCanvas'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
 import { Button, Select, Slider, Progress, showToast } from '../components/ui'
+import ModelSelect from '../components/ModelSelect/ModelSelect'
 import { useImageStore } from '../stores/useImageStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
+import { useDownloadStore } from '../stores/useDownloadStore'
+import { useDownloadManager } from '../hooks/useDownloadManager'
 import type { ROI } from '../stores/useImageStore'
 
 type CanvasTool = 'draw' | 'pan'
@@ -41,6 +44,8 @@ export default function WatermarkRemoval() {
   } = useSettingsStore()
   const { inpaintGroups, upscaleGroups } = useModelStore()
   const { options: deviceOptions } = useDeviceOptions()
+  const downloadTasks = useDownloadStore((s) => s.tasks)
+  const { startDownload } = useDownloadManager()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
@@ -196,6 +201,19 @@ export default function WatermarkRemoval() {
   // Process
   const handleProcess = async () => {
     if (!sourceImage || rois.length === 0) return
+
+    // 检查当前模型的下载状态
+    const task = downloadTasks[inpaintModel]
+    if (task?.status === 'downloading' || task?.status === 'queued') {
+      showToast('info', `模型${task.status === 'queued' ? '排队中，' : ''}下载中，请稍候...`)
+      return
+    }
+    if (task?.status === 'missing' || task?.status === 'error') {
+      showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
+      startDownload(inpaintModel)
+      return
+    }
+
     try {
       startProcess(inpaintModel)
       const roiList = rois.map((r) => [r.x1, r.y1, r.x2, r.y2])
@@ -416,10 +434,10 @@ export default function WatermarkRemoval() {
           />
 
           {/* Model selector */}
-          <Select
+          <ModelSelect
             label="模型"
             value={inpaintModel}
-            onChange={(e) => setInpaintModel(e.target.value)}
+            onChange={(v) => setInpaintModel(v)}
             size="sm"
             groups={inpaintGroups}
           />
@@ -505,20 +523,32 @@ export default function WatermarkRemoval() {
 
           {/* Process button */}
           <div className="mt-auto pt-2 space-y-2">
-            <Button
-              onClick={handleProcess}
-              disabled={isProcessing || rois.length === 0 || !sourceImage}
-              loading={isProcessing}
-              className="w-full"
-              size="lg"
-            >
-              {isProcessing
-                ? statusMessage
-                : (postprocessEnabled || upscaleEnabled)
-                  ? '去水印 + 增强'
-                  : '去除水印'
-              }
-            </Button>
+            {(() => {
+              const task = downloadTasks[inpaintModel]
+              const isModelBusy = task?.status === 'downloading' || task?.status === 'queued'
+              const isModelMissing = task?.status === 'missing' || task?.status === 'error'
+              return (
+                <Button
+                  onClick={handleProcess}
+                  disabled={isProcessing || rois.length === 0 || !sourceImage || isModelBusy}
+                  loading={isProcessing}
+                  className="w-full"
+                  size="lg"
+                >
+                  {isProcessing
+                    ? statusMessage
+                    : task?.status === 'downloading'
+                      ? '等待下载...'
+                      : task?.status === 'queued'
+                        ? `排队中 #${task.position}`
+                        : isModelMissing
+                          ? '点击下载并处理'
+                          : (postprocessEnabled || upscaleEnabled)
+                            ? '去水印 + 增强'
+                            : '去除水印'}
+                </Button>
+              )
+            })()}
 
             {isProcessing && (
               <Progress value={progress} label={`${statusMessage} ${progress > 0 ? progress + '%' : ''}`} />

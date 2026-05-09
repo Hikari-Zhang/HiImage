@@ -144,35 +144,111 @@ class ModelChecker:
 
     def _check_hf_cache(self, cfg: dict) -> ModelCheckResult:
         """
-        HuggingFace Hub 缓存模型：使用 scan_cache_dir() 判断是否完整下载。
+        HuggingFace Hub 缓存模型。
 
-        成功标准：
-          - repo 存在于缓存目录
-          - nb_files > 0（有实际权重文件）
-          - scan_cache_dir() 未报告该 repo 的结构性损坏警告
+        检测顺序：
+          1. 优先检查 manual/ 路径（_download_hf 写入位置）
+          2. 再 fallback 到标准 hub/ scan_cache_dir 扫描
         """
+        repo_id = cfg["hf_model_id"]
+        name = cfg.get("name", "")
+        provider = cfg.get("provider", "")
+        size_mb = cfg.get("size_mb")
+
+        # ── 1. 优先检查 manual/ 路径 ──────────────────────────────────────────
+        manual_dir = self.hf_cache_dir.parent / "manual" / repo_id.replace("/", "--")
+        if manual_dir.exists() and manual_dir.is_dir():
+            # 只统计权重文件，忽略 README/json/tokenizer 等配置文件
+            WEIGHT_SUFFIXES = {".safetensors", ".bin", ".onnx", ".pth", ".pt", ".ckpt"}
+            weight_files = [
+                f for f in manual_dir.rglob("*")
+                if f.is_file() and f.suffix.lower() in WEIGHT_SUFFIXES
+            ]
+            all_files = [f for f in manual_dir.rglob("*") if f.is_file()]
+
+            if not weight_files:
+                # 目录存在但无权重文件（可能只有 README 或下载中断）
+                return ModelCheckResult(
+                    model_id=cfg["id"],
+                    name=name,
+                    provider=provider,
+                    status="partial" if all_files else "missing",
+                    message="缓存目录存在但无权重文件（下载可能中断）",
+                    file_path=str(manual_dir),
+                    expected_size_mb=size_mb,
+                )
+
+            total_bytes = sum(f.stat().st_size for f in all_files)
+
+            # 大小合理性检查
+            if size_mb:
+                expected_min_bytes = int(size_mb * 0.5 * 1024 * 1024)
+                if total_bytes < expected_min_bytes:
+                    actual_mb = total_bytes / (1024 * 1024)
+                    return ModelCheckResult(
+                        model_id=cfg["id"],
+                        name=name,
+                        provider=provider,
+                        status="corrupted",
+                        message=(
+                            f"文件过小: {actual_mb:.1f} MB（期望 ~{size_mb} MB），"
+                            "可能下载不完整"
+                        ),
+                        file_path=str(manual_dir),
+                        size_bytes=total_bytes,
+                        expected_size_mb=size_mb,
+                    )
+
+            # .safetensors 文件头验证
+            for sf in weight_files:
+                if sf.suffix.lower() == ".safetensors":
+                    try:
+                        from safetensors import safe_open  # type: ignore
+                        with safe_open(str(sf), framework="pt", device="cpu") as f:
+                            _ = list(f.keys())
+                    except Exception as e:
+                        return ModelCheckResult(
+                            model_id=cfg["id"],
+                            name=name,
+                            provider=provider,
+                            status="corrupted",
+                            message=f"safetensors 文件头损坏 ({sf.name}): {e}",
+                            file_path=str(sf),
+                            size_bytes=total_bytes,
+                            expected_size_mb=size_mb,
+                        )
+
+            return ModelCheckResult(
+                model_id=cfg["id"],
+                name=name,
+                provider=provider,
+                status="ok",
+                message=f"{len(weight_files)} 个权重文件, {total_bytes // (1024 * 1024)} MB",
+                file_path=str(manual_dir),
+                size_bytes=total_bytes,
+                expected_size_mb=size_mb,
+            )
+
+        # ── 2. Fallback：标准 HF hub/ 缓存扫描 ───────────────────────────────
         try:
             from huggingface_hub import scan_cache_dir
         except ImportError:
             return ModelCheckResult(
                 model_id=cfg["id"],
-                name=cfg.get("name", ""),
-                provider=cfg.get("provider", ""),
+                name=name,
+                provider=provider,
                 status="unknown",
                 message="huggingface_hub 未安装，无法检测 HF 缓存",
             )
 
-        repo_id = cfg["hf_model_id"]
-
-        # 若缓存目录不存在，直接返回 missing
         if not self.hf_cache_dir.exists():
             return ModelCheckResult(
                 model_id=cfg["id"],
-                name=cfg.get("name", ""),
-                provider=cfg.get("provider", ""),
+                name=name,
+                provider=provider,
                 status="missing",
                 message=f"HF 缓存目录不存在: {self.hf_cache_dir}",
-                expected_size_mb=cfg.get("size_mb"),
+                expected_size_mb=size_mb,
             )
 
         try:
@@ -180,30 +256,28 @@ class ModelChecker:
         except Exception as e:
             return ModelCheckResult(
                 model_id=cfg["id"],
-                name=cfg.get("name", ""),
-                provider=cfg.get("provider", ""),
+                name=name,
+                provider=provider,
                 status="unknown",
                 message=f"无法扫描 HF 缓存: {e}",
             )
 
-        # 从扫描结果中查找目标 repo
         for repo in cache_info.repos:
             if repo.repo_id == repo_id:
-                size_mb = repo.size_on_disk // (1024 * 1024)
+                repo_size_mb = repo.size_on_disk // (1024 * 1024)
 
                 if repo.nb_files == 0:
                     return ModelCheckResult(
                         model_id=cfg["id"],
-                        name=cfg.get("name", ""),
-                        provider=cfg.get("provider", ""),
+                        name=name,
+                        provider=provider,
                         status="partial",
                         message="缓存目录存在但无有效权重文件（可能下载中断）",
                         file_path=str(repo.repo_path),
                         size_bytes=repo.size_on_disk,
-                        expected_size_mb=cfg.get("size_mb"),
+                        expected_size_mb=size_mb,
                     )
 
-                # 检查全局损坏警告（scan_cache_dir 会标记损坏的 repo）
                 repo_has_warning = any(
                     str(repo.repo_path) in str(w)
                     for w in cache_info.warnings
@@ -211,34 +285,33 @@ class ModelChecker:
                 if repo_has_warning:
                     return ModelCheckResult(
                         model_id=cfg["id"],
-                        name=cfg.get("name", ""),
-                        provider=cfg.get("provider", ""),
+                        name=name,
+                        provider=provider,
                         status="corrupted",
                         message="HF 缓存目录存在结构性问题（文件可能损坏）",
                         file_path=str(repo.repo_path),
                         size_bytes=repo.size_on_disk,
-                        expected_size_mb=cfg.get("size_mb"),
+                        expected_size_mb=size_mb,
                     )
 
                 return ModelCheckResult(
                     model_id=cfg["id"],
-                    name=cfg.get("name", ""),
-                    provider=cfg.get("provider", ""),
+                    name=name,
+                    provider=provider,
                     status="ok",
-                    message=f"{repo.nb_files} 个文件, {size_mb} MB",
+                    message=f"{repo.nb_files} 个文件, {repo_size_mb} MB",
                     file_path=str(repo.repo_path),
                     size_bytes=repo.size_on_disk,
-                    expected_size_mb=cfg.get("size_mb"),
+                    expected_size_mb=size_mb,
                 )
 
-        # 未在缓存中找到该 repo
         return ModelCheckResult(
             model_id=cfg["id"],
-            name=cfg.get("name", ""),
-            provider=cfg.get("provider", ""),
+            name=name,
+            provider=provider,
             status="missing",
-            message=f"未在 HF 缓存中找到 {repo_id}（路径: {self.hf_cache_dir}）",
-            expected_size_mb=cfg.get("size_mb"),
+            message=f"未在 HF 缓存中找到 {repo_id}（manual: {manual_dir}, hub: {self.hf_cache_dir}）",
+            expected_size_mb=size_mb,
         )
 
     def _check_file(self, cfg: dict, path: Path) -> ModelCheckResult:

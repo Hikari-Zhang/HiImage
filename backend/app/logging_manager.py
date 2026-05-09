@@ -137,12 +137,16 @@ def setup_logging():
     配置全局 logging，将关键日志和所有 error 接入 LogManager
     """
     handler = WebSocketLogHandler(log_manager)
-    handler.setLevel(logging.INFO)  # INFO 及以上都收集
+    handler.setLevel(logging.DEBUG)  # DEBUG 及以上都收集
     handler.setFormatter(logging.Formatter("%(message)s"))
 
-    # 注册到根 logger
+    # 注册到根 logger，并设置 level
     root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(handler)
+
+    # download_queue 单独确保 DEBUG 级别可见
+    logging.getLogger("download_queue").setLevel(logging.DEBUG)
 
     # 同时为 uvicorn/fastapi 的 logger 添加
     for logger_name in ["uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"]:

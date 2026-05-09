@@ -3,11 +3,14 @@ import { Upload, Download, RefreshCw } from 'lucide-react'
 import { Button, Select, Progress, showToast } from '../components/ui'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
+import ModelSelect from '../components/ModelSelect/ModelSelect'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
+import { useDownloadStore } from '../stores/useDownloadStore'
+import { useDownloadManager } from '../hooks/useDownloadManager'
 
 export default function SuperResolution() {
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
@@ -15,6 +18,8 @@ export default function SuperResolution() {
   const { device, upscaleModel, setDevice, setUpscaleModel } = useSettingsStore()
   const { upscaleGroups } = useModelStore()
   const { options: deviceOptions } = useDeviceOptions()
+  const downloadTasks = useDownloadStore((s) => s.tasks)
+  const { startDownload } = useDownloadManager()
 
   const [sourceImage, setSourceImage] = useState<string | null>(null)
   const [resultImage, setResultImage] = useState<string | null>(null)
@@ -130,6 +135,19 @@ export default function SuperResolution() {
   // Process
   const handleUpscale = async () => {
     if (!sourceImage) return
+
+    // 检查模型下载状态
+    const task = downloadTasks[upscaleModel]
+    if (task?.status === 'downloading' || task?.status === 'queued') {
+      showToast('info', '模型下载中，请稍候...')
+      return
+    }
+    if (task?.status === 'missing' || task?.status === 'error') {
+      showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
+      startDownload(upscaleModel)
+      return
+    }
+
     try {
       startProcess(upscaleModel)
       const result = await upscale({ image: sourceImage, model: upscaleModel, device })
@@ -228,10 +246,10 @@ export default function SuperResolution() {
         {/* Control panel */}
         <div className="w-[240px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-4 overflow-y-auto min-h-0">
           {/* Model */}
-          <Select
+          <ModelSelect
             label="模型"
             value={upscaleModel}
-            onChange={(e) => handleModelChange(e.target.value)}
+            onChange={(v) => handleModelChange(v)}
             size="sm"
             groups={upscaleGroups}
           />
@@ -272,15 +290,29 @@ export default function SuperResolution() {
 
           {/* Action */}
           <div className="mt-auto pt-2 space-y-2">
-            <Button
-              onClick={handleUpscale}
-              disabled={!sourceImage || isProcessing}
-              loading={isProcessing}
-              className="w-full"
-              size="lg"
-            >
-              {isProcessing ? statusMessage : '开始超分'}
-            </Button>
+            {(() => {
+              const task = downloadTasks[upscaleModel]
+              const isModelBusy = task?.status === 'downloading' || task?.status === 'queued'
+              return (
+                <Button
+                  onClick={handleUpscale}
+                  disabled={!sourceImage || isProcessing || isModelBusy}
+                  loading={isProcessing}
+                  className="w-full"
+                  size="lg"
+                >
+              {isProcessing
+                ? statusMessage
+                : (() => {
+                    const t = downloadTasks[upscaleModel]
+                    if (t?.status === 'downloading') return '等待下载...'
+                    if (t?.status === 'queued') return `排队中 #${t.position}`
+                    if (t?.status === 'missing' || t?.status === 'error') return '点击下载并处理'
+                    return '开始超分'
+                  })()}
+                </Button>
+              )
+            })()}
 
             {isProcessing && (
               <Progress value={progress} label={`${statusMessage} ${progress > 0 ? progress + '%' : ''}`} />

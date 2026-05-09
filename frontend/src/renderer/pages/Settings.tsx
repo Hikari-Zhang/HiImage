@@ -25,6 +25,7 @@ const DEFAULTS = {
   lowMem: true,
   cpuOffload: false,
   cpuTextencoder: false,
+  downloadMaxConcurrent: 3,
 }
 
 export default function Settings() {
@@ -54,6 +55,7 @@ export default function Settings() {
   const [lowMem, setLowMem] = useState(store.lowMem)
   const [cpuOffload, setCpuOffload] = useState(store.cpuOffload)
   const [cpuTextencoder, setCpuTextencoder] = useState(store.cpuTextencoder)
+  const [downloadMaxConcurrent, setDownloadMaxConcurrent] = useState(String(store.downloadMaxConcurrent))
   const [isSaving, setIsSaving] = useState(false)
 
   // 设备可用性（从后端检测）
@@ -88,6 +90,7 @@ export default function Settings() {
       setLowMem(s.lowMem)
       setCpuOffload(s.cpuOffload)
       setCpuTextencoder(s.cpuTextencoder)
+      setDownloadMaxConcurrent(String(s.downloadMaxConcurrent))
     })
 
     // 检测计算设备可用性
@@ -182,6 +185,7 @@ export default function Settings() {
         lowMem,
         cpuOffload,
         cpuTextencoder,
+        downloadMaxConcurrent: Math.max(1, Math.min(10, Number(downloadMaxConcurrent) || 3)),
       })
       // 再持久化到后端
       await useSettingsStore.getState().saveSettings(backendURL)
@@ -206,6 +210,7 @@ export default function Settings() {
     setLowMem(DEFAULTS.lowMem)
     setCpuOffload(DEFAULTS.cpuOffload)
     setCpuTextencoder(DEFAULTS.cpuTextencoder)
+    setDownloadMaxConcurrent(String(DEFAULTS.downloadMaxConcurrent))
     showToast('success', '已恢复默认值，点击保存生效')
   }
 
@@ -234,8 +239,10 @@ export default function Settings() {
         ))}
       </div>
 
-      {/* 模型管理页签 */}
-      {activeTab === 'models' && <ModelManager />}
+      {/* 模型管理页签：始终挂载，通过 CSS 控制显隐，避免切换路由后状态丢失 */}
+      <div className={activeTab === 'models' ? 'flex flex-1 min-h-0 overflow-hidden' : 'hidden'}>
+        <ModelManager />
+      </div>
 
       {/* 通用设置页签 */}
       {activeTab === 'general' && (
@@ -453,6 +460,20 @@ export default function Settings() {
                 type="text"
                 value={startupTimeout}
                 onChange={(e) => setStartupTimeout(e.target.value)}
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-fg-secondary mb-1 block">
+                最大同时下载数
+                <span className="ml-1 text-[10px] text-fg-tertiary">（1 - 10）</span>
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={downloadMaxConcurrent}
+                onChange={(e) => setDownloadMaxConcurrent(e.target.value)}
                 className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
               />
             </div>

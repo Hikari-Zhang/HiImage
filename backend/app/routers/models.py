@@ -1,10 +1,21 @@
 """
-模型完整性健康检查端点
+模型管理端点
 
 GET    /api/models/health              → 检测所有注册模型的完整性
 GET    /api/models/health/{model_id}   → 检测单个模型的完整性
 GET    /api/models/list                → 返回所有注册模型的元数据（含当前状态）
-GET    /api/models/download            → SSE 流：一键下载所有缺失模型，实时推送进度
+
+── 新下载队列 API（推荐） ──────────────────────────────────────────────────────
+POST   /api/models/download/{model_id} → 提交单模型下载任务（返回任务状态）
+POST   /api/models/download/bulk       → 批量提交（一键下载），返回任务列表
+DELETE /api/models/download/{model_id} → 取消下载任务
+GET    /api/models/subscribe/{model_id}→ SSE 订阅单个模型的实时状态变更
+GET    /api/models/queue               → 查询当前队列中所有活跃任务
+
+── 旧 SSE 接口（已废弃，保留向下兼容） ─────────────────────────────────────────
+GET    /api/models/download            → SSE 流：一键下载所有缺失模型（旧）
+GET    /api/models/download/{model_id} → SSE 流：下载单个模型（旧）
+
 DELETE /api/models/{model_id}/files    → 删除指定模型的本地权重文件（不修改 models.yaml）
 """
 from __future__ import annotations
@@ -482,14 +493,52 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
 
             if dest.exists():
-                skipped_files += 1
-                logger.debug(f"[HF 下载] 已存在，跳过 ({file_idx + 1}/{total_files}): {filename}")
-                if progress_cb:
-                    progress_cb({
-                        "message": f"文件已存在，跳过 ({file_idx + 1}/{total_files}): {filename}",
-                        "speed": "", "downloaded": "", "total_size": "",
-                    })
-                continue
+                # 检查文件大小是否合理（至少 > 1KB，排除空文件/截断文件）
+                # 对于权重文件（.safetensors/.bin）要求至少 1MB
+                file_size = dest.stat().st_size
+                is_weight_file = dest.suffix.lower() in {".safetensors", ".bin", ".pth", ".pt", ".ckpt"}
+                min_size = 1024 * 1024 if is_weight_file else 1024  # 权重文件 1MB，其他 1KB
+                if file_size < min_size:
+                    # 文件过小，认为是损坏/截断，删除后重新下载
+                    try:
+                        dest.unlink()
+                        logger.warning(f"[HF 下载] 文件过小（{file_size} B），删除并重新下载: {filename}")
+                    except OSError:
+                        pass
+                elif dest.suffix.lower() == ".safetensors":
+                    # 额外验证 safetensors 文件头完整性
+                    header_ok = False
+                    try:
+                        from safetensors import safe_open  # type: ignore
+                        with safe_open(str(dest), framework="pt", device="cpu") as _sf:
+                            _ = list(_sf.keys())
+                        header_ok = True
+                    except Exception as sf_err:
+                        logger.warning(
+                            f"[HF 下载] safetensors 文件头损坏，删除并重新下载: {filename} — {sf_err}"
+                        )
+                        try:
+                            dest.unlink()
+                        except OSError:
+                            pass
+                    if header_ok:
+                        skipped_files += 1
+                        logger.debug(f"[HF 下载] 已存在且完整，跳过 ({file_idx + 1}/{total_files}): {filename} ({file_size // 1024} KB)")
+                        if progress_cb:
+                            progress_cb({
+                                "message": f"文件已存在，跳过 ({file_idx + 1}/{total_files}): {filename}",
+                                "speed": "", "downloaded": "", "total_size": "",
+                            })
+                        continue
+                else:
+                    skipped_files += 1
+                    logger.debug(f"[HF 下载] 已存在且完整，跳过 ({file_idx + 1}/{total_files}): {filename} ({file_size // 1024} KB)")
+                    if progress_cb:
+                        progress_cb({
+                            "message": f"文件已存在，跳过 ({file_idx + 1}/{total_files}): {filename}",
+                            "speed": "", "downloaded": "", "total_size": "",
+                        })
+                    continue
 
             url = hf_hub_url(repo_id=repo_id, filename=filename)
             headers = {"User-Agent": "HiImage/2.0"}
@@ -631,10 +680,160 @@ def _download_direct(cfg: dict, progress_cb=None) -> None:
         raise
 
 
+# ── 新下载队列 API ────────────────────────────────────────────────────────────
+
+@router.post("/download/bulk")
+async def queue_download_bulk():
+    """
+    批量提交所有缺失/损坏的模型到下载队列（一键下载入口）。
+
+    - 自动检测所有缺失/损坏模型
+    - 批量提交，已在队列中的自动去重
+    - 返回本次提交的任务列表
+
+    返回格式：
+    ```json
+    {
+      "submitted": 5,
+      "tasks": [{"modelId": ..., "status": "downloading"|"queued", ...}]
+    }
+    ```
+    """
+    from core.model_checker import ModelChecker
+    from core.download_queue import get_download_queue
+
+    checker = ModelChecker()
+    loop = asyncio.get_event_loop()
+
+    # 过滤可下载模型（排除 IOPaint cli 内置模型）
+    downloadable = [
+        m for m in MODELS
+        if not (m.get("provider") == "IOPaint" and m.get("iopaint_mode") == "cli")
+    ]
+
+    # 检测哪些模型需要下载
+    results = await loop.run_in_executor(None, checker.check_all)
+    status_map = {r.model_id: r.status for r in results}
+
+    need_download = [
+        m for m in downloadable
+        if status_map.get(m["id"], "missing") != "ok"
+    ]
+
+    queue = get_download_queue()
+    tasks = queue.bulk_submit([m["id"] for m in need_download])
+
+    return {
+        "submitted": len(need_download),
+        "tasks": [t.to_dict() for t in tasks],
+    }
+
+
+@router.post("/download/{model_id}")
+async def queue_download_single(model_id: str):
+    """
+    提交单个模型下载任务到全局队列。
+
+    - 去重：已在队列/下载中则返回现有任务状态
+    - 有空槽则立即开始，否则排队等待
+
+    返回格式：
+    ```json
+    {"modelId": "lama", "modelName": "LaMa", "status": "downloading", "position": 0, ...}
+    ```
+    """
+    from core.model_registry import MODEL_BY_ID
+    cfg = MODEL_BY_ID.get(model_id)
+    logger.info(f"[POST /download/{model_id}] 收到请求, cfg 存在={cfg is not None}")
+    if not cfg:
+        raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
+
+    if cfg.get("provider") == "IOPaint" and cfg.get("iopaint_mode") == "cli":
+        raise HTTPException(
+            status_code=400,
+            detail="IOPaint 内置模型将在首次使用时自动下载，无需手动触发"
+        )
+
+    from core.download_queue import get_download_queue
+    queue = get_download_queue()
+    task = queue.submit(model_id)
+    logger.info(f"[POST /download/{model_id}] submit 返回: status={task.status!r}")
+    return task.to_dict()
+
+
+@router.delete("/download/{model_id}")
+async def cancel_download(model_id: str):
+    """
+    取消指定模型的下载任务（queued 或 downloading 状态均可取消）。
+    """
+    from core.download_queue import get_download_queue
+    queue = get_download_queue()
+    success = queue.cancel(model_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"未找到活跃的下载任务: {model_id!r}")
+    return {"ok": True, "message": f"已取消: {model_id}"}
+
+
+@router.get("/subscribe/{model_id}")
+async def subscribe_model(model_id: str, request: Request):
+    """
+    SSE 订阅：实时推送指定模型的下载状态变更。
+
+    - 连接后立即推送当前状态
+    - 每次状态变更（queued→downloading→done/error）推送一次
+    - 任务完成/失败后服务端自动关闭连接
+    - 支持多个客户端同时订阅同一模型
+
+    事件类型：status
+    """
+    from core.download_queue import get_download_queue
+    queue = get_download_queue()
+
+    async def _generate():
+        async for event in queue.subscribe(model_id):
+            if await request.is_disconnected():
+                break
+            if event.get("heartbeat"):
+                # 发送 SSE 注释作为心跳，保持连接
+                yield ": heartbeat\n\n"
+            else:
+                yield _sse("status", event)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/queue")
+async def get_queue_status():
+    """
+    查询当前下载队列中所有活跃任务（queued + downloading）。
+
+    返回格式：
+    ```json
+    {
+      "active": [...],
+      "max_concurrent": 3
+    }
+    ```
+    """
+    from core.download_queue import get_download_queue
+    queue = get_download_queue()
+    return {
+        "active": [t.to_dict() for t in queue.list_active()],
+        "max_concurrent": queue.max_concurrent,
+    }
+
+
+# ── 旧 SSE 接口（保留向下兼容）────────────────────────────────────────────────
+
 @router.get("/download")
 async def models_download(request: Request):
     """
-    SSE 流：一键下载所有缺失/损坏的模型。
+    [已废弃] SSE 流：一键下载所有缺失/损坏的模型。
+    新代码请使用 POST /api/models/download/bulk + GET /api/models/subscribe/{id}。
 
     客户端通过 EventSource 连接此接口，接收实时进度推送。
     事件类型：start / model / finish
@@ -644,7 +843,7 @@ async def models_download(request: Request):
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # 禁止 Nginx 缓冲
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -664,6 +863,10 @@ async def _download_single_generator(request: Request, model_id: str):
         })
         return
 
+    checker = ModelChecker()
+    loop = asyncio.get_event_loop()
+    name = cfg.get("name", model_id)
+
     # IOPaint cli 模型：首次使用由 iopaint 自动下载，此接口无法主动触发
     if cfg.get("provider") == "IOPaint" and cfg.get("iopaint_mode") == "cli":
         logger.info(
@@ -675,10 +878,6 @@ async def _download_single_generator(request: Request, model_id: str):
             "message": "IOPaint 内置模型将在首次使用时自动下载，无需手动触发"
         })
         return
-
-    checker = ModelChecker()
-    loop = asyncio.get_event_loop()
-    name = cfg.get("name", model_id)
     provider = cfg.get("provider", "")
 
     logger.info(f"[单模型下载] 开始：{name} (id={model_id})")
@@ -775,7 +974,8 @@ async def _download_single_generator(request: Request, model_id: str):
 @router.get("/download/{model_id}")
 async def model_download_single(model_id: str, request: Request):
     """
-    SSE 流：下载单个指定模型。
+    [已废弃] SSE 流：下载单个指定模型。
+    新代码请使用 POST /api/models/download/{model_id} + GET /api/models/subscribe/{model_id}。
 
     客户端通过 EventSource 连接此接口，接收实时进度推送。
     事件类型：start / model / finish

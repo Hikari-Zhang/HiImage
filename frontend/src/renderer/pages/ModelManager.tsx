@@ -1,10 +1,14 @@
-import { useState, useEffect, useCallback, useRef, type MutableRefObject } from 'react'
-import { CheckCircle2, XCircle, AlertCircle, Loader2, Trash2, RefreshCw, Package, Download, ChevronDown, ChevronUp } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import {
+  CheckCircle2, XCircle, AlertCircle, Loader2, Trash2, RefreshCw,
+  Package, Download, ChevronDown, ChevronUp, Clock,
+} from 'lucide-react'
 import { clsx } from 'clsx'
 import { showToast } from '../components/ui'
 import { useBackendStore } from '../stores/useBackendStore'
-import { useSettingsStore } from '../stores/useSettingsStore'
-import type { RowDownloadState } from '../stores/useSettingsStore'
+import { useDownloadStore } from '../stores/useDownloadStore'
+import { useDownloadManager, registerDownloadDoneCallback } from '../hooks/useDownloadManager'
+import type { DownloadTask } from '../stores/useDownloadStore'
 
 // ── 类型 ──────────────────────────────────────────────────────────────────────
 
@@ -20,7 +24,6 @@ interface ModelEntry {
   download_url?: string
   display_group?: string
   iopaint_mode?: string
-  // 文件状态（来自 /api/models/list）
   status: 'ok' | 'missing' | 'partial' | 'corrupted' | 'unknown'
   message: string
 }
@@ -30,7 +33,7 @@ interface ModeGroup {
   name: string
 }
 
-// ── 辅助组件 ──────────────────────────────────────────────────────────────────
+// ── 辅助 ──────────────────────────────────────────────────────────────────────
 
 const STATUS_ICON = {
   ok:        <CheckCircle2 size={13} className="text-status-success flex-shrink-0" />,
@@ -55,144 +58,28 @@ const BADGE_COLOR: Record<string, string> = {
   动漫:   'bg-pink-500/20 text-pink-400',
 }
 
-// ── 模块级 SSE 单例（生命周期独立于组件，切换页签不中断）────────────────────
-// 一键下载连接
-let globalEsRef: EventSource | null = null
-// 单模型下载连接（key = model id）
-const globalRowEsRef: Record<string, EventSource> = {}
-
-// 存储具名事件处理函数引用，确保 removeEventListener 能精准移除旧监听
-type AllHandlers = { start?: (e: Event) => void; model?: (e: Event) => void; finish?: (e: Event) => void }
-let globalEsHandlers: AllHandlers = {}
-
-type RowHandlers = { model?: (e: Event) => void; finish?: (e: Event) => void }
-const globalRowEsHandlers: Record<string, RowHandlers> = {}
-
-/** 为一键下载 EventSource 绑定事件监听（可重复调用以接管已有连接） */
-function bindDownloadAllListeners(
-  es: EventSource,
-  loadModelsRef: MutableRefObject<() => void>,
-) {
-  // 移除旧的具名监听（防止重复注册堆积）
-  if (globalEsHandlers.start)  es.removeEventListener('start',  globalEsHandlers.start)
-  if (globalEsHandlers.model)  es.removeEventListener('model',  globalEsHandlers.model)
-  if (globalEsHandlers.finish) es.removeEventListener('finish', globalEsHandlers.finish)
-  es.onerror = null
-
-  globalEsHandlers.start = (e) => {
-    const data = JSON.parse((e as MessageEvent).data)
-    useSettingsStore.getState().setDownloadTotal(data.total)
-    useSettingsStore.getState().setDownloadSummary(data.message)
-  }
-  globalEsHandlers.model = (e) => {
-    const item = JSON.parse((e as MessageEvent).data)
-    useSettingsStore.getState().setDownloadModels((prev) => {
-      const idx = prev.findIndex((m) => m.id === item.id)
-      if (idx >= 0) { const next = [...prev]; next[idx] = item; return next }
-      return [...prev, item]
-    })
-  }
-  globalEsHandlers.finish = (e) => {
-    const data = JSON.parse((e as MessageEvent).data)
-    useSettingsStore.getState().setDownloadSummary(data.message)
-    useSettingsStore.getState().setDownloadStatus(data.failed > 0 ? 'error' : 'done')
-    es.close(); globalEsRef = null; globalEsHandlers = {}
-    loadModelsRef.current()
-  }
-
-  es.addEventListener('start',  globalEsHandlers.start)
-  es.addEventListener('model',  globalEsHandlers.model)
-  es.addEventListener('finish', globalEsHandlers.finish)
-  es.onerror = () => {
-    useSettingsStore.getState().setDownloadModels((prev) =>
-      prev.map((item) =>
-        item.status === 'downloading'
-          ? { ...item, status: 'error', message: '连接中断', speed: '', downloaded: '', total_size: '' }
-          : item
-      )
-    )
-    useSettingsStore.getState().setDownloadSummary('连接中断，请检查后端是否在运行')
-    useSettingsStore.getState().setDownloadStatus('error')
-    es.close(); globalEsRef = null; globalEsHandlers = {}
-  }
-}
-
-/** 为单模型 EventSource 绑定事件监听（可重复调用以接管已有连接） */
-function bindRowListeners(
-  es: EventSource,
-  mid: string,
-  loadModelsRef: MutableRefObject<() => void>,
-) {
-  // 移除旧的具名监听（防止重复注册堆积）
-  const prev = globalRowEsHandlers[mid]
-  if (prev?.model)  es.removeEventListener('model',  prev.model)
-  if (prev?.finish) es.removeEventListener('finish', prev.finish)
-  es.onerror = null
-
-  const handlers: RowHandlers = {}
-  globalRowEsHandlers[mid] = handlers
-
-  handlers.model = (e) => {
-    const item = JSON.parse((e as MessageEvent).data)
-    useSettingsStore.getState().setRowDownload(mid, {
-      status: item.status === 'error' ? 'error' : item.status === 'done' || item.status === 'skipped' ? 'done' : 'downloading',
-      message: item.message ?? '',
-      speed: item.speed ?? '',
-      downloaded: item.downloaded ?? '',
-      total_size: item.total_size ?? '',
-    })
-  }
-  handlers.finish = (e) => {
-    const data = JSON.parse((e as MessageEvent).data)
-    const finalStatus = data.failed > 0 ? 'error' : 'done'
-    useSettingsStore.getState().setRowDownload(mid, {
-      status: finalStatus, message: data.message, speed: '', downloaded: '', total_size: '',
-    })
-    es.close(); delete globalRowEsRef[mid]; delete globalRowEsHandlers[mid]
-    if (finalStatus === 'done') {
-      showToast('success', data.message)
-      setTimeout(() => loadModelsRef.current(), 500)
-    } else {
-      showToast('error', data.message)
-    }
-  }
-
-  es.addEventListener('model',  handlers.model)
-  es.addEventListener('finish', handlers.finish)
-  es.onerror = () => {
-    useSettingsStore.getState().setRowDownload(mid, {
-      status: 'error', message: '连接中断', speed: '', downloaded: '', total_size: '',
-    })
-    es.close(); delete globalRowEsRef[mid]; delete globalRowEsHandlers[mid]
-  }
-}
-
 // ── 主组件 ────────────────────────────────────────────────────────────────────
 
 export default function ModelManager() {
   const backendURL = useBackendStore((s) => s.backendURL)
-  const store = useSettingsStore()
 
   const [models, setModels] = useState<ModelEntry[]>([])
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [selectedGroup, setSelectedGroup] = useState<string>('__all__')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [bulkPanelOpen, setBulkPanelOpen] = useState(false)
 
-  // 下载相关（从全局 store 读取，跨页签保持）
-  const downloadStatus = store.downloadStatus
-  const downloadModels = store.downloadModels
-  const downloadSummary = store.downloadSummary
-  const downloadTotal = store.downloadTotal
-  const downloadPanelOpen = store.downloadPanelOpen
-  // 单模型行内下载状态（从全局 store 读取，跨页签保持）
-  const rowDownloads = store.rowDownloads
+  // 下载相关（来自独立 store）
+  const downloadTasks = useDownloadStore((s) => s.tasks)
+  const bulkSession = useDownloadStore((s) => s.bulkSession)
+  const { startDownload, cancelDownload, startBulkDownload, cancelBulkDownload } = useDownloadManager()
+
   const downloadListRef = useRef<HTMLDivElement>(null)
-  // loadModels 引用转发（让模块级 SSE 回调始终调用最新的 loadModels）
-  const loadModelsRef = useRef<() => void>(() => {})
+  const loadModelsRef = useRef<() => Promise<void>>(async () => {})
 
-  // ── 加载模型列表 ──────────────────────────────────────────────────────────
+  // ── 加载模型列表 ────────────────────────────────────────────────────────────
 
   const loadModels = useCallback(async () => {
     setLoading(true)
@@ -202,152 +89,48 @@ export default function ModelManager() {
         : backendURL
       const res = await fetch(`${url}/api/models/list`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json()
+      const data = await res.json() as { models?: ModelEntry[]; mode_groups?: ModeGroup[] }
       setModels(data.models ?? [])
       setModeGroups(data.mode_groups ?? [])
-    } catch (e: any) {
-      showToast('error', `加载模型列表失败: ${e.message}`)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      showToast('error', `加载模型列表失败: ${msg}`)
     } finally {
       setLoading(false)
     }
   }, [backendURL])
 
-  // 始终同步最新的 loadModels 到 ref，供模块级 SSE 回调使用
+  // 始终保持 ref 指向最新的 loadModels 闭包
   useEffect(() => { loadModelsRef.current = loadModels }, [loadModels])
 
-  useEffect(() => { loadModels() }, [loadModels])
-
-  // ── 组件挂载时：接管后台正在运行的 SSE 连接 & 恢复孤立的行内下载状态 ───────
-
+  // 挂载时无条件执行一次
   useEffect(() => {
-    const resume = async () => {
-      const url = window.electronAPI?.getBackendURL
-        ? await window.electronAPI.getBackendURL()
-        : backendURL
-
-      // 1. 一键下载：连接仍 OPEN，重新绑定事件监听
-      if (globalEsRef && globalEsRef.readyState !== EventSource.CLOSED) {
-        bindDownloadAllListeners(globalEsRef, loadModelsRef)
-      }
-
-      // 2. 单模型：重新绑定已有 OPEN 连接的监听器
-      for (const [mid, es] of Object.entries(globalRowEsRef)) {
-        if (es.readyState !== EventSource.CLOSED) {
-          bindRowListeners(es, mid, loadModelsRef)
-        } else {
-          delete globalRowEsRef[mid]
-        }
-      }
-
-      // 3. 行内 downloading 状态但已无对应连接 → 查询实际状态
-      const orphaned = Object.entries(useSettingsStore.getState().rowDownloads)
-        .filter(([mid, v]) => v.status === 'downloading' && !globalRowEsRef[mid])
-      for (const [mid] of orphaned) {
-        try {
-          const res = await fetch(`${url}/api/models/health/${encodeURIComponent(mid)}`)
-          if (!res.ok) throw new Error()
-          const data = await res.json()
-          if (data.status === 'ok') {
-            useSettingsStore.getState().setRowDownload(mid, {
-              status: 'done', message: '下载完成', speed: '', downloaded: '', total_size: '',
-            })
-          } else {
-            useSettingsStore.getState().setRowDownload(mid, {
-              status: 'error', message: '下载未完成，请重试', speed: '', downloaded: '', total_size: '',
-            })
-          }
-        } catch {
-          useSettingsStore.getState().setRowDownload(mid, {
-            status: 'error', message: '状态检查失败，请重试', speed: '', downloaded: '', total_size: '',
-          })
-        }
-      }
-    }
-    resume()
-  }, [backendURL])
-
-  // ── 单模型下载逻辑 ────────────────────────────────────────────────────────
-
-  const getBackendUrl = async () =>
-    window.electronAPI?.getBackendURL
-      ? await window.electronAPI.getBackendURL()
-      : backendURL
-
-  /** 建立单模型 SSE 连接（新下载 or 切换页签后重连） */
-  const connectRowSSE = useCallback(async (mid: string) => {
-    // 已有 OPEN 连接则不重复建立
-    if (globalRowEsRef[mid] && globalRowEsRef[mid].readyState !== EventSource.CLOSED) return
-
-    const url = await getBackendUrl()
-    const es = new EventSource(`${url}/api/models/download/${encodeURIComponent(mid)}`)
-    globalRowEsRef[mid] = es
-    bindRowListeners(es, mid, loadModelsRef)
-  }, [backendURL])
-
-  const handleDownloadSingle = async (model: ModelEntry) => {
-    const mid = model.id
-    // 已在下载中则忽略
-    if (rowDownloads[mid]?.status === 'downloading') return
-    // 关闭旧连接
-    if (globalRowEsRef[mid]) { globalRowEsRef[mid].close(); delete globalRowEsRef[mid] }
-
-    store.setRowDownload(mid, { status: 'downloading', message: '准备下载...', speed: '', downloaded: '', total_size: '' })
-    connectRowSSE(mid)
-  }
-
-  // ── 下载逻辑 ─────────────────────────────────────────────────────────────
-
-  const handleDownloadAll = async () => {
-    if (downloadStatus === 'running') return
-    if (globalEsRef) { globalEsRef.close(); globalEsRef = null }
-
-    store.setDownloadStatus('running')
-    store.setDownloadModels([])
-    store.setDownloadSummary('')
-    store.setDownloadPanelOpen(true)
-
-    const url = await getBackendUrl()
-    const es = new EventSource(`${url}/api/models/download`)
-    globalEsRef = es
-    bindDownloadAllListeners(es, loadModelsRef)
-  }
-
-  // ── 取消一键下载 ────────────────────────────────────────────────────────────
-
-  const handleCancelDownloadAll = useCallback(() => {
-    if (globalEsRef) {
-      globalEsRef.close()
-      globalEsRef = null
-    }
-    useSettingsStore.getState().setDownloadModels((prev) =>
-      prev.map((item) =>
-        item.status === 'downloading'
-          ? { ...item, status: 'error', message: '已取消', speed: '', downloaded: '', total_size: '' }
-          : item
-      )
-    )
-    store.setDownloadStatus('error')
-    store.setDownloadSummary('下载已取消')
-  }, [store])
-
-  // ── 取消单模型下载 ────────────────────────────────────────────────────────
-
-  const handleCancelSingle = useCallback((mid: string) => {
-    if (globalRowEsRef[mid]) {
-      globalRowEsRef[mid].close()
-      delete globalRowEsRef[mid]
-    }
-    useSettingsStore.getState().setRowDownload(mid, {
-      status: 'error', message: '已取消', speed: '', downloaded: '', total_size: '',
-    })
+    loadModelsRef.current()
   }, [])
 
-  // ── 分组逻辑 ─────────────────────────────────────────────────────────────
+  // 注册下载完成回调
+  useEffect(() => {
+    registerDownloadDoneCallback(() => loadModelsRef.current())
+  }, [])
 
-  // 所有 mode_group id 的集合
+  // ── 批次面板自动展开 ────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (bulkSession.active) setBulkPanelOpen(true)
+  }, [bulkSession.active])
+
+  // ── 自动滚动到底部 ──────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (downloadListRef.current) {
+      downloadListRef.current.scrollTop = downloadListRef.current.scrollHeight
+    }
+  }, [bulkSession.modelIds.length])
+
+  // ── 分组逻辑 ─────────────────────────────────────────────────────────────────
+
   const allGroupIds = new Set(modeGroups.map((g) => g.id))
 
-  // 按分组过滤模型
   const filteredModels = (() => {
     if (selectedGroup === '__all__') return models
     if (selectedGroup === '__ungrouped__') {
@@ -356,12 +139,10 @@ export default function ModelManager() {
     return models.filter((m) => m.tags?.includes(selectedGroup))
   })()
 
-  // 未分组模型数量
   const ungroupedCount = models.filter(
     (m) => !m.tags?.some((t) => allGroupIds.has(t))
   ).length
 
-  // 每个分组的统计（ok 数 / 总数）
   const groupStats = (groupId: string) => {
     const list = groupId === '__all__'
       ? models
@@ -372,15 +153,13 @@ export default function ModelManager() {
     return { total: list.length, ok }
   }
 
-  // ── 删除文件 ─────────────────────────────────────────────────────────────
+  // ── 删除文件 ─────────────────────────────────────────────────────────────────
 
   const handleDelete = async (model: ModelEntry) => {
     if (confirmDeleteId !== model.id) {
-      // 第一次点击：显示确认
       setConfirmDeleteId(model.id)
       return
     }
-    // 第二次点击：执行删除
     setConfirmDeleteId(null)
     setDeletingId(model.id)
     try {
@@ -388,39 +167,60 @@ export default function ModelManager() {
         ? await window.electronAPI.getBackendURL()
         : backendURL
       const res = await fetch(`${url}/api/models/${model.id}/files`, { method: 'DELETE' })
-      const data = await res.json()
+      const data = await res.json() as { ok: boolean; message?: string }
       if (data.ok) {
-        showToast('success', data.message)
-        // 刷新状态
+        showToast('success', data.message ?? '删除成功')
+        // 更新 downloadStore：删除后状态变为 missing，功能页面模型选择器立即同步
+        useDownloadStore.getState().setTask(model.id, {
+          status: 'missing',
+          message: '',
+          speed: '',
+          downloaded: '',
+          totalSize: '',
+        })
         loadModels()
       } else {
-        showToast('error', data.message || '删除失败')
+        showToast('error', data.message ?? '删除失败')
       }
-    } catch (e: any) {
-      showToast('error', `删除失败: ${e.message}`)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      showToast('error', `删除失败: ${msg}`)
     } finally {
       setDeletingId(null)
     }
   }
 
-  // 点击其他地方取消确认
   const cancelConfirm = () => setConfirmDeleteId(null)
 
-  // ── 渲染 ─────────────────────────────────────────────────────────────────
+  // ── 一键下载相关状态 ─────────────────────────────────────────────────────────
+
+  const bulkTasks = bulkSession.modelIds
+    .map((id) => downloadTasks[id])
+    .filter(Boolean) as DownloadTask[]
+
+  const bulkStatus = (() => {
+    if (!bulkSession.active) return 'idle'
+    if (bulkTasks.some((t) => t.status === 'downloading' || t.status === 'queued')) return 'running'
+    if (bulkTasks.some((t) => t.status === 'error')) return 'error'
+    if (bulkTasks.every((t) => t.status === 'done' || t.status === 'cancelled')) return 'done'
+    return 'running'
+  })()
+
+  const doneCount = bulkTasks.filter((t) => t.status === 'done').length
+  const errorCount = bulkTasks.filter((t) => t.status === 'error').length
+
+  // ── 渲染 ─────────────────────────────────────────────────────────────────────
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden" onClick={cancelConfirm}>
-      {/* ── 左侧分组导航 ─────────────────────────────────────────────────── */}
+      {/* ── 左侧分组导航 ──────────────────────────────────────────────────── */}
       <div className="w-36 flex-shrink-0 border-r border-border-subtle overflow-y-auto py-2">
-        {/* 全部 */}
         <GroupItem
           label="全部"
           stats={groupStats('__all__')}
           active={selectedGroup === '__all__'}
           onClick={() => setSelectedGroup('__all__')}
         />
-
-        {/* 各功能分组 */}
         {modeGroups.map((g) => {
           const stats = groupStats(g.id)
           if (stats.total === 0) return null
@@ -434,8 +234,6 @@ export default function ModelManager() {
             />
           )
         })}
-
-        {/* 未分组 */}
         {ungroupedCount > 0 && (
           <GroupItem
             label="未分组"
@@ -446,7 +244,7 @@ export default function ModelManager() {
         )}
       </div>
 
-      {/* ── 右侧模型列表 ──────────────────────────────────────────────────── */}
+      {/* ── 右侧模型列表 ────────────────────────────────────────────────── */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {/* 列表头部工具栏 */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-border-subtle flex-shrink-0 gap-2">
@@ -460,35 +258,34 @@ export default function ModelManager() {
             )}
           </span>
 
-          {/* 右侧按钮组 */}
           <div className="flex items-center gap-2 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-            {/* 下载进度状态指示 */}
-            {downloadStatus === 'done' && (
+            {/* 批次下载完成/失败状态指示 */}
+            {bulkStatus === 'done' && (
               <span className="text-[11px] text-status-success flex items-center gap-1">
                 <CheckCircle2 size={11} /> 下载完成
               </span>
             )}
-            {downloadStatus === 'error' && (
+            {bulkStatus === 'error' && (
               <span className="text-[11px] text-status-error flex items-center gap-1">
                 <XCircle size={11} /> 部分失败
               </span>
             )}
 
-            {/* 展开/收起下载面板 */}
-            {downloadStatus !== 'idle' && (
+            {/* 展开/收起下载进度面板 */}
+            {bulkStatus !== 'idle' && (
               <button
-                onClick={() => store.setDownloadPanelOpen(!downloadPanelOpen)}
+                onClick={() => setBulkPanelOpen((v) => !v)}
                 className="flex items-center gap-1 text-[11px] text-fg-secondary hover:text-fg-primary transition-colors"
               >
-                {downloadPanelOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                {downloadStatus === 'running' ? '下载中' : '进度'}
+                {bulkPanelOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                {bulkStatus === 'running' ? '下载中' : '进度'}
               </button>
             )}
 
             {/* 一键下载 / 取消 按钮 */}
-            {downloadStatus === 'running' ? (
+            {bulkStatus === 'running' ? (
               <button
-                onClick={handleCancelDownloadAll}
+                onClick={cancelBulkDownload}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors bg-status-error/20 text-status-error hover:bg-status-error/30"
               >
                 <XCircle size={12} />
@@ -496,7 +293,7 @@ export default function ModelManager() {
               </button>
             ) : (
               <button
-                onClick={handleDownloadAll}
+                onClick={startBulkDownload}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors bg-border-focus text-white hover:bg-blue-600"
               >
                 <Download size={12} />
@@ -515,67 +312,45 @@ export default function ModelManager() {
           </div>
         </div>
 
-        {/* 下载进度面板（可折叠） */}
-        {downloadStatus !== 'idle' && downloadPanelOpen && (
-          <div className="border-b border-border-subtle bg-bg-tertiary flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+        {/* 批次下载进度面板（可折叠） */}
+        {bulkStatus !== 'idle' && bulkPanelOpen && (
+          <div
+            className="border-b border-border-subtle bg-bg-tertiary flex-shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* 汇总 */}
-            {downloadSummary && (
-              <div className="px-4 py-1.5 border-b border-border-subtle">
-                <p className="text-[11px] text-fg-secondary">{downloadSummary}</p>
-              </div>
-            )}
-            {/* 模型条目列表 */}
+            <div className="px-4 py-1.5 border-b border-border-subtle">
+              <p className="text-[11px] text-fg-secondary">
+                {bulkStatus === 'running'
+                  ? `下载中：${doneCount} / ${bulkSession.modelIds.length} 完成`
+                  : bulkStatus === 'done'
+                    ? `全部完成：${doneCount} 个成功，${errorCount} 个失败`
+                    : `已完成：${doneCount} 个成功，${errorCount} 个失败`}
+              </p>
+            </div>
+
+            {/* 各模型进度 */}
             <div ref={downloadListRef} className="max-h-40 overflow-y-auto divide-y divide-border-subtle">
-              {downloadModels.length === 0 && (
+              {bulkTasks.length === 0 && (
                 <div className="px-4 py-2 text-[11px] text-fg-secondary">检测中...</div>
               )}
-              {downloadModels.map((item) => (
-                <div key={item.id} className="px-4 py-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="flex-shrink-0">
-                      {item.status === 'downloading' && <Loader2 size={11} className="animate-spin text-fg-accent" />}
-                      {item.status === 'done'        && <CheckCircle2 size={11} className="text-status-success" />}
-                      {item.status === 'skipped'     && <CheckCircle2 size={11} className="text-fg-secondary" />}
-                      {item.status === 'error'       && <XCircle size={11} className="text-status-error" />}
-                      {item.status === 'checking'    && <Loader2 size={11} className="animate-spin text-fg-secondary" />}
-                    </span>
-                    <span className={clsx('flex-1 text-[11px] truncate', item.status === 'error' ? 'text-status-error' : 'text-fg-primary')}>
-                      {item.name}
-                    </span>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      {item.status === 'downloading' && item.speed && (
-                        <span className="text-[10px] text-fg-accent font-mono min-w-[70px] text-right">{item.speed}</span>
-                      )}
-                      {item.status === 'downloading' && item.downloaded && (
-                        <span className="text-[10px] text-fg-secondary font-mono">
-                          {item.downloaded}{item.total_size ? ` / ${item.total_size}` : ''}
-                        </span>
-                      )}
-                      {item.status !== 'downloading' && (
-                        <span className="text-[10px] text-fg-secondary max-w-[160px] truncate">{item.message}</span>
-                      )}
-                      {item.status === 'downloading' && !item.speed && (
-                        <span className="text-[10px] text-fg-secondary max-w-[140px] truncate">{item.message}</span>
-                      )}
-                    </div>
-                  </div>
-                  {item.status === 'downloading' && item.downloaded && item.total_size && item.total_size !== '?' && (() => {
-                    const p = (s: string) => { const n = parseFloat(s); return s.includes('GB') ? n*1024 : s.includes('MB') ? n : s.includes('KB') ? n/1024 : n/(1024*1024) }
-                    const pct = Math.min(100, Math.round(p(item.downloaded) / p(item.total_size) * 100))
-                    return <div className="mt-1 h-0.5 bg-bg-hover rounded-full overflow-hidden"><div className="h-full bg-fg-accent rounded-full transition-all duration-500" style={{ width: `${pct}%` }} /></div>
-                  })()}
-                </div>
+              {bulkTasks.map((task) => (
+                <BulkTaskRow key={task.modelId} task={task} />
               ))}
             </div>
+
             {/* 总进度条 */}
-            {downloadTotal > 0 && downloadModels.length > 0 && (
+            {bulkSession.modelIds.length > 0 && (
               <div className="px-4 py-2 border-t border-border-subtle">
                 <div className="flex justify-between text-[10px] text-fg-secondary mb-1">
-                  <span>{downloadModels.length} / {downloadTotal}</span>
-                  <span>{Math.round((downloadModels.length / downloadTotal) * 100)}%</span>
+                  <span>{doneCount} / {bulkSession.modelIds.length}</span>
+                  <span>{Math.round((doneCount / bulkSession.modelIds.length) * 100)}%</span>
                 </div>
                 <div className="h-1 bg-bg-hover rounded-full overflow-hidden">
-                  <div className="h-full bg-border-focus rounded-full transition-all duration-300" style={{ width: `${(downloadModels.length / downloadTotal) * 100}%` }} />
+                  <div
+                    className="h-full bg-border-focus rounded-full transition-all duration-300"
+                    style={{ width: `${(doneCount / bulkSession.modelIds.length) * 100}%` }}
+                  />
                 </div>
               </div>
             )}
@@ -596,19 +371,22 @@ export default function ModelManager() {
             </div>
           ) : (
             <div className="divide-y divide-border-subtle">
-              {filteredModels.map((model) => (
-                <ModelRow
-                  key={model.id}
-                  model={model}
-                  isDeleting={deletingId === model.id}
-                  isConfirming={confirmDeleteId === model.id}
-                  rowDownload={rowDownloads[model.id] ?? defaultRowState}
-                  onDownload={(e) => { e.stopPropagation(); handleDownloadSingle(model) }}
-                  onCancel={(e) => { e.stopPropagation(); handleCancelSingle(model.id) }}
-                  onDelete={(e) => { e.stopPropagation(); handleDelete(model) }}
-                  onCancelConfirm={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
-                />
-              ))}
+              {filteredModels.map((model) => {
+                const downloadTask = downloadTasks[model.id]
+                return (
+                  <ModelRow
+                    key={model.id}
+                    model={model}
+                    downloadTask={downloadTask}
+                    isDeleting={deletingId === model.id}
+                    isConfirming={confirmDeleteId === model.id}
+                    onDownload={(e) => { e.stopPropagation(); startDownload(model.id) }}
+                    onCancel={(e) => { e.stopPropagation(); cancelDownload(model.id) }}
+                    onDelete={(e) => { e.stopPropagation(); handleDelete(model) }}
+                    onCancelConfirm={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
+                  />
+                )
+              })}
             </div>
           )}
         </div>
@@ -617,13 +395,69 @@ export default function ModelManager() {
   )
 }
 
-// ── 默认行下载状态 ────────────────────────────────────────────────────────────
+// ── 批次进度行 ────────────────────────────────────────────────────────────────
 
-const defaultRowState: RowDownloadState = {
-  status: 'idle', message: '', speed: '', downloaded: '', total_size: '',
+function BulkTaskRow({ task }: { task: DownloadTask }) {
+  return (
+    <div className="px-4 py-1.5">
+      <div className="flex items-center gap-2">
+        <span className="flex-shrink-0">
+          {task.status === 'downloading' && <Loader2 size={11} className="animate-spin text-fg-accent" />}
+          {task.status === 'queued'      && <Clock size={11} className="text-orange-400" />}
+          {task.status === 'done'        && <CheckCircle2 size={11} className="text-status-success" />}
+          {task.status === 'error'       && <XCircle size={11} className="text-status-error" />}
+          {task.status === 'cancelled'   && <XCircle size={11} className="text-fg-secondary" />}
+        </span>
+        <span className={clsx(
+          'flex-1 text-[11px] truncate',
+          task.status === 'error' ? 'text-status-error' : 'text-fg-primary',
+        )}>
+          {task.modelName}
+        </span>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {task.status === 'downloading' && task.speed && (
+            <span className="text-[10px] text-fg-accent font-mono min-w-[70px] text-right">{task.speed}</span>
+          )}
+          {task.status === 'downloading' && task.downloaded && (
+            <span className="text-[10px] text-fg-secondary font-mono">
+              {task.downloaded}{task.totalSize ? ` / ${task.totalSize}` : ''}
+            </span>
+          )}
+          {task.status === 'queued' && (
+            <span className="text-[10px] text-orange-400">#{task.position}</span>
+          )}
+          {task.status !== 'downloading' && task.status !== 'queued' && (
+            <span className="text-[10px] text-fg-secondary max-w-[160px] truncate">{task.message}</span>
+          )}
+          {task.status === 'downloading' && !task.speed && (
+            <span className="text-[10px] text-fg-secondary max-w-[140px] truncate">{task.message}</span>
+          )}
+        </div>
+      </div>
+      {/* 单行进度条 */}
+      {task.status === 'downloading' && task.downloaded && task.totalSize && task.totalSize !== '?' && (() => {
+        const parseMB = (s: string) => {
+          const n = parseFloat(s)
+          if (s.includes('GB')) return n * 1024
+          if (s.includes('MB')) return n
+          if (s.includes('KB')) return n / 1024
+          return n / (1024 * 1024)
+        }
+        const pct = Math.min(100, Math.round(parseMB(task.downloaded) / parseMB(task.totalSize) * 100))
+        return (
+          <div className="mt-1 h-0.5 bg-bg-hover rounded-full overflow-hidden">
+            <div
+              className="h-full bg-fg-accent rounded-full transition-all duration-500"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )
+      })()}
+    </div>
+  )
 }
 
-// ── 分组项 ─────────────────────────────────────────────────────────────────────
+// ── 分组项 ────────────────────────────────────────────────────────────────────
 
 function GroupItem({
   label, stats, active, onClick,
@@ -654,27 +488,28 @@ function GroupItem({
 // ── 模型行 ────────────────────────────────────────────────────────────────────
 
 function ModelRow({
-  model, isDeleting, isConfirming, rowDownload, onDownload, onCancel, onDelete, onCancelConfirm,
+  model, downloadTask, isDeleting, isConfirming,
+  onDownload, onCancel, onDelete, onCancelConfirm,
 }: {
   model: ModelEntry
+  downloadTask: DownloadTask | undefined
   isDeleting: boolean
   isConfirming: boolean
-  rowDownload: RowDownloadState
   onDownload: (e: React.MouseEvent) => void
   onCancel: (e: React.MouseEvent) => void
   onDelete: (e: React.MouseEvent) => void
   onCancelConfirm: (e: React.MouseEvent) => void
 }) {
-  // IOPaint 内置模型（cli 模式）无文件可删 / 下载
   const isBuiltin = model.provider === 'IOPaint' && model.iopaint_mode === 'cli'
-  const canDelete = !isBuiltin && model.status === 'ok'
-  // 非内置 & 非已下载 & 下载状态为 idle → 可单独下载
-  const canDownload = !isBuiltin && model.status !== 'ok' && rowDownload.status === 'idle'
-  const isRowDownloading = rowDownload.status === 'downloading'
+  const isDownloading = downloadTask?.status === 'downloading'
+  const isQueued = downloadTask?.status === 'queued'
+  const isDone = downloadTask?.status === 'done' || model.status === 'ok'
+  const canDelete = !isBuiltin && isDone && !isDownloading && !isQueued
+  const canDownload = !isBuiltin && !isDone && !isDownloading && !isQueued
 
-  // 计算行内进度百分比
+  // 行内进度百分比
   const pct = (() => {
-    if (!rowDownload.downloaded || !rowDownload.total_size || rowDownload.total_size === '?') return null
+    if (!downloadTask?.downloaded || !downloadTask.totalSize || downloadTask.totalSize === '?') return null
     const parseMB = (s: string) => {
       const n = parseFloat(s)
       if (s.includes('GB')) return n * 1024
@@ -682,7 +517,7 @@ function ModelRow({
       if (s.includes('KB')) return n / 1024
       return n / (1024 * 1024)
     }
-    const p = Math.min(100, Math.round(parseMB(rowDownload.downloaded) / parseMB(rowDownload.total_size) * 100))
+    const p = Math.min(100, Math.round(parseMB(downloadTask.downloaded) / parseMB(downloadTask.totalSize) * 100))
     return isNaN(p) ? null : p
   })()
 
@@ -690,11 +525,13 @@ function ModelRow({
     <div className="flex items-start gap-3 px-4 py-3 hover:bg-bg-hover/30 transition-colors">
       {/* 状态图标 */}
       <div className="mt-0.5 flex-shrink-0">
-        {isRowDownloading
+        {isDownloading
           ? <Loader2 size={13} className="animate-spin text-fg-accent" />
-          : rowDownload.status === 'done'
+          : isQueued
+          ? <Clock size={13} className="text-orange-400" />
+          : downloadTask?.status === 'done'
           ? <CheckCircle2 size={13} className="text-status-success" />
-          : rowDownload.status === 'error'
+          : downloadTask?.status === 'error'
           ? <XCircle size={13} className="text-status-error" />
           : (STATUS_ICON[model.status] ?? STATUS_ICON.unknown)
         }
@@ -714,74 +551,63 @@ function ModelRow({
           )}
         </div>
 
-        {/* 描述 */}
         {model.description && (
           <p className="text-[11px] text-fg-secondary mt-0.5 line-clamp-2 leading-relaxed">
             {model.description}
           </p>
         )}
 
-        {/* 元信息行 / 行内下载进度 */}
-        {isRowDownloading ? (
+        {/* 进度/状态信息行 */}
+        {isDownloading ? (
           <div className="mt-1">
             <div className="flex items-center gap-2 flex-wrap">
-              {rowDownload.speed && (
-                <span className="text-[10px] text-fg-accent font-mono">{rowDownload.speed}</span>
-              )}
-              {rowDownload.downloaded && (
+              {downloadTask.speed && <span className="text-[10px] text-fg-accent font-mono">{downloadTask.speed}</span>}
+              {downloadTask.downloaded && (
                 <span className="text-[10px] text-fg-secondary font-mono">
-                  {rowDownload.downloaded}{rowDownload.total_size ? ` / ${rowDownload.total_size}` : ''}
+                  {downloadTask.downloaded}{downloadTask.totalSize ? ` / ${downloadTask.totalSize}` : ''}
                 </span>
               )}
-              {pct !== null && (
-                <span className="text-[10px] text-fg-secondary">{pct}%</span>
-              )}
-              {rowDownload.message && (
-                <span className="text-[10px] text-fg-secondary truncate max-w-[160px]">{rowDownload.message}</span>
-              )}
+              {pct !== null && <span className="text-[10px] text-fg-secondary">{pct}%</span>}
+              {downloadTask.message && <span className="text-[10px] text-fg-secondary truncate max-w-[160px]">{downloadTask.message}</span>}
             </div>
             {pct !== null && (
               <div className="mt-1 h-0.5 bg-bg-hover rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-fg-accent rounded-full transition-all duration-500"
-                  style={{ width: `${pct}%` }}
-                />
+                <div className="h-full bg-fg-accent rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
               </div>
             )}
           </div>
-        ) : rowDownload.status === 'error' ? (
+        ) : isQueued ? (
+          <div className="mt-1">
+            <span className="text-[10px] text-orange-400">排队中，第 {downloadTask.position} 位</span>
+          </div>
+        ) : downloadTask?.status === 'error' ? (
           <div className="flex items-center gap-3 mt-1 flex-wrap">
             <span className="text-[10px] font-medium text-status-error">下载失败</span>
-            <span className="text-[10px] text-fg-secondary truncate max-w-[240px]">{rowDownload.message}</span>
+            <span className="text-[10px] text-fg-secondary truncate max-w-[240px]">{downloadTask.message}</span>
           </div>
-        ) : rowDownload.status === 'done' ? (
-          <div className="flex items-center gap-3 mt-1 flex-wrap">
+        ) : downloadTask?.status === 'done' ? (
+          <div className="mt-1">
             <span className="text-[10px] font-medium text-status-success">下载完成</span>
           </div>
         ) : (
           <div className="flex items-center gap-3 mt-1 flex-wrap">
             <span className={clsx(
               'text-[10px] font-medium',
-              model.status === 'ok' ? 'text-status-success' :
-              model.status === 'missing' ? 'text-status-error' :
+              model.status === 'ok'        ? 'text-status-success' :
+              model.status === 'missing'   ? 'text-status-error' :
               model.status === 'corrupted' ? 'text-orange-400' :
               'text-fg-secondary'
             )}>
               {STATUS_LABEL[model.status] ?? '未知'}
             </span>
-
             {model.message && model.status !== 'ok' && (
-              <span className="text-[10px] text-fg-secondary truncate max-w-[200px]">
-                {model.message}
-              </span>
+              <span className="text-[10px] text-fg-secondary truncate max-w-[200px]">{model.message}</span>
             )}
-
             {model.size_mb && (
               <span className="text-[10px] text-fg-secondary">
                 ~{model.size_mb >= 1000 ? `${(model.size_mb / 1024).toFixed(1)} GB` : `${model.size_mb} MB`}
               </span>
             )}
-
             <span className="text-[10px] text-fg-secondary/50">{model.provider}</span>
           </div>
         )}
@@ -800,8 +626,8 @@ function ModelRow({
           </button>
         )}
 
-        {/* 下载中：取消按钮 */}
-        {isRowDownloading && (
+        {/* 下载中/排队中：取消按钮 */}
+        {(isDownloading || isQueued) && (
           <button
             onClick={onCancel}
             title="取消下载"

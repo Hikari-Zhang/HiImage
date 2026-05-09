@@ -22,6 +22,7 @@ DEFAULTS = {
     "inpaint.default_device": "mps",
     "network.hf_endpoint": "https://huggingface.co",
     "network.hf_token": "",
+    "download.max_concurrent": 3,
 }
 
 _cache: dict = {}

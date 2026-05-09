@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   Upload, Download, Square, Move, Trash2, RotateCcw,
   Image, Shirt, User, Sparkles, Info, ChevronDown, ChevronRight,
-  Crosshair, Wand2, MessageSquare,
+  Crosshair, Wand2, MessageSquare, Loader2, Clock, XCircle, CheckCircle2,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import ImageCanvas from '../components/ImageCanvas'
@@ -14,6 +14,8 @@ import { useSettingsStore } from '../stores/useSettingsStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
+import { useDownloadStore } from '../stores/useDownloadStore'
+import { useDownloadManager } from '../hooks/useDownloadManager'
 import type { ROI } from '../stores/useImageStore'
 
 type CanvasTool = 'draw' | 'pan'
@@ -332,6 +334,8 @@ export default function SmartSynthesis() {
   const { device, setDevice } = useSettingsStore()
   const { runSynthesis } = useBackendAPI()
   const { options: deviceOptions } = useDeviceOptions()
+  const downloadTasks = useDownloadStore((s) => s.tasks)
+  const { startDownload } = useDownloadManager()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
@@ -486,6 +490,18 @@ export default function SmartSynthesis() {
     }
     if (activeModeConfig.promptRequired && !prompt.trim()) {
       showToast('warning', `请输入${activeModeConfig.promptLabel ?? '提示词'}`)
+      return
+    }
+
+    // 检查模型下载状态
+    const dlTask = downloadTasks[selectedModel]
+    if (dlTask?.status === 'downloading' || dlTask?.status === 'queued') {
+      showToast('info', `模型${dlTask.status === 'queued' ? '排队中，' : ''}下载中，请稍候...`)
+      return
+    }
+    if (dlTask?.status === 'missing' || dlTask?.status === 'error') {
+      showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
+      startDownload(selectedModel)
       return
     }
 
@@ -763,13 +779,21 @@ export default function SmartSynthesis() {
           <section>
             <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">模型</h3>
             <div className="space-y-1.5">
-              {availableModels.map((model) => (
+              {availableModels.map((model) => {
+                const dlTask = downloadTasks[model.id]
+                const isSelected = selectedModel === model.id
+                const isOk = dlTask?.status === 'ok' || dlTask?.status === 'done'
+                const isMissing = dlTask?.status === 'missing'
+                const isDownloading = dlTask?.status === 'downloading'
+                const isQueued = dlTask?.status === 'queued'
+                const isError = dlTask?.status === 'error'
+                return (
                 <button
                   key={model.id}
                   onClick={() => setSelectedModel(model.id)}
                   className={clsx(
                     'w-full text-left p-2.5 rounded-lg border transition-all',
-                    selectedModel === model.id
+                    isSelected
                       ? 'border-border-focus bg-bg-active'
                       : 'border-border-subtle bg-bg-primary hover:bg-bg-hover'
                   )}
@@ -777,30 +801,56 @@ export default function SmartSynthesis() {
                   <div className="flex items-center justify-between mb-0.5">
                     <span className={clsx(
                       'text-xs font-medium',
-                      selectedModel === model.id ? 'text-fg-accent' : 'text-fg-primary'
+                      isSelected ? 'text-fg-accent' : 'text-fg-primary'
                     )}>
                       {model.name}
                     </span>
-                    {model.badge && (
-                      <span className={clsx(
-                        'text-[9px] px-1.5 py-0.5 rounded-full font-medium',
-                        model.badge === '推荐'
-                          ? 'bg-fg-accent/20 text-fg-accent'
-                          : model.badge === '快速'
-                            ? 'bg-status-success/20 text-status-success'
-                            : model.badge === '高质量'
-                              ? 'bg-purple-500/20 text-purple-400'
-                              : model.badge === '动漫'
-                                ? 'bg-pink-500/20 text-pink-400'
-                                : 'bg-border-subtle text-fg-secondary'
-                      )}>
-                        {model.badge}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {isDownloading && <Loader2 size={10} className="animate-spin text-blue-400" />}
+                      {isQueued     && <Clock size={10} className="text-orange-400" />}
+                      {isError      && <XCircle size={10} className="text-red-400" />}
+                      {isOk         && <CheckCircle2 size={10} className="text-green-400" />}
+                      {isMissing    && <Download size={10} className="text-fg-secondary/60" />}
+                      {model.badge && (
+                        <span className={clsx(
+                          'text-[9px] px-1.5 py-0.5 rounded-full font-medium',
+                          model.badge === '推荐'
+                            ? 'bg-fg-accent/20 text-fg-accent'
+                            : model.badge === '快速'
+                              ? 'bg-status-success/20 text-status-success'
+                              : model.badge === '高质量'
+                                ? 'bg-purple-500/20 text-purple-400'
+                                : model.badge === '动漫'
+                                  ? 'bg-pink-500/20 text-pink-400'
+                                  : 'bg-border-subtle text-fg-secondary'
+                        )}>
+                          {model.badge}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <p className="text-[10px] text-fg-secondary leading-snug">{model.description}</p>
+                  {/* 下载进度（仅选中且下载中/排队时显示） */}
+                  {isSelected && (isDownloading || isQueued) && (
+                    <div className={clsx(
+                      'mt-1.5 text-[10px] flex items-center gap-1.5',
+                      isDownloading ? 'text-blue-400' : 'text-orange-400',
+                    )}>
+                      {isDownloading && (
+                        <>
+                          {dlTask.speed && <span className="font-mono">{dlTask.speed}</span>}
+                          {dlTask.downloaded && dlTask.totalSize && (
+                            <span className="font-mono">{dlTask.downloaded} / {dlTask.totalSize}</span>
+                          )}
+                          {dlTask.message && !dlTask.speed && <span>{dlTask.message}</span>}
+                        </>
+                      )}
+                      {isQueued && <span>排队中，第 {dlTask.position} 位</span>}
+                    </div>
+                  )}
                 </button>
-              ))}
+                )
+              })}
             </div>
           </section>
 
@@ -835,21 +885,36 @@ export default function SmartSynthesis() {
 
           {/* 操作按钮 */}
           <div className="mt-auto pt-2 space-y-2">
-            <Button
-              onClick={handleProcess}
-              disabled={
-                isProcessing
-                || !sourceImage
-                || (activeModeConfig.needsReference && !referenceImage)
-                || (activeModeConfig.needsROI && rois.length === 0)
-                || (activeModeConfig.promptRequired && !prompt.trim())
-              }
-              loading={isProcessing}
-              className="w-full"
-              size="lg"
-            >
-              {isProcessing ? statusMessage : `执行${activeModeConfig.name}`}
-            </Button>
+            {(() => {
+              const dlTask = downloadTasks[selectedModel]
+              const isModelBusy = dlTask?.status === 'downloading' || dlTask?.status === 'queued'
+              return (
+                <Button
+                  onClick={handleProcess}
+                  disabled={
+                    isProcessing
+                    || !sourceImage
+                    || (activeModeConfig.needsReference && !referenceImage)
+                    || (activeModeConfig.needsROI && rois.length === 0)
+                    || (activeModeConfig.promptRequired && !prompt.trim())
+                    || isModelBusy
+                  }
+                  loading={isProcessing}
+                  className="w-full"
+                  size="lg"
+                >
+                  {isProcessing
+                    ? statusMessage
+                    : dlTask?.status === 'downloading'
+                      ? '等待下载...'
+                      : dlTask?.status === 'queued'
+                        ? `排队中 #${dlTask.position}`
+                        : (dlTask?.status === 'missing' || dlTask?.status === 'error')
+                          ? '点击下载并处理'
+                          : `执行${activeModeConfig.name}`}
+                </Button>
+              )
+            })()}
 
             {isProcessing && (
               <Progress value={progress} label={`${statusMessage} ${progress > 0 ? progress + '%' : ''}`} />
