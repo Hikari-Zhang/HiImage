@@ -21,7 +21,15 @@
 # requires_reference 是否需要参考图
 # size_mb         模型权重大小（MB，估算）
 # badge           UI 徽章：推荐 / 快速 / 高质量 / 动漫（空串表示无徽章）
-# hf_model_id     HuggingFace Hub model ID，可直接传给 snapshot_download()
+# hf_model_id     HuggingFace Hub model ID（单模型），可直接传给 snapshot_download()
+#                   与 hf_models 互斥，优先使用 hf_models
+# hf_models       HuggingFace Hub 多模型列表（组合模型专用，如 GDINO+SAM+FLUX）
+#                   每项字段：
+#                     id       str  — HuggingFace Hub repo ID（必填）
+#                     name     str  — 子模型显示名称（必填，用于日志/进度）
+#                     size_mb  int  — 子模型权重大小（MB，估算，用于完整性检测）
+#                   完整性检测和下载均按列表顺序逐个处理，status 取最差状态
+#                   外层 size_mb 保持全部子模型总和（用于前端展示）
 # download_url    模型下载页面 URL（HuggingFace 或 GitHub Release）
 # local_path      相对于 PROJECT_ROOT 的本地权重路径
 #                   用于 GFPGAN / Real-ESRGAN 等以文件系统路径存储的模型
@@ -465,10 +473,19 @@ models:
     description: GroundingDINO 零样本检测 + SAM 精细分割 + FLUX.1-Fill 修复，任意目标、边缘最精准，需 16-24GB VRAM
     recommended_for: 换色/换风格（最高质量）
     requires_reference: false
-    size_mb: 25500
+    size_mb: 25500   # 三个子模型总和：GDINO ~1700 + SAM ~2500 + FLUX.1-Fill ~21300
     badge: 高质量
-    hf_model_id: IDEA-Research/grounding-dino-base
-    download_url: https://huggingface.co/IDEA-Research/grounding-dino-base
+    hf_models:
+      - id: IDEA-Research/grounding-dino-base
+        name: GroundingDINO
+        size_mb: 1700
+      - id: facebook/sam-vit-huge
+        name: SAM (ViT-H)
+        size_mb: 2500
+      - id: black-forest-labs/FLUX.1-Fill-dev
+        name: FLUX.1-Fill-dev
+        size_mb: 21300
+    download_url: https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev
     supported_params:
       <<: *flux
       <<: *edit_prompt
@@ -481,10 +498,19 @@ models:
     description: GroundingDINO + SAM 精准分割 + SDXL Inpainting，分割边缘精细，高分辨率输出，需 12GB VRAM
     recommended_for: 换色/换风格（高质量）
     requires_reference: false
-    size_mb: 9500
+    size_mb: 9500    # 三个子模型总和：GDINO ~1700 + SAM ~2500 + SDXL ~5300
     badge: ""
-    hf_model_id: IDEA-Research/grounding-dino-base
-    download_url: https://huggingface.co/IDEA-Research/grounding-dino-base
+    hf_models:
+      - id: IDEA-Research/grounding-dino-base
+        name: GroundingDINO
+        size_mb: 1700
+      - id: facebook/sam-vit-huge
+        name: SAM (ViT-H)
+        size_mb: 2500
+      - id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+        name: SDXL Inpainting
+        size_mb: 5300
+    download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     supported_params:
       <<: *sdxl_inpaint
       <<: *edit_prompt
@@ -513,10 +539,16 @@ models:
     description: 自动分割后用 SD 1.5 Inpainting 替换，支持纹理/风格类指令
     recommended_for: 换风格 / 换纹理
     requires_reference: false
-    size_mb: 4400
+    size_mb: 4400   # 两个子模型总和：SegFormer ~400 + SD 1.5 ~4000
     badge: ""
-    hf_model_id: mattmdjaga/segformer_b2_clothes
-    download_url: https://huggingface.co/mattmdjaga/segformer_b2_clothes
+    hf_models:
+      - id: mattmdjaga/segformer_b2_clothes
+        name: SegFormer B2 Clothes
+        size_mb: 400
+      - id: runwayml/stable-diffusion-inpainting
+        name: SD 1.5 Inpainting
+        size_mb: 4000
+    download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
     supported_params:
       <<: *sd_inpaint
       <<: *edit_prompt
@@ -564,30 +596,15 @@ models:
         desc: 图生图强度
     features: [instruction]
 
-  - id: magicbrush
-    name: MagicBrush
-    provider: diffusers
-    tags: [instruction_edit]
-    description: 高质量指令编辑数据集微调的 IP2P，指令跟随更精准，兼顾速度与效果
-    recommended_for: 自由语义编辑（精准指令）
-    requires_reference: false
-    size_mb: 5000
-    badge: 推荐
-    hf_model_id: osunlp/MagicBrush
-    download_url: https://huggingface.co/osunlp/MagicBrush
-    supported_params:
-      <<: *ip2p
-    features: [instruction]
-
   - id: instruct_pix2pix
     name: InstructPix2Pix
     provider: diffusers
     tags: [instruction_edit]
     description: 原版 timbrooks/instruct-pix2pix，SD 1.5 底座，显存需求低，适合快速预览
-    recommended_for: 自由语义编辑（快速）
+    recommended_for: 自由语义编辑（精准指令）
     requires_reference: false
     size_mb: 5000
-    badge: ""
+    badge: 推荐
     hf_model_id: timbrooks/instruct-pix2pix
     download_url: https://huggingface.co/timbrooks/instruct-pix2pix
     supported_params:
@@ -929,10 +946,10 @@ models:
     name: 4x 精细化增强·轻量（推荐）
     provider: realesrgan
     tags: [upscale]
-    description: 专为真实世界压缩/模糊图设计：同时去噪+去模糊+放大，效果优于 x4plus，体积仅 17 MB｜速度最快
+    description: 专为真实世界压缩/模糊图设计：同时去噪+去模糊+放大，效果优于 x4plus，体积仅 5 MB｜速度最快
     recommended_for: 超分辨率（低质量/压缩/模糊图）
     requires_reference: false
-    size_mb: 17
+    size_mb: 5
     badge: 推荐
     scale: 4
     weight_filename: realesr-general-x4v3.pth
@@ -988,10 +1005,10 @@ models:
     name: 4x 动漫视频/帧序列
     provider: realesrgan
     tags: [upscale]
-    description: 动漫视频逐帧处理专用：更少闪烁、更好时间一致性；也可用于动漫截帧精细化｜模型 ~8 MB
+    description: 动漫视频逐帧处理专用：更少闪烁、更好时间一致性；也可用于动漫截帧精细化｜模型 ~2.5 MB
     recommended_for: 超分辨率（动漫视频帧）
     requires_reference: false
-    size_mb: 8
+    size_mb: 2.5
     badge: 动漫
     scale: 4
     weight_filename: realesr-animevideov3.pth

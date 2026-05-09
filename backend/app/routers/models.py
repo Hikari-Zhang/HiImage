@@ -230,9 +230,12 @@ async def _download_generator(request: Request):
         if provider == "rembg":
             logger.info(f"[一键下载] 使用 rembg 下载 ONNX 权重: {name}")
             future = loop.run_in_executor(None, _download_rembg, model_cfg, _put)
-        elif model_cfg.get("local_path") and model_cfg.get("download_url") and not model_cfg.get("hf_model_id"):
+        elif model_cfg.get("local_path") and model_cfg.get("download_url") and not model_cfg.get("hf_model_id") and not model_cfg.get("hf_models"):
             logger.info(f"[一键下载] 直接下载权重文件: {name} → {model_cfg['local_path']}")
             future = loop.run_in_executor(None, _download_direct, model_cfg, _put)
+        elif model_cfg.get("hf_models"):
+            logger.info(f"[一键下载] 从 HuggingFace 下载组合模型: {name} ({len(model_cfg['hf_models'])} 个子模型)")
+            future = loop.run_in_executor(None, _download_hf_multi, model_cfg, _put)
         elif model_cfg.get("hf_model_id"):
             logger.info(f"[一键下载] 从 HuggingFace 下载: {name} (repo: {model_cfg['hf_model_id']})")
             future = loop.run_in_executor(None, _download_hf, model_cfg, _put)
@@ -429,6 +432,41 @@ def _download_rembg(cfg: dict, progress_cb=None) -> None:
             f"如访问 GitHub 困难，可在设置 → 网络 中配置 GitHub 镜像加速地址\n"
             f"（如 https://mirror.ghproxy.com）"
         ) from e
+
+
+def _download_hf_multi(cfg: dict, progress_cb=None) -> None:
+    """
+    组合多子模型下载（hf_models 列表）。
+
+    逐个调用 _download_hf 下载每个子模型，汇聚进度回调。
+    progress_cb 收到的 message 前缀为 "[子模型名]"，方便前端区分。
+    """
+    hf_models: list[dict] = cfg.get("hf_models", [])
+    total_repos = len(hf_models)
+
+    for repo_idx, sub in enumerate(hf_models):
+        sub_name = sub.get("name", sub["id"])
+        logger.info(f"[多模型下载] 开始子模型 ({repo_idx + 1}/{total_repos}): {sub_name} ({sub['id']})")
+
+        # 构造临时子 cfg，复用 _download_hf 的所有逻辑
+        sub_cfg = {
+            **cfg,                         # 继承父配置（HF_TOKEN、HF_ENDPOINT 等）
+            "id":          cfg["id"],
+            "name":        sub_name,
+            "hf_model_id": sub["id"],
+            "size_mb":     sub.get("size_mb"),
+        }
+
+        def _wrapped_cb(data: dict, _name=sub_name, _idx=repo_idx, _total=total_repos):
+            if progress_cb and data:
+                # 在 message 前加子模型前缀
+                orig_msg = data.get("message", "")
+                data["message"] = f"[{_name}] ({_idx + 1}/{_total}) {orig_msg}"
+                progress_cb(data)
+
+        _download_hf(sub_cfg, _wrapped_cb)
+
+    logger.info(f"[多模型下载] 全部完成: {cfg.get('name', cfg['id'])} ({total_repos} 个子模型)")
 
 
 def _download_hf(cfg: dict, progress_cb=None) -> None:
@@ -912,9 +950,12 @@ async def _download_single_generator(request: Request, model_id: str):
     if provider == "rembg":
         logger.info(f"[单模型下载] 使用 rembg 下载 ONNX 权重: {name}")
         future = loop.run_in_executor(None, _download_rembg, cfg, _put)
-    elif cfg.get("local_path") and cfg.get("download_url") and not cfg.get("hf_model_id"):
+    elif cfg.get("local_path") and cfg.get("download_url") and not cfg.get("hf_model_id") and not cfg.get("hf_models"):
         logger.info(f"[单模型下载] 直接下载权重文件: {name} → {cfg['local_path']}")
         future = loop.run_in_executor(None, _download_direct, cfg, _put)
+    elif cfg.get("hf_models"):
+        logger.info(f"[单模型下载] 从 HuggingFace 下载组合模型: {name} ({len(cfg['hf_models'])} 个子模型)")
+        future = loop.run_in_executor(None, _download_hf_multi, cfg, _put)
     elif cfg.get("hf_model_id"):
         logger.info(f"[单模型下载] 从 HuggingFace 下载: {name} (repo: {cfg['hf_model_id']})")
         future = loop.run_in_executor(None, _download_hf, cfg, _put)
@@ -1055,9 +1096,16 @@ async def delete_model_files(model_id: str):
             not_found.append(str(local))
 
     # ── HuggingFace 缓存（diffusers / IOPaint server / HiImage 等）──────────
-    if cfg.get("hf_model_id") and not cfg.get("local_path"):
+    hf_repo_ids: list[str] = []
+    if cfg.get("hf_models"):
+        # 组合模型：收集所有子模型的 repo_id
+        hf_repo_ids = [sub["id"] for sub in cfg["hf_models"]]
+    elif cfg.get("hf_model_id") and not cfg.get("local_path"):
+        hf_repo_ids = [cfg["hf_model_id"]]
+
+    for repo_id in hf_repo_ids:
         hf_cache_dir = Path(MODELS_DIR) / "huggingface"
-        manual_dir = hf_cache_dir / "manual" / cfg["hf_model_id"].replace("/", "--")
+        manual_dir = hf_cache_dir / "manual" / repo_id.replace("/", "--")
 
         # 1. 优先删手动下载目录（_download_hf 使用的路径）
         if manual_dir.exists():
@@ -1071,16 +1119,16 @@ async def delete_model_files(model_id: str):
                 if hub_dir.exists():
                     cache_info = hf_scan(hub_dir)
                     for repo in cache_info.repos:
-                        if repo.repo_id == cfg["hf_model_id"]:
+                        if repo.repo_id == repo_id:
                             shutil.rmtree(repo.repo_path)
                             deleted.append(str(repo.repo_path))
                             break
                     else:
-                        not_found.append(f"HF cache: {cfg['hf_model_id']}")
+                        not_found.append(f"HF cache: {repo_id}")
                 else:
                     not_found.append(f"HF cache dir 不存在: {hub_dir}")
             except Exception as e:
-                logger.error(f"[删除模型] 扫描 HF 缓存失败：{cfg.get('name', model_id)} — {e}", exc_info=True)
+                logger.error(f"[删除模型] 扫描 HF 缓存失败：{cfg.get('name', model_id)} ({repo_id}) — {e}", exc_info=True)
                 raise HTTPException(status_code=500, detail=f"扫描 HF 缓存失败: {e}")
 
     if not deleted and not_found:

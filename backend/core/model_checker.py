@@ -91,6 +91,8 @@ class ModelChecker:
             )
         elif cfg.get("local_path"):
             return self._check_local_path(cfg)
+        elif cfg.get("hf_models"):
+            return self._check_hf_multi(cfg)
         elif cfg.get("hf_model_id"):
             return self._check_hf_cache(cfg)
         else:
@@ -99,7 +101,7 @@ class ModelChecker:
                 name=cfg.get("name", model_id),
                 provider=provider,
                 status="unknown",
-                message="无法确定模型存储路径（缺少 hf_model_id 和 local_path）",
+                message="无法确定模型存储路径（缺少 hf_model_id / hf_models 和 local_path）",
             )
 
     def check_all(self) -> list[ModelCheckResult]:
@@ -141,6 +143,60 @@ class ModelChecker:
         """
         path = self.project_root / cfg["local_path"]
         return self._check_file(cfg, path)
+
+    def _check_hf_multi(self, cfg: dict) -> ModelCheckResult:
+        """
+        组合多子模型完整性检测（hf_models 列表）。
+
+        逐个检测每个子模型，汇总规则：
+          - 任意子模型 missing  → 整体 missing
+          - 任意子模型 corrupted → 整体 corrupted
+          - 任意子模型 partial  → 整体 partial
+          - 全部 ok             → 整体 ok
+          - 其余               → unknown
+        """
+        hf_models: list[dict] = cfg.get("hf_models", [])
+        model_id = cfg["id"]
+        name = cfg.get("name", model_id)
+        provider = cfg.get("provider", "")
+        total_size_mb = cfg.get("size_mb")
+
+        sub_results: list[ModelCheckResult] = []
+        for sub in hf_models:
+            sub_cfg = {
+                "id":        model_id,   # 报错时仍引用父 ID
+                "name":      sub.get("name", sub["id"]),
+                "provider":  provider,
+                "hf_model_id": sub["id"],
+                "size_mb":   sub.get("size_mb"),
+            }
+            sub_results.append(self._check_hf_cache(sub_cfg))
+
+        # ── 汇总状态 ─────────────────────────────────────────────────────────
+        STATUS_PRIORITY = {"missing": 4, "corrupted": 3, "partial": 2, "unknown": 1, "ok": 0}
+        worst = max(sub_results, key=lambda r: STATUS_PRIORITY.get(r.status, 0))
+
+        total_bytes = sum(r.size_bytes for r in sub_results if r.size_bytes)
+
+        if worst.status == "ok":
+            ok_count = len(sub_results)
+            size_info = f"{total_bytes // (1024 * 1024)} MB" if total_bytes else ""
+            message = f"{ok_count} 个子模型全部就绪" + (f", {size_info}" if size_info else "")
+        else:
+            # 找出所有有问题的子模型
+            bad = [r for r in sub_results if r.status != "ok"]
+            bad_names = ", ".join(r.name for r in bad)
+            message = f"{worst.status}: {bad_names} — {bad[0].message}"
+
+        return ModelCheckResult(
+            model_id=model_id,
+            name=name,
+            provider=provider,
+            status=worst.status,
+            message=message,
+            size_bytes=total_bytes or None,
+            expected_size_mb=total_size_mb,
+        )
 
     def _check_hf_cache(self, cfg: dict) -> ModelCheckResult:
         """

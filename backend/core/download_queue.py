@@ -342,11 +342,15 @@ class DownloadQueue:
             _models_mod = importlib.import_module("app.routers.models")
             _download_rembg = getattr(_models_mod, "_download_rembg")
             _download_hf = getattr(_models_mod, "_download_hf")
+            _download_hf_multi = getattr(_models_mod, "_download_hf_multi")
             _download_direct = getattr(_models_mod, "_download_direct")
 
             if provider == "rembg":
                 logger.info(f"[_run_download] 使用 rembg 下载: {task.model_name}")
                 future = loop.run_in_executor(None, _download_rembg, cfg, _put)
+            elif cfg.get("hf_models"):
+                logger.info(f"[_run_download] 使用 HF 组合模型下载: {task.model_name} ({len(cfg['hf_models'])} 个子模型)")
+                future = loop.run_in_executor(None, _download_hf_multi, cfg, _put)
             elif cfg.get("hf_model_id"):
                 logger.info(f"[_run_download] 使用 HF 下载: {task.model_name} repo={cfg['hf_model_id']!r}")
                 future = loop.run_in_executor(None, _download_hf, cfg, _put)
