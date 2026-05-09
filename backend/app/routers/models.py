@@ -494,6 +494,33 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
     IGNORE_SUFFIXES = {".msgpack", ".h5"}
     IGNORE_PREFIXES = ("flax_model", "tf_model")
 
+    # 下载前先检测：如果已存在但状态为 corrupted，删除整个缓存目录重新下载
+    from core.model_checker import ModelChecker
+    checker = ModelChecker()
+    pre_check = checker.check_model(cfg["id"])
+    if pre_check.status == "corrupted":
+        manual_dir = Path(hf_cache) / "manual" / repo_id.replace("/", "--")
+        if manual_dir.exists():
+            import shutil
+            try:
+                shutil.rmtree(manual_dir)
+                logger.warning(f"[HF 下载] 检测到损坏，已删除缓存目录: {manual_dir}")
+            except OSError as rm_err:
+                logger.error(f"[HF 下载] 删除损坏缓存目录失败: {manual_dir} — {rm_err}")
+        # 同时清理标准 hub 缓存（如果存在）
+        try:
+            from huggingface_hub import scan_cache_dir
+            hub_dir = Path(hf_cache) / "hub"
+            if hub_dir.exists():
+                cache_info = scan_cache_dir(hub_dir)
+                for repo in cache_info.repos:
+                    if repo.repo_id == repo_id:
+                        shutil.rmtree(repo.repo_path)
+                        logger.warning(f"[HF 下载] 检测到损坏，已删除 hub 缓存: {repo.repo_path}")
+                        break
+        except Exception:
+            pass
+
     try:
         # 获取文件列表
         logger.info(f"[HF 下载] 获取文件列表: {repo_id}")
