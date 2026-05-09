@@ -11,6 +11,7 @@ import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
+import { DownloadStatus, ModelStatus } from '../constants'
 
 export default function SuperResolution() {
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
@@ -138,11 +139,11 @@ export default function SuperResolution() {
 
     // 检查模型下载状态
     const task = downloadTasks[upscaleModel]
-    if (task?.status === 'downloading' || task?.status === 'queued') {
+    if (task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED) {
       showToast('info', '模型下载中，请稍候...')
       return
     }
-    if (task?.status === 'missing' || task?.status === 'error') {
+    if (task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR) {
       showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
       startDownload(upscaleModel)
       return
@@ -292,7 +293,7 @@ export default function SuperResolution() {
           <div className="mt-auto pt-2 space-y-2">
             {(() => {
               const task = downloadTasks[upscaleModel]
-              const isModelBusy = task?.status === 'downloading' || task?.status === 'queued'
+              const isModelBusy = task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED
               return (
                 <Button
                   onClick={handleUpscale}
@@ -305,9 +306,9 @@ export default function SuperResolution() {
                 ? statusMessage
                 : (() => {
                     const t = downloadTasks[upscaleModel]
-                    if (t?.status === 'downloading') return '等待下载...'
-                    if (t?.status === 'queued') return `排队中 #${t.position}`
-                    if (t?.status === 'missing' || t?.status === 'error') return '点击下载并处理'
+                    if (t?.status === DownloadStatus.DOWNLOADING) return '等待下载...'
+                    if (t?.status === DownloadStatus.QUEUED) return `排队中 #${t.position}`
+                    if (t?.status === ModelStatus.MISSING || t?.status === DownloadStatus.ERROR) return '点击下载并处理'
                     return '开始超分'
                   })()}
                 </Button>

@@ -1034,73 +1034,87 @@ mode_groups:
   - id: background_replace
     name: 换背景
     icon: image
+    icon_name: Image
     description: 智能抠图后替换背景图
     default_model: birefnet
     needs_reference: true
     reference_label: 新背景图
+    reference_hint: 拖拽或点击上传新背景图片
     needs_roi: false
     needs_prompt: false
 
   - id: outfit_swap
     name: 换装模拟
     icon: shirt
-    description: 在指定区域替换服装纹理
+    icon_name: Shirt
+    description: 在指定区域替换服装纹理，边缘自然融合
     default_model: powerpaint
     needs_reference: true
     reference_label: 目标服装图
+    reference_hint: 上传想要替换的目标服装图片
     needs_roi: false
     needs_prompt: false
 
   - id: face_swap
     name: 换脸模拟
     icon: user
-    description: 在人脸区域替换目标人脸（仅用于合法创作）
+    icon_name: User
+    description: 替换人脸区域，搭配 GFPGAN 增强细节（仅限合法创作）
     default_model: gfpgan
     needs_reference: true
     reference_label: 目标人脸图
+    reference_hint: 上传目标人物的人脸图片
     needs_roi: false
     needs_prompt: false
 
   - id: virtual_tryon
     name: 虚拟试穿
     icon: sparkles
-    description: 将服装自然穿上人物照（AI 近似方案）
+    icon_name: Sparkles
+    description: 将服装自然叠合到人物身上（AI 近似方案）
     default_model: sd15
     needs_reference: true
     reference_label: 服装图
+    reference_hint: 上传想要试穿的服装图片
     needs_roi: false
     needs_prompt: false
 
   - id: prompt_inpaint
     name: 精准替换
     icon: crosshair
+    icon_name: Crosshair
     description: 手动框选区域，输入文字描述，SD 1.5 按描述替换选定区域
     default_model: powerpaint_prompt
     needs_reference: false
     needs_roi: true
     needs_prompt: true
+    prompt_required: true
     prompt_label: 替换描述
     prompt_hint: "例：a red down jacket / 一件红色羽绒服"
 
   - id: auto_segment_edit
     name: 智能定位
     icon: wand
+    icon_name: Wand2
     description: 输入中文指令自动识别服装部位并换色/换风格，无需手动框选
     default_model: auto_segment_hsv
     needs_reference: false
     needs_roi: false
     needs_prompt: true
+    prompt_required: true
     prompt_label: 编辑指令
     prompt_hint: "例：将上衣换成黑色 / 把裤子改成牛仔风格"
 
   - id: instruction_edit
     name: 自由编辑
     icon: message
+    icon_name: MessageSquare
     description: 自然语言指令驱动全图语义编辑，无需参考图或框选区域
-    default_model: magicbrush
+    default_model: instruct_pix2pix
     needs_reference: false
     needs_roi: false
     needs_prompt: true
+    prompt_required: true
     prompt_label: 编辑指令
     prompt_hint: "例：make the background a forest / 将背景换成夜晚城市"
 

@@ -9,6 +9,8 @@
  */
 
 import { create } from 'zustand'
+import { DownloadStatus } from '../constants'
+import type { DownloadStatusValue, ModelStatusValue } from '../constants'
 
 // ── 类型定义 ──────────────────────────────────────────────────────────────────
 
@@ -21,8 +23,10 @@ import { create } from 'zustand'
  *   done      - 本次下载完成（文件已就绪）
  *   error     - 下载失败
  *   cancelled - 已取消
+ *
+ * 使用 constants.ts 中的 DownloadStatus / ModelStatus 替代字面量比较。
  */
-export type TaskStatus = 'ok' | 'missing' | 'queued' | 'downloading' | 'done' | 'error' | 'cancelled'
+export type TaskStatus = DownloadStatusValue | ModelStatusValue
 
 /** 单个模型下载任务状态（与后端 DownloadTask.to_dict() 对应） */
 export type DownloadTask = {
@@ -83,7 +87,7 @@ export const useDownloadStore = create<DownloadStoreState>((set, get) => ({
       const base: DownloadTask = existing ?? {
         modelId,
         modelName: modelId,
-        status: 'queued' as TaskStatus,
+        status: DownloadStatus.QUEUED as TaskStatus,
         position: 0,
         message: '',
         speed: '',
@@ -114,7 +118,7 @@ export const useDownloadStore = create<DownloadStoreState>((set, get) => ({
     set((state) => {
       const next: Record<string, DownloadTask> = {}
       for (const [id, task] of Object.entries(state.tasks)) {
-        if (task.status !== 'done' && task.status !== 'error' && task.status !== 'cancelled') {
+        if (task.status !== DownloadStatus.DONE && task.status !== DownloadStatus.ERROR && task.status !== DownloadStatus.CANCELLED) {
           next[id] = task
         }
       }

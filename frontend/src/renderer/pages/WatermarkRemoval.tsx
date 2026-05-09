@@ -14,16 +14,17 @@ import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
+import { PostprocessMethod, DownloadStatus, ModelStatus } from '../constants'
 import type { ROI } from '../stores/useImageStore'
 
 type CanvasTool = 'draw' | 'pan'
 
 // 后处理方法选项
 const POSTPROCESS_OPTIONS = [
-  { value: 'none', label: '无后处理' },
-  { value: 'poisson', label: 'Poisson 融合（修边缘）' },
-  { value: 'lama_refine', label: 'LaMa 二次精修' },
-  { value: 'gfpgan', label: 'GFPGAN（人脸专用）' },
+  { value: PostprocessMethod.NONE,        label: '无后处理' },
+  { value: PostprocessMethod.POISSON,     label: 'Poisson 融合（修边缘）' },
+  { value: PostprocessMethod.LAMA_REFINE, label: 'LaMa 二次精修' },
+  { value: PostprocessMethod.GFPGAN,      label: 'GFPGAN（人脸专用）' },
 ]
 
 export default function WatermarkRemoval() {
@@ -204,11 +205,11 @@ export default function WatermarkRemoval() {
 
     // 检查当前模型的下载状态
     const task = downloadTasks[inpaintModel]
-    if (task?.status === 'downloading' || task?.status === 'queued') {
-      showToast('info', `模型${task.status === 'queued' ? '排队中，' : ''}下载中，请稍候...`)
+    if (task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED) {
+      showToast('info', `模型${task.status === DownloadStatus.QUEUED ? '排队中，' : ''}下载中，请稍候...`)
       return
     }
-    if (task?.status === 'missing' || task?.status === 'error') {
+    if (task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR) {
       showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
       startDownload(inpaintModel)
       return
@@ -525,8 +526,8 @@ export default function WatermarkRemoval() {
           <div className="mt-auto pt-2 space-y-2">
             {(() => {
               const task = downloadTasks[inpaintModel]
-              const isModelBusy = task?.status === 'downloading' || task?.status === 'queued'
-              const isModelMissing = task?.status === 'missing' || task?.status === 'error'
+              const isModelBusy = task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED
+              const isModelMissing = task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR
               return (
                 <Button
                   onClick={handleProcess}
@@ -537,9 +538,9 @@ export default function WatermarkRemoval() {
                 >
                   {isProcessing
                     ? statusMessage
-                    : task?.status === 'downloading'
+                    : task?.status === DownloadStatus.DOWNLOADING
                       ? '等待下载...'
-                      : task?.status === 'queued'
+                      : task?.status === DownloadStatus.QUEUED
                         ? `排队中 #${task.position}`
                         : isModelMissing
                           ? '点击下载并处理'

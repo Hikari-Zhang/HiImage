@@ -31,6 +31,7 @@ from fastapi.responses import StreamingResponse
 
 from core.model_checker import ModelChecker
 from core.model_registry import MODELS, MODE_GROUPS
+from core.constants import ModelStatus as MS, DownloadStatus as DS, Provider, IOPaintMode
 
 logger = logging.getLogger("models")
 
@@ -72,10 +73,10 @@ async def models_health():
     return {
         "models": [_result_to_dict(r) for r in results],
         "summary": {
-            "ok":       sum(1 for r in results if r.status == "ok"),
-            "missing":  sum(1 for r in results if r.status in ("missing", "partial")),
-            "corrupted": sum(1 for r in results if r.status == "corrupted"),
-            "unknown":  sum(1 for r in results if r.status == "unknown"),
+            "ok":       sum(1 for r in results if r.status == MS.OK),
+            "missing":  sum(1 for r in results if r.status in (MS.MISSING, MS.PARTIAL)),
+            "corrupted": sum(1 for r in results if r.status == MS.CORRUPTED),
+            "unknown":  sum(1 for r in results if r.status == MS.UNKNOWN),
             "total":    len(results),
         },
     }
@@ -93,7 +94,7 @@ async def model_health(model_id: str):
     """
     checker = ModelChecker()
     result = checker.check_model(model_id)
-    if result.status == "unknown" and result.message.startswith("模型 ID"):
+    if result.status == MS.UNKNOWN and result.message.startswith("模型 ID"):
         raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
     return _result_to_dict(result)
 
@@ -113,7 +114,7 @@ async def models_list():
         r = check_map.get(mid)
         result.append({
             **{k: v for k, v in m.items() if k not in ("supported_params",)},
-            "status":  r.status if r else "unknown",
+            "status":  r.status if r else MS.UNKNOWN,
             "message": r.message if r else "",
         })
 
@@ -165,7 +166,7 @@ async def _download_generator(request: Request):
     # IOPaint cli 模型（需要下载权重但由 iopaint 自动管理），单独记录跳过原因
     cli_models = [
         m for m in MODELS
-        if m.get("provider") == "IOPaint" and m.get("iopaint_mode") == "cli"
+        if m.get("provider") == Provider.IOPAINT and m.get("iopaint_mode") == IOPaintMode.CLI
     ]
     # 过滤出需要下载的模型
     downloadable = [m for m in MODELS if m not in cli_models]
@@ -198,18 +199,18 @@ async def _download_generator(request: Request):
         logger.debug(f"[一键下载] 检测 ({idx + 1}/{len(downloadable)}): {name}")
         result = await loop.run_in_executor(None, checker.check_model, mid)
 
-        if result.status == "ok":
+        if result.status == MS.OK:
             skip_count += 1
             logger.info(f"[一键下载] 已存在，跳过 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                "status": "skipped", "message": f"已存在，跳过 ({result.message})"
+                "status": DS.SKIPPED, "message": f"已存在，跳过 ({result.message})"
             })
             continue
 
-        if result.status == "corrupted":
+        if result.status == MS.CORRUPTED:
             logger.warning(f"[一键下载] 文件损坏，重新下载 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
-        elif result.status == "partial":
+        elif result.status == MS.PARTIAL:
             logger.warning(f"[一键下载] 下载不完整，重新下载 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
         else:
             logger.info(f"[一键下载] 缺失，开始下载 ({idx + 1}/{len(downloadable)}): {name}")
@@ -219,7 +220,7 @@ async def _download_generator(request: Request):
 
         yield _sse("model", {
             "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-            "status": "downloading", "message": "准备下载...",
+            "status": DS.DOWNLOADING, "message": "准备下载...",
             "speed": "", "downloaded": "", "total_size": "",
         })
 
@@ -227,7 +228,7 @@ async def _download_generator(request: Request):
         def _put(data: dict):
             loop.call_soon_threadsafe(progress_queue.put_nowait, data)
 
-        if provider == "rembg":
+        if provider == Provider.REMBG:
             logger.info(f"[一键下载] 使用 rembg 下载 ONNX 权重: {name}")
             future = loop.run_in_executor(None, _download_rembg, model_cfg, _put)
         elif model_cfg.get("local_path") and model_cfg.get("download_url") and not model_cfg.get("hf_model_id") and not model_cfg.get("hf_models"):
@@ -243,7 +244,7 @@ async def _download_generator(request: Request):
             logger.warning(f"[一键下载] 无下载来源，跳过: {name} (id={mid}, provider={provider})")
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                "status": "skipped", "message": "无下载来源，跳过"
+                "status": DS.SKIPPED, "message": "无下载来源，跳过"
             })
             skip_count += 1
             continue
@@ -273,7 +274,7 @@ async def _download_generator(request: Request):
                                 pass
                         yield _sse("model", {
                             "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                            "status": "downloading",
+                            "status": DS.DOWNLOADING,
                             **item,
                         })
 
@@ -283,7 +284,7 @@ async def _download_generator(request: Request):
                 if isinstance(item, dict):
                     yield _sse("model", {
                         "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                        "status": "downloading",
+                        "status": DS.DOWNLOADING,
                         **item,
                     })
 
@@ -296,7 +297,7 @@ async def _download_generator(request: Request):
             logger.info(f"[一键下载] ✓ 下载完成 ({idx + 1}/{len(downloadable)}): {name}")
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                "status": "done", "message": "下载完成",
+                "status": DS.DONE, "message": "下载完成",
                 "speed": "", "downloaded": "", "total_size": "",
             })
 
@@ -305,7 +306,7 @@ async def _download_generator(request: Request):
             logger.error(f"[一键下载] ✗ 下载失败 ({idx + 1}/{len(downloadable)}): {name} — {e}", exc_info=True)
             yield _sse("model", {
                 "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                "status": "error", "message": f"下载失败: {str(e)[:200]}",
+                "status": DS.ERROR, "message": f"下载失败: {str(e)[:200]}",
                 "speed": "", "downloaded": "", "total_size": "",
             })
 
@@ -498,7 +499,7 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
     from core.model_checker import ModelChecker
     checker = ModelChecker()
     pre_check = checker.check_model(cfg["id"])
-    if pre_check.status == "corrupted":
+    if pre_check.status == MS.CORRUPTED:
         manual_dir = Path(hf_cache) / "manual" / repo_id.replace("/", "--")
         if manual_dir.exists():
             import shutil
@@ -777,7 +778,7 @@ async def queue_download_bulk():
     # 过滤可下载模型（排除 IOPaint cli 内置模型）
     downloadable = [
         m for m in MODELS
-        if not (m.get("provider") == "IOPaint" and m.get("iopaint_mode") == "cli")
+        if not (m.get("provider") == Provider.IOPAINT and m.get("iopaint_mode") == IOPaintMode.CLI)
     ]
 
     # 检测哪些模型需要下载
@@ -786,7 +787,7 @@ async def queue_download_bulk():
 
     need_download = [
         m for m in downloadable
-        if status_map.get(m["id"], "missing") != "ok"
+        if status_map.get(m["id"], MS.MISSING) != MS.OK
     ]
 
     queue = get_download_queue()
@@ -817,7 +818,7 @@ async def queue_download_single(model_id: str):
     if not cfg:
         raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
 
-    if cfg.get("provider") == "IOPaint" and cfg.get("iopaint_mode") == "cli":
+    if cfg.get("provider") == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
         raise HTTPException(
             status_code=400,
             detail="IOPaint 内置模型将在首次使用时自动下载，无需手动触发"
@@ -937,7 +938,7 @@ async def _download_single_generator(request: Request, model_id: str):
     name = cfg.get("name", model_id)
 
     # IOPaint cli 模型：首次使用由 iopaint 自动下载，此接口无法主动触发
-    if cfg.get("provider") == "IOPaint" and cfg.get("iopaint_mode") == "cli":
+    if cfg.get("provider") == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
         logger.info(
             f"[单模型下载] 跳过 IOPaint cli 模型: {name}"
             f"（iopaint 将在首次使用时自动下载权重，size_mb={cfg.get('size_mb')} MB）"
@@ -954,11 +955,11 @@ async def _download_single_generator(request: Request, model_id: str):
 
     # 检测当前状态
     result = await loop.run_in_executor(None, checker.check_model, model_id)
-    if result.status == "ok":
+    if result.status == MS.OK:
         logger.info(f"[单模型下载] 已存在，跳过: {name} — {result.message}")
         yield _sse("model", {
             "id": model_id, "name": name, "index": 1, "total": 1,
-            "status": "skipped", "message": f"已存在，跳过 ({result.message})"
+            "status": DS.SKIPPED, "message": f"已存在，跳过 ({result.message})"
         })
         yield _sse("finish", {"ok": 0, "skipped": 1, "failed": 0, "message": "模型已存在，无需重新下载"})
         return
@@ -967,14 +968,14 @@ async def _download_single_generator(request: Request, model_id: str):
 
     yield _sse("model", {
         "id": model_id, "name": name, "index": 1, "total": 1,
-        "status": "downloading", "message": "准备下载...",
+        "status": DS.DOWNLOADING, "message": "准备下载...",
         "speed": "", "downloaded": "", "total_size": "",
     })
 
     def _put(data: dict):
         loop.call_soon_threadsafe(progress_queue.put_nowait, data)
 
-    if provider == "rembg":
+    if provider == Provider.REMBG:
         logger.info(f"[单模型下载] 使用 rembg 下载 ONNX 权重: {name}")
         future = loop.run_in_executor(None, _download_rembg, cfg, _put)
     elif cfg.get("local_path") and cfg.get("download_url") and not cfg.get("hf_model_id") and not cfg.get("hf_models"):
@@ -990,7 +991,7 @@ async def _download_single_generator(request: Request, model_id: str):
         logger.warning(f"[单模型下载] 无下载来源，跳过: {name} (id={model_id}, provider={provider})")
         yield _sse("model", {
             "id": model_id, "name": name, "index": 1, "total": 1,
-            "status": "skipped", "message": "无下载来源，跳过"
+            "status": DS.SKIPPED, "message": "无下载来源，跳过"
         })
         yield _sse("finish", {"ok": 0, "skipped": 1, "failed": 0, "message": "该模型无可用下载来源"})
         return
@@ -1007,7 +1008,7 @@ async def _download_single_generator(request: Request, model_id: str):
                 if isinstance(item, dict):
                     yield _sse("model", {
                         "id": model_id, "name": name, "index": 1, "total": 1,
-                        "status": "downloading",
+                        "status": DS.DOWNLOADING,
                         **item,
                     })
 
@@ -1017,7 +1018,7 @@ async def _download_single_generator(request: Request, model_id: str):
             if isinstance(item, dict):
                 yield _sse("model", {
                     "id": model_id, "name": name, "index": 1, "total": 1,
-                    "status": "downloading",
+                    "status": DS.DOWNLOADING,
                     **item,
                 })
 
@@ -1027,7 +1028,7 @@ async def _download_single_generator(request: Request, model_id: str):
 
         yield _sse("model", {
             "id": model_id, "name": name, "index": 1, "total": 1,
-            "status": "done", "message": "下载完成",
+            "status": DS.DONE, "message": "下载完成",
             "speed": "", "downloaded": "", "total_size": "",
         })
         logger.info(f"[单模型下载] 完成：{name}")
@@ -1037,7 +1038,7 @@ async def _download_single_generator(request: Request, model_id: str):
         logger.error(f"[单模型下载] 失败：{name} — {e}", exc_info=True)
         yield _sse("model", {
             "id": model_id, "name": name, "index": 1, "total": 1,
-            "status": "error", "message": f"下载失败: {str(e)[:200]}",
+            "status": DS.ERROR, "message": f"下载失败: {str(e)[:200]}",
             "speed": "", "downloaded": "", "total_size": "",
         })
         yield _sse("finish", {"ok": 0, "skipped": 0, "failed": 1, "message": f"下载失败: {str(e)[:100]}"})

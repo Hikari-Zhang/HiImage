@@ -13,6 +13,7 @@ import { useEffect, useCallback } from 'react'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { showToast } from '../components/ui'
+import { DownloadStatus, ModelStatus, ApiPath } from '../constants'
 import type { DownloadTask } from '../stores/useDownloadStore'
 
 // ── 模块级单例（跨组件共享，整个应用生命周期只有一份） ─────────────────────────
@@ -59,7 +60,7 @@ function ensureSubscribed(modelId: string, url: string) {
     return
   }
 
-  const esUrl = `${url}/api/models/subscribe/${encodeURIComponent(modelId)}`
+  const esUrl = `${url}${ApiPath.MODELS_SUBSCRIBE}/${encodeURIComponent(modelId)}`
   console.log(`[SSE] 建立连接: ${esUrl}`)
   const es = new EventSource(esUrl)
   _sseMap.set(modelId, es)
@@ -80,7 +81,7 @@ function ensureSubscribed(modelId: string, url: string) {
       _sseRetryCount.delete(modelId)
       useDownloadStore.getState().setTask(modelId, patch)
 
-      if (patch.status === 'done') {
+      if (patch.status === DownloadStatus.DONE) {
         console.log(`[SSE] 下载完成: ${modelId}`)
         showToast('success', `${patch.modelName || modelId} 下载完成`)
         es.close()
@@ -89,14 +90,14 @@ function ensureSubscribed(modelId: string, url: string) {
         setTimeout(() => _onDownloadDone?.(), 500)
       }
 
-      if (patch.status === 'error') {
+      if (patch.status === DownloadStatus.ERROR) {
         console.log(`[SSE] 下载失败: ${modelId} msg=${patch.message}`)
         showToast('error', `${patch.modelName || modelId} 下载失败: ${patch.message}`)
         es.close()
         _sseMap.delete(modelId)
       }
 
-      if (patch.status === 'cancelled') {
+      if (patch.status === DownloadStatus.CANCELLED) {
         es.close()
         _sseMap.delete(modelId)
       }
@@ -112,7 +113,7 @@ function ensureSubscribed(modelId: string, url: string) {
 
     const current = useDownloadStore.getState().getTask(modelId)
     // 对于 queued/downloading 状态的任务，尝试重连而不是立即标记为 error
-    if (current?.status === 'downloading' || current?.status === 'queued') {
+    if (current?.status === DownloadStatus.DOWNLOADING || current?.status === DownloadStatus.QUEUED) {
       const retries = _sseRetryCount.get(modelId) ?? 0
       if (retries < SSE_MAX_RETRIES) {
         _sseRetryCount.set(modelId, retries + 1)
@@ -120,7 +121,7 @@ function ensureSubscribed(modelId: string, url: string) {
         setTimeout(() => {
           // 重连前再次检查状态，如果已经不再是 queued/downloading 就不重连
           const latest = useDownloadStore.getState().getTask(modelId)
-          if (latest?.status === 'queued' || latest?.status === 'downloading') {
+          if (latest?.status === DownloadStatus.QUEUED || latest?.status === DownloadStatus.DOWNLOADING) {
             ensureSubscribed(modelId, url)
           }
         }, SSE_RETRY_DELAY)
@@ -128,7 +129,7 @@ function ensureSubscribed(modelId: string, url: string) {
         // 超过重试次数，标记为 error
         console.log(`[SSE] 重试次数耗尽，标记为 error: ${modelId}`)
         _sseRetryCount.delete(modelId)
-        useDownloadStore.getState().setTask(modelId, { status: 'error', message: '连接中断，请重试' })
+        useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.ERROR, message: '连接中断，请重试' })
       }
     }
   }
@@ -141,11 +142,11 @@ async function _syncOne(modelId: string) {
     const url = window.electronAPI?.getBackendURL
       ? await window.electronAPI.getBackendURL()
       : backendURL
-    const res = await fetch(`${url}/api/models/health/${encodeURIComponent(modelId)}`)
+    const res = await fetch(`${url}${ApiPath.MODELS_HEALTH}/${encodeURIComponent(modelId)}`)
     if (!res.ok) return
     const data = await res.json() as { status: string; name?: string }
     useDownloadStore.getState().setTask(modelId, {
-      status: data.status === 'ok' ? 'ok' : 'missing',
+      status: data.status === ModelStatus.OK ? ModelStatus.OK : ModelStatus.MISSING,
       speed: '', downloaded: '', totalSize: '', message: '',
     })
   } catch {
@@ -170,7 +171,7 @@ export function useDownloadManager() {
   const syncModelStatus = useCallback(async () => {
     const url = await getURL()
     try {
-      const res = await fetch(`${url}/api/models/list`)
+      const res = await fetch(`${url}${ApiPath.MODELS_LIST}`)
       if (!res.ok) return
       const data = await res.json() as {
         models?: Array<{ id: string; name: string; status: string }>
@@ -180,14 +181,14 @@ export function useDownloadManager() {
       for (const m of data.models ?? []) {
         const current = getTask(m.id)
         if (
-          current?.status === 'queued' ||
-          current?.status === 'downloading' ||
-          current?.status === 'done'
+          current?.status === DownloadStatus.QUEUED ||
+          current?.status === DownloadStatus.DOWNLOADING ||
+          current?.status === DownloadStatus.DONE
         ) continue
         setTask(m.id, {
           modelId:    m.id,
           modelName:  m.name,
-          status:     m.status === 'ok' ? 'ok' : 'missing',
+          status:     m.status === ModelStatus.OK ? ModelStatus.OK : ModelStatus.MISSING,
           message:    '',
           speed:      '',
           downloaded: '',
@@ -206,7 +207,7 @@ export function useDownloadManager() {
     const current = getTask(modelId)
     console.log(`[startDownload] modelId=${modelId} current=`, current)
 
-    if (current?.status === 'queued' || current?.status === 'downloading') {
+    if (current?.status === DownloadStatus.QUEUED || current?.status === DownloadStatus.DOWNLOADING) {
       console.log(`[startDownload] 已在队列，只恢复 SSE: ${modelId}`)
       const url = await getURL()
       ensureSubscribed(modelId, url)
@@ -217,14 +218,14 @@ export function useDownloadManager() {
     // 计算临时排队位置：当前队列中 queued/downloading 的任务数 + 1
     const allTasks = useDownloadStore.getState().tasks
     const queuedCount = Object.values(allTasks).filter(
-      (t) => t.status === 'queued' || t.status === 'downloading'
+      (t) => t.status === DownloadStatus.QUEUED || t.status === DownloadStatus.DOWNLOADING
     ).length
-    setTask(modelId, { status: 'queued', position: queuedCount + 1, message: '提交中...', speed: '', downloaded: '', totalSize: '' })
+    setTask(modelId, { status: DownloadStatus.QUEUED, position: queuedCount + 1, message: '提交中...', speed: '', downloaded: '', totalSize: '' })
 
     const url = await getURL()
     console.log(`[startDownload] POST ${url}/api/models/download/${modelId}`)
     try {
-      const res = await fetch(`${url}/api/models/download/${encodeURIComponent(modelId)}`, {
+      const res = await fetch(`${url}${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, {
         method: 'POST',
       })
       if (!res.ok) {
@@ -238,7 +239,7 @@ export function useDownloadManager() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[startDownload] 失败:`, msg)
-      setTask(modelId, { status: 'error', message: msg })
+      setTask(modelId, { status: DownloadStatus.ERROR, message: msg })
       showToast('error', `下载失败: ${msg}`)
     }
   }, [getURL])
@@ -255,14 +256,14 @@ export function useDownloadManager() {
 
     const url = await getURL()
     try {
-      await fetch(`${url}/api/models/download/${encodeURIComponent(modelId)}`, {
+      await fetch(`${url}${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, {
         method: 'DELETE',
       })
     } catch {
       // 忽略
     }
 
-    useDownloadStore.getState().setTask(modelId, { status: 'missing', message: '', speed: '', downloaded: '' })
+    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELLED, message: '', speed: '', downloaded: '' })
   }, [getURL])
 
   // ── 一键下载 ────────────────────────────────────────────────────────────────
@@ -270,7 +271,7 @@ export function useDownloadManager() {
   const startBulkDownload = useCallback(async () => {
     const url = await getURL()
     try {
-      const res = await fetch(`${url}/api/models/download/bulk`, { method: 'POST' })
+      const res = await fetch(`${url}${ApiPath.MODELS_DOWNLOAD}/bulk`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as Record<string, unknown>
         throw new Error((body.detail as string) || `一键下载提交失败 (${res.status})`)
@@ -289,7 +290,7 @@ export function useDownloadManager() {
         if (task.modelId) {
           setTask(task.modelId, task)
           modelIds.push(task.modelId)
-          if (task.status === 'queued' || task.status === 'downloading') {
+          if (task.status === DownloadStatus.QUEUED || task.status === DownloadStatus.DOWNLOADING) {
             ensureSubscribed(task.modelId, url)
           }
         }
@@ -310,7 +311,7 @@ export function useDownloadManager() {
     const { bulkSession } = useDownloadStore.getState()
     for (const modelId of bulkSession.modelIds) {
       const task = useDownloadStore.getState().getTask(modelId)
-      if (task?.status === 'queued' || task?.status === 'downloading') {
+      if (task?.status === DownloadStatus.QUEUED || task?.status === DownloadStatus.DOWNLOADING) {
         await cancelDownload(modelId)
       }
     }
@@ -323,7 +324,7 @@ export function useDownloadManager() {
     const url = await getURL()
     const { tasks } = useDownloadStore.getState()
     for (const [modelId, task] of Object.entries(tasks)) {
-      if (task.status === 'queued' || task.status === 'downloading') {
+      if (task.status === DownloadStatus.QUEUED || task.status === DownloadStatus.DOWNLOADING) {
         ensureSubscribed(modelId, url)
       }
     }

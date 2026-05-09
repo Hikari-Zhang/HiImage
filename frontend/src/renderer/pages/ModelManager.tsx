@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   CheckCircle2, XCircle, AlertCircle, Loader2, Trash2, RefreshCw,
   Package, Download, ChevronDown, ChevronUp, Clock,
@@ -8,7 +8,9 @@ import { showToast } from '../components/ui'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager, registerDownloadDoneCallback } from '../hooks/useDownloadManager'
+import { ModelStatus, DownloadStatus, Provider, IOPaintMode, ApiPath } from '../constants'
 import type { DownloadTask } from '../stores/useDownloadStore'
+import type { ModelStatusValue } from '../constants'
 
 // ── 类型 ──────────────────────────────────────────────────────────────────────
 
@@ -24,7 +26,7 @@ interface ModelEntry {
   download_url?: string
   display_group?: string
   iopaint_mode?: string
-  status: 'ok' | 'missing' | 'partial' | 'corrupted' | 'unknown'
+  status: ModelStatusValue
   message: string
 }
 
@@ -35,20 +37,20 @@ interface ModeGroup {
 
 // ── 辅助 ──────────────────────────────────────────────────────────────────────
 
-const STATUS_ICON = {
-  ok:        <CheckCircle2 size={13} className="text-status-success flex-shrink-0" />,
-  missing:   <XCircle size={13} className="text-status-error flex-shrink-0" />,
-  partial:   <AlertCircle size={13} className="text-yellow-400 flex-shrink-0" />,
-  corrupted: <AlertCircle size={13} className="text-orange-400 flex-shrink-0" />,
-  unknown:   <AlertCircle size={13} className="text-fg-secondary flex-shrink-0" />,
+const STATUS_ICON: Record<ModelStatusValue, React.ReactElement> = {
+  [ModelStatus.OK]:        <CheckCircle2 size={13} className="text-status-success flex-shrink-0" />,
+  [ModelStatus.MISSING]:   <XCircle size={13} className="text-status-error flex-shrink-0" />,
+  [ModelStatus.PARTIAL]:   <AlertCircle size={13} className="text-yellow-400 flex-shrink-0" />,
+  [ModelStatus.CORRUPTED]: <AlertCircle size={13} className="text-orange-400 flex-shrink-0" />,
+  [ModelStatus.UNKNOWN]:   <AlertCircle size={13} className="text-fg-secondary flex-shrink-0" />,
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  ok:        '已下载',
-  missing:   '未下载',
-  partial:   '不完整',
-  corrupted: '已损坏',
-  unknown:   '未知',
+  [ModelStatus.OK]:        '已下载',
+  [ModelStatus.MISSING]:   '未下载',
+  [ModelStatus.PARTIAL]:   '不完整',
+  [ModelStatus.CORRUPTED]: '已损坏',
+  [ModelStatus.UNKNOWN]:   '未知',
 }
 
 const BADGE_COLOR: Record<string, string> = {
@@ -92,7 +94,7 @@ export default function ModelManager() {
       const url = window.electronAPI?.getBackendURL
         ? await window.electronAPI.getBackendURL()
         : backendURL
-      const res = await fetch(`${url}/api/models/list`, { signal: controller.signal })
+      const res = await fetch(`${url}${ApiPath.MODELS_LIST}`, { signal: controller.signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json() as { models?: ModelEntry[]; mode_groups?: ModeGroup[] }
       setModels(data.models ?? [])
@@ -160,7 +162,7 @@ export default function ModelManager() {
       : groupId === '__ungrouped__'
         ? models.filter((m) => !m.tags?.some((t) => allGroupIds.has(t)))
         : models.filter((m) => m.tags?.includes(groupId))
-    const ok = list.filter((m) => m.status === 'ok').length
+    const ok = list.filter((m) => m.status === ModelStatus.OK).length
     return { total: list.length, ok }
   }
 
@@ -183,7 +185,7 @@ export default function ModelManager() {
         showToast('success', data.message ?? '删除成功')
         // 更新 downloadStore：删除后状态变为 missing，功能页面模型选择器立即同步
         useDownloadStore.getState().setTask(model.id, {
-          status: 'missing',
+          status: ModelStatus.MISSING,
           message: '',
           speed: '',
           downloaded: '',
@@ -211,14 +213,14 @@ export default function ModelManager() {
 
   const bulkStatus = (() => {
     if (!bulkSession.active) return 'idle'
-    if (bulkTasks.some((t) => t.status === 'downloading' || t.status === 'queued')) return 'running'
-    if (bulkTasks.some((t) => t.status === 'error')) return 'error'
-    if (bulkTasks.every((t) => t.status === 'done' || t.status === 'ok' || t.status === 'cancelled')) return 'done'
+    if (bulkTasks.some((t) => t.status === DownloadStatus.DOWNLOADING || t.status === DownloadStatus.QUEUED)) return 'running'
+    if (bulkTasks.some((t) => t.status === DownloadStatus.ERROR)) return 'error'
+    if (bulkTasks.every((t) => t.status === DownloadStatus.DONE || t.status === ModelStatus.OK || t.status === DownloadStatus.CANCELLED)) return 'done'
     return 'running'
   })()
 
-  const doneCount = bulkTasks.filter((t) => t.status === 'done' || t.status === 'ok').length
-  const errorCount = bulkTasks.filter((t) => t.status === 'error').length
+  const doneCount = bulkTasks.filter((t) => t.status === DownloadStatus.DONE || t.status === ModelStatus.OK).length
+  const errorCount = bulkTasks.filter((t) => t.status === DownloadStatus.ERROR).length
 
   // ── 渲染 ─────────────────────────────────────────────────────────────────────
 
@@ -263,8 +265,8 @@ export default function ModelManager() {
             {filteredModels.length} 个模型
             {filteredModels.length > 0 && (
               <span className="ml-2">
-                · 已下载 {filteredModels.filter((m) => m.status === 'ok').length}
-                · 缺失 {filteredModels.filter((m) => m.status === 'missing').length}
+                · 已下载 {filteredModels.filter((m) => m.status === ModelStatus.OK).length}
+                · 缺失 {filteredModels.filter((m) => m.status === ModelStatus.MISSING).length}
               </span>
             )}
           </span>
@@ -413,40 +415,40 @@ function BulkTaskRow({ task }: { task: DownloadTask }) {
     <div className="px-4 py-1.5">
       <div className="flex items-center gap-2">
         <span className="flex-shrink-0">
-          {task.status === 'downloading' && <Loader2 size={11} className="animate-spin text-fg-accent" />}
-          {task.status === 'queued'      && <Clock size={11} className="text-orange-400" />}
-          {(task.status === 'done' || task.status === 'ok') && <CheckCircle2 size={11} className="text-status-success" />}
-          {task.status === 'error'       && <XCircle size={11} className="text-status-error" />}
-          {task.status === 'cancelled'   && <XCircle size={11} className="text-fg-secondary" />}
+          {task.status === DownloadStatus.DOWNLOADING && <Loader2 size={11} className="animate-spin text-fg-accent" />}
+          {task.status === DownloadStatus.QUEUED      && <Clock size={11} className="text-orange-400" />}
+          {(task.status === DownloadStatus.DONE || task.status === ModelStatus.OK) && <CheckCircle2 size={11} className="text-status-success" />}
+          {task.status === DownloadStatus.ERROR       && <XCircle size={11} className="text-status-error" />}
+          {task.status === DownloadStatus.CANCELLED   && <XCircle size={11} className="text-fg-secondary" />}
         </span>
         <span className={clsx(
           'flex-1 text-[11px] truncate',
-          task.status === 'error' ? 'text-status-error' : 'text-fg-primary',
+          task.status === DownloadStatus.ERROR ? 'text-status-error' : 'text-fg-primary',
         )}>
           {task.modelName}
         </span>
         <div className="flex items-center gap-2 flex-shrink-0">
-          {task.status === 'downloading' && task.speed && (
+          {task.status === DownloadStatus.DOWNLOADING && task.speed && (
             <span className="text-[10px] text-fg-accent font-mono min-w-[70px] text-right">{task.speed}</span>
           )}
-          {task.status === 'downloading' && task.downloaded && (
+          {task.status === DownloadStatus.DOWNLOADING && task.downloaded && (
             <span className="text-[10px] text-fg-secondary font-mono">
               {task.downloaded}{task.totalSize ? ` / ${task.totalSize}` : ''}
             </span>
           )}
-          {task.status === 'queued' && (
+          {task.status === DownloadStatus.QUEUED && (
             <span className="text-[10px] text-orange-400">#{task.position}</span>
           )}
-          {task.status !== 'downloading' && task.status !== 'queued' && (
+          {task.status !== DownloadStatus.DOWNLOADING && task.status !== DownloadStatus.QUEUED && (
             <span className="text-[10px] text-fg-secondary max-w-[160px] truncate">{task.message}</span>
           )}
-          {task.status === 'downloading' && !task.speed && (
+          {task.status === DownloadStatus.DOWNLOADING && !task.speed && (
             <span className="text-[10px] text-fg-secondary max-w-[140px] truncate">{task.message}</span>
           )}
         </div>
       </div>
       {/* 单行进度条 */}
-      {task.status === 'downloading' && task.downloaded && task.totalSize && task.totalSize !== '?' && (() => {
+      {task.status === DownloadStatus.DOWNLOADING && task.downloaded && task.totalSize && task.totalSize !== '?' && (() => {
         const parseMB = (s: string) => {
           const n = parseFloat(s)
           if (s.includes('GB')) return n * 1024
@@ -511,10 +513,10 @@ function ModelRow({
   onDelete: (e: React.MouseEvent) => void
   onCancelConfirm: (e: React.MouseEvent) => void
 }) {
-  const isBuiltin = model.provider === 'IOPaint' && model.iopaint_mode === 'cli'
-  const isDownloading = downloadTask?.status === 'downloading'
-  const isQueued = downloadTask?.status === 'queued'
-  const isDone = downloadTask?.status === 'done' || model.status === 'ok'
+  const isBuiltin = model.provider === Provider.IOPAINT && model.iopaint_mode === IOPaintMode.CLI
+  const isDownloading = downloadTask?.status === DownloadStatus.DOWNLOADING
+  const isQueued = downloadTask?.status === DownloadStatus.QUEUED
+  const isDone = downloadTask?.status === DownloadStatus.DONE || model.status === ModelStatus.OK
   const canDelete = !isBuiltin && isDone && !isDownloading && !isQueued
   const canDownload = !isBuiltin && !isDone && !isDownloading && !isQueued
 
@@ -540,11 +542,11 @@ function ModelRow({
           ? <Loader2 size={13} className="animate-spin text-fg-accent" />
           : isQueued
           ? <Clock size={13} className="text-orange-400" />
-          : downloadTask?.status === 'done'
+          : downloadTask?.status === DownloadStatus.DONE
           ? <CheckCircle2 size={13} className="text-status-success" />
-          : downloadTask?.status === 'error'
+          : downloadTask?.status === DownloadStatus.ERROR
           ? <XCircle size={13} className="text-status-error" />
-          : (STATUS_ICON[model.status] ?? STATUS_ICON.unknown)
+          : (STATUS_ICON[model.status] ?? STATUS_ICON[ModelStatus.UNKNOWN])
         }
       </div>
 
@@ -591,12 +593,12 @@ function ModelRow({
           <div className="mt-1">
             <span className="text-[10px] text-orange-400">排队中，第 {downloadTask.position} 位</span>
           </div>
-        ) : downloadTask?.status === 'error' ? (
+        ) : downloadTask?.status === DownloadStatus.ERROR ? (
           <div className="flex items-center gap-3 mt-1 flex-wrap">
             <span className="text-[10px] font-medium text-status-error">下载失败</span>
             <span className="text-[10px] text-fg-secondary truncate max-w-[240px]">{downloadTask.message}</span>
           </div>
-        ) : downloadTask?.status === 'done' ? (
+        ) : downloadTask?.status === DownloadStatus.DONE ? (
           <div className="mt-1">
             <span className="text-[10px] font-medium text-status-success">下载完成</span>
           </div>
@@ -604,14 +606,14 @@ function ModelRow({
           <div className="flex items-center gap-3 mt-1 flex-wrap">
             <span className={clsx(
               'text-[10px] font-medium',
-              model.status === 'ok'        ? 'text-status-success' :
-              model.status === 'missing'   ? 'text-status-error' :
-              model.status === 'corrupted' ? 'text-orange-400' :
+              model.status === ModelStatus.OK        ? 'text-status-success' :
+              model.status === ModelStatus.MISSING   ? 'text-status-error' :
+              model.status === ModelStatus.CORRUPTED ? 'text-orange-400' :
               'text-fg-secondary'
             )}>
               {STATUS_LABEL[model.status] ?? '未知'}
             </span>
-            {model.message && model.status !== 'ok' && (
+            {model.message && model.status !== ModelStatus.OK && (
               <span className="text-[10px] text-fg-secondary truncate max-w-[200px]">{model.message}</span>
             )}
             {model.size_mb && (

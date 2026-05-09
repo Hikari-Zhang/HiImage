@@ -21,6 +21,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
+from core.constants import DownloadStatus as DS, Provider, ConfigKey
+
 logger = logging.getLogger("download_queue")
 
 
@@ -51,7 +53,7 @@ class DownloadTask:
     """单个下载任务的状态快照。"""
     model_id: str
     model_name: str
-    status: str = "queued"          # queued / downloading / done / error / cancelled
+    status: str = DS.QUEUED          # queued / downloading / done / error / cancelled
     position: int = 0               # queued 时的排队序号（1-based），downloading 时为 0
     message: str = "等待下载..."
     speed: str = ""
@@ -114,7 +116,7 @@ class DownloadQueue:
     @property
     def max_concurrent(self) -> int:
         from app.config import get as get_config
-        return int(get_config("download.max_concurrent", 3))
+        return int(get_config(ConfigKey.DOWNLOAD_MAX_CONCURRENT, 3))
 
     # ── 公开接口 ─────────────────────────────────────────────────────────────
 
@@ -128,7 +130,7 @@ class DownloadQueue:
         """
         # 去重：已有活跃任务（queued 或 downloading）则直接返回
         existing = self._tasks.get(model_id)
-        if existing and existing.status in ("queued", "downloading"):
+        if existing and existing.status in (DS.QUEUED, DS.DOWNLOADING):
             logger.info(f"[队列] submit 去重: {model_id} 已是 {existing.status}，直接返回")
             return existing
 
@@ -147,7 +149,7 @@ class DownloadQueue:
 
         if active_count < max_c:
             # 有空槽，直接放入 active 并启动下载
-            task.status = "downloading"
+            task.status = DS.DOWNLOADING
             task.position = 0
             task.message = "准备下载..."
             self._active[model_id] = task
@@ -159,7 +161,7 @@ class DownloadQueue:
             # 排队
             self._pending.append(model_id)
             task.position = len(self._pending)
-            task.status = "queued"
+            task.status = DS.QUEUED
             task.message = f"排队中，第 {task.position} 位"
             logger.info(f"[队列] 排队等待: {name} position={task.position}")
 
@@ -184,21 +186,21 @@ class DownloadQueue:
         if not task:
             return False
 
-        if task.status == "queued":
+        if task.status == DS.QUEUED:
             # 从 pending 队列移除
             if model_id in self._pending:
                 self._pending.remove(model_id)
-            task.status = "cancelled"
+            task.status = DS.CANCELLED
             task.message = "已取消"
             self._broadcast(model_id, task.to_dict())
             self._update_positions()
             logger.info(f"[队列] 取消排队任务: {task.model_name}")
             return True
 
-        if task.status == "downloading":
+        if task.status == DS.DOWNLOADING:
             # 设置取消标志，下载线程会检查
             task._cancel_flag = True
-            task.status = "cancelled"
+            task.status = DS.CANCELLED
             task.message = "已取消"
             self._broadcast(model_id, task.to_dict())
             if model_id in self._active:
@@ -237,7 +239,7 @@ class DownloadQueue:
         # 先推一次当前状态（让客户端立即同步），但只推活跃状态
         # done/error/cancelled 是终态，不应该在重新连接时重新触发
         task = self._tasks.get(model_id)
-        if task and task.status in ("queued", "downloading"):
+        if task and task.status in (DS.QUEUED, DS.DOWNLOADING):
             logger.info(f"[subscribe] 推送初始状态: {model_id!r} status={task.status!r}")
             await q.put(task.to_dict())
         elif task:
@@ -300,9 +302,9 @@ class DownloadQueue:
             while self._pending and len(self._active) < self.max_concurrent:
                 mid = self._pending.popleft()
                 task = self._tasks.get(mid)
-                if not task or task.status == "cancelled":
+                if not task or task.status == DS.CANCELLED:
                     continue
-                task.status = "downloading"
+                task.status = DS.DOWNLOADING
                 task.position = 0
                 task.message = "准备下载..."
                 self._active[mid] = task
@@ -345,7 +347,7 @@ class DownloadQueue:
             _download_hf_multi = getattr(_models_mod, "_download_hf_multi")
             _download_direct = getattr(_models_mod, "_download_direct")
 
-            if provider == "rembg":
+            if provider == Provider.REMBG:
                 logger.info(f"[_run_download] 使用 rembg 下载: {task.model_name}")
                 future = loop.run_in_executor(None, _download_rembg, cfg, _put)
             elif cfg.get("hf_models"):
@@ -398,14 +400,14 @@ class DownloadQueue:
                 raise exc
 
             # 成功
-            task.status = "done"
+            task.status = DS.DONE
             task.message = "下载完成"
             task.speed = ""
             task.updated_at = time.monotonic()
             logger.info(f"[队列] ✓ 完成: {task.model_name}")
 
         except Exception as e:
-            task.status = "error"
+            task.status = DS.ERROR
             task.message = f"下载失败: {str(e)[:200]}"
             task.speed = ""
             task.updated_at = time.monotonic()
@@ -442,7 +444,7 @@ class DownloadQueue:
         """重新计算 pending 队列中所有任务的排队位置。"""
         for idx, mid in enumerate(self._pending, 1):
             task = self._tasks.get(mid)
-            if task and task.status == "queued":
+            if task and task.status == DS.QUEUED:
                 task.position = idx
                 task.message = f"排队中，第 {idx} 位"
                 self._broadcast(mid, task.to_dict())

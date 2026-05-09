@@ -24,8 +24,9 @@ from typing import Literal, Optional
 # 延迟导入：model_registry 在模块级加载 models.yaml，
 # 这里同样在模块级引入（一次性，无性能问题）。
 from core.model_registry import MODELS, MODEL_BY_ID
+from core.constants import ModelStatus as MS, Provider, IOPaintMode
 
-# 状态字面量
+# 状态字面量（保留向后兼容的类型别名）
 ModelStatus = Literal["ok", "missing", "partial", "corrupted", "unknown"]
 
 
@@ -70,23 +71,23 @@ class ModelChecker:
             return ModelCheckResult(
                 model_id=model_id,
                 name=model_id,
-                provider="unknown",
-                status="unknown",
+                provider=MS.UNKNOWN,
+                status=MS.UNKNOWN,
                 message=f"模型 ID '{model_id}' 不在注册表中",
             )
 
         provider = cfg.get("provider", "")
 
-        if provider == "rembg":
+        if provider == Provider.REMBG:
             return self._check_rembg(cfg)
-        elif provider == "IOPaint" and cfg.get("iopaint_mode") == "cli":
+        elif provider == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
             # IOPaint 内置的快速模型（lama/migan/zits 等）：随 iopaint 包一起安装，
             # 无独立权重文件，无需下载，直接标记为 ok/builtin
             return ModelCheckResult(
                 model_id=model_id,
                 name=cfg.get("name", model_id),
                 provider=provider,
-                status="ok",
+                status=MS.OK,
                 message="内置模型（随 iopaint 包安装，无需单独下载）",
             )
         elif cfg.get("local_path"):
@@ -100,7 +101,7 @@ class ModelChecker:
                 model_id=model_id,
                 name=cfg.get("name", model_id),
                 provider=provider,
-                status="unknown",
+                status=MS.UNKNOWN,
                 message="无法确定模型存储路径（缺少 hf_model_id / hf_models 和 local_path）",
             )
 
@@ -173,12 +174,12 @@ class ModelChecker:
             sub_results.append(self._check_hf_cache(sub_cfg))
 
         # ── 汇总状态 ─────────────────────────────────────────────────────────
-        STATUS_PRIORITY = {"missing": 4, "corrupted": 3, "partial": 2, "unknown": 1, "ok": 0}
+        STATUS_PRIORITY = {MS.MISSING: 4, MS.CORRUPTED: 3, MS.PARTIAL: 2, MS.UNKNOWN: 1, MS.OK: 0}
         worst = max(sub_results, key=lambda r: STATUS_PRIORITY.get(r.status, 0))
 
         total_bytes = sum(r.size_bytes for r in sub_results if r.size_bytes)
 
-        if worst.status == "ok":
+        if worst.status == MS.OK:
             ok_count = len(sub_results)
             size_info = f"{total_bytes // (1024 * 1024)} MB" if total_bytes else ""
             message = f"{ok_count} 个子模型全部就绪" + (f", {size_info}" if size_info else "")
@@ -228,7 +229,7 @@ class ModelChecker:
                     model_id=cfg["id"],
                     name=name,
                     provider=provider,
-                    status="partial" if all_files else "missing",
+                    status=MS.PARTIAL if all_files else MS.MISSING,
                     message="缓存目录存在但无权重文件（下载可能中断）",
                     file_path=str(manual_dir),
                     expected_size_mb=size_mb,
@@ -245,7 +246,7 @@ class ModelChecker:
                         model_id=cfg["id"],
                         name=name,
                         provider=provider,
-                        status="corrupted",
+                        status=MS.CORRUPTED,
                         message=(
                             f"文件过小: {actual_mb:.1f} MB（期望 ~{size_mb} MB），"
                             "可能下载不完整"
@@ -273,7 +274,7 @@ class ModelChecker:
                             model_id=cfg["id"],
                             name=name,
                             provider=provider,
-                            status="corrupted",
+                            status=MS.CORRUPTED,
                             message=f"safetensors 文件头损坏 ({sf.name}): {e}",
                             file_path=str(sf),
                             size_bytes=total_bytes,
@@ -284,7 +285,7 @@ class ModelChecker:
                 model_id=cfg["id"],
                 name=name,
                 provider=provider,
-                status="ok",
+                status=MS.OK,
                 message=f"{len(weight_files)} 个权重文件, {total_bytes // (1024 * 1024)} MB",
                 file_path=str(manual_dir),
                 size_bytes=total_bytes,
@@ -299,7 +300,7 @@ class ModelChecker:
                 model_id=cfg["id"],
                 name=name,
                 provider=provider,
-                status="unknown",
+                status=MS.UNKNOWN,
                 message="huggingface_hub 未安装，无法检测 HF 缓存",
             )
 
@@ -308,7 +309,7 @@ class ModelChecker:
                 model_id=cfg["id"],
                 name=name,
                 provider=provider,
-                status="missing",
+                status=MS.MISSING,
                 message=f"HF 缓存目录不存在: {self.hf_cache_dir}",
                 expected_size_mb=size_mb,
             )
@@ -320,7 +321,7 @@ class ModelChecker:
                 model_id=cfg["id"],
                 name=name,
                 provider=provider,
-                status="unknown",
+                status=MS.UNKNOWN,
                 message=f"无法扫描 HF 缓存: {e}",
             )
 
@@ -333,7 +334,7 @@ class ModelChecker:
                         model_id=cfg["id"],
                         name=name,
                         provider=provider,
-                        status="partial",
+                        status=MS.PARTIAL,
                         message="缓存目录存在但无有效权重文件（可能下载中断）",
                         file_path=str(repo.repo_path),
                         size_bytes=repo.size_on_disk,
@@ -349,7 +350,7 @@ class ModelChecker:
                         model_id=cfg["id"],
                         name=name,
                         provider=provider,
-                        status="corrupted",
+                        status=MS.CORRUPTED,
                         message="HF 缓存目录存在结构性问题（文件可能损坏）",
                         file_path=str(repo.repo_path),
                         size_bytes=repo.size_on_disk,
@@ -360,7 +361,7 @@ class ModelChecker:
                     model_id=cfg["id"],
                     name=name,
                     provider=provider,
-                    status="ok",
+                    status=MS.OK,
                     message=f"{repo.nb_files} 个文件, {repo_size_mb} MB",
                     file_path=str(repo.repo_path),
                     size_bytes=repo.size_on_disk,
@@ -371,7 +372,7 @@ class ModelChecker:
             model_id=cfg["id"],
             name=name,
             provider=provider,
-            status="missing",
+            status=MS.MISSING,
             message=f"未在 HF 缓存中找到 {repo_id}（manual: {manual_dir}, hub: {self.hf_cache_dir}）",
             expected_size_mb=size_mb,
         )
@@ -392,7 +393,7 @@ class ModelChecker:
                 model_id=cfg["id"],
                 name=name,
                 provider=provider,
-                status="missing",
+                status=MS.MISSING,
                 message=f"文件不存在: {path}",
                 expected_size_mb=size_mb,
             )
@@ -408,7 +409,7 @@ class ModelChecker:
                     model_id=cfg["id"],
                     name=name,
                     provider=provider,
-                    status="corrupted",
+                    status=MS.CORRUPTED,
                     message=(
                         f"文件过小: {actual_mb:.1f} MB（期望 ~{size_mb} MB）"
                         "，可能下载不完整"
@@ -434,7 +435,7 @@ class ModelChecker:
                     model_id=cfg["id"],
                     name=name,
                     provider=provider,
-                    status="corrupted",
+                    status=MS.CORRUPTED,
                     message=f"safetensors 文件头损坏: {e}",
                     file_path=str(path),
                     size_bytes=size_bytes,
@@ -446,7 +447,7 @@ class ModelChecker:
             model_id=cfg["id"],
             name=name,
             provider=provider,
-            status="ok",
+            status=MS.OK,
             message=f"{actual_mb:.0f} MB",
             file_path=str(path),
             size_bytes=size_bytes,

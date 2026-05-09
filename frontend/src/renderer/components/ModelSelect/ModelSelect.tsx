@@ -13,6 +13,7 @@ import { CheckCircle2, Download, Loader2, Clock, XCircle, ChevronDown } from 'lu
 import { clsx } from 'clsx'
 import { useDownloadStore } from '../../stores/useDownloadStore'
 import { useDownloadManager } from '../../hooks/useDownloadManager'
+import { DownloadStatus, ModelStatus } from '../../constants'
 import type { TaskStatus } from '../../stores/useDownloadStore'
 
 // ── 类型 ──────────────────────────────────────────────────────────────────────
@@ -50,19 +51,19 @@ function StatusIcon({ modelId, size = 11 }: { modelId: string; size?: number }) 
   // 未加载过状态（syncModelStatus 尚未完成）时不显示
   if (!status) return null
 
-  if (status === 'ok' || status === 'done' || status === 'cancelled') {
+  if (status === ModelStatus.OK || status === DownloadStatus.DONE || status === DownloadStatus.CANCELLED) {
     return <CheckCircle2 size={size} className="text-green-400 flex-shrink-0" />
   }
-  if (status === 'missing') {
+  if (status === ModelStatus.MISSING) {
     return <Download size={size} className="text-fg-secondary flex-shrink-0" />
   }
-  if (status === 'downloading') {
+  if (status === DownloadStatus.DOWNLOADING) {
     return <Loader2 size={size} className="animate-spin text-blue-400 flex-shrink-0" />
   }
-  if (status === 'queued') {
+  if (status === DownloadStatus.QUEUED) {
     return <Clock size={size} className="text-orange-400 flex-shrink-0" />
   }
-  if (status === 'error') {
+  if (status === DownloadStatus.ERROR) {
     return <XCircle size={size} className="text-red-400 flex-shrink-0" />
   }
 
@@ -74,7 +75,7 @@ function ProgressText({ modelId }: { modelId: string }) {
   const task = useDownloadStore((s) => s.tasks[modelId])
   if (!task) return null
 
-  if (task.status === 'downloading') {
+  if (task.status === DownloadStatus.DOWNLOADING) {
     const parts: string[] = []
     if (task.speed) parts.push(task.speed)
     if (task.downloaded && task.totalSize) parts.push(`${task.downloaded}/${task.totalSize}`)
@@ -85,11 +86,11 @@ function ProgressText({ modelId }: { modelId: string }) {
       : null
   }
 
-  if (task.status === 'queued') {
+  if (task.status === DownloadStatus.QUEUED) {
     return <span className="text-[10px] text-orange-400 ml-auto flex-shrink-0">#{task.position}</span>
   }
 
-  if (task.status === 'error') {
+  if (task.status === DownloadStatus.ERROR) {
     return <span className="text-[10px] text-red-400 ml-auto flex-shrink-0 truncate max-w-[100px]">{task.message}</span>
   }
 
@@ -140,7 +141,7 @@ export default function ModelSelect({
       const task = tasks[optionValue]
       // task 不存在（从未进入队列）或 error 时触发下载
       // done/queued/downloading 时不重复触发
-      if (!task || task.status === 'error') {
+      if (!task || task.status === DownloadStatus.ERROR) {
         // 此处不立即触发，等用户点"开始"按钮时再触发
         // （功能页面自己决定是否立即下载）
       }
@@ -156,19 +157,19 @@ export default function ModelSelect({
   // 当前选中模型的状态提示文字
   const statusHint = (() => {
     if (!selectedTask) return null
-    if (selectedTask.status === 'missing') {
+    if (selectedTask.status === ModelStatus.MISSING) {
       return { type: 'missing' as const, text: '模型未下载，点击"开始"按钮将自动下载' }
     }
-    if (selectedTask.status === 'downloading') {
+    if (selectedTask.status === DownloadStatus.DOWNLOADING) {
       const p = [selectedTask.speed, selectedTask.downloaded && selectedTask.totalSize
         ? `${selectedTask.downloaded} / ${selectedTask.totalSize}`
         : selectedTask.downloaded].filter(Boolean).join('  ')
       return { type: 'downloading' as const, text: p || '下载中...' }
     }
-    if (selectedTask.status === 'queued') {
+    if (selectedTask.status === DownloadStatus.QUEUED) {
       return { type: 'queued' as const, text: `排队中，第 ${selectedTask.position} 位` }
     }
-    if (selectedTask.status === 'error') {
+    if (selectedTask.status === DownloadStatus.ERROR) {
       return { type: 'error' as const, text: `下载失败: ${selectedTask.message}` }
     }
     return null
@@ -177,10 +178,10 @@ export default function ModelSelect({
   const renderOption = (opt: ModelOption) => {
     const task = tasks[opt.value]
     const isSelected = opt.value === value
-    const isDownloading = task?.status === 'downloading'
-    const isQueued = task?.status === 'queued'
-    const isError = task?.status === 'error'
-    const isMissing = task?.status === 'missing'
+    const isDownloading = task?.status === DownloadStatus.DOWNLOADING
+    const isQueued = task?.status === DownloadStatus.QUEUED
+    const isError = task?.status === DownloadStatus.ERROR
+    const isMissing = task?.status === ModelStatus.MISSING
     const needDownload = isMissing || isError
 
     return (
@@ -199,10 +200,10 @@ export default function ModelSelect({
           {isDownloading && <Loader2 size={11} className="animate-spin text-blue-400" />}
           {isQueued && <Clock size={11} className="text-orange-400" />}
           {isError && <XCircle size={11} className="text-red-400" />}
-          {!isDownloading && !isQueued && !isError && (task?.status === 'done' || task?.status === 'ok') && (
+          {!isDownloading && !isQueued && !isError && (task?.status === DownloadStatus.DONE || task?.status === ModelStatus.OK) && (
             <CheckCircle2 size={11} className="text-green-400" />
           )}
-          {!isDownloading && !isQueued && !isError && task?.status === 'missing' && (
+          {!isDownloading && !isQueued && !isError && task?.status === ModelStatus.MISSING && (
             <Download size={11} className="text-fg-secondary/60" />
           )}
         </span>

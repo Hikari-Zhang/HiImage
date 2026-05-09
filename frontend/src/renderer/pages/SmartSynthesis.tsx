@@ -3,6 +3,7 @@ import {
   Upload, Download, Square, Move, Trash2, RotateCcw,
   Image, Shirt, User, Sparkles, Info, ChevronDown, ChevronRight,
   Crosshair, Wand2, MessageSquare, Loader2, Clock, XCircle, CheckCircle2,
+  type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import ImageCanvas from '../components/ImageCanvas'
@@ -16,309 +17,92 @@ import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
+import { DownloadStatus, ModelStatus } from '../constants'
+import type { SynthesisTagValue } from '../constants'
 import type { ROI } from '../stores/useImageStore'
 
 type CanvasTool = 'draw' | 'pan'
 
-// ─── 模式配置（与后端 SYNTHESIS_MODE_GROUPS 对应）─────────────────────────
-type ModeGroup = {
+// ─── 图标映射表（icon_name → Lucide 组件）────────────────────────────────
+const ICON_MAP: Record<string, LucideIcon> = {
+  Image, Shirt, User, Sparkles, Crosshair, Wand2, MessageSquare,
+}
+
+// ─── 后端返回数据类型 ──────────────────────────────────────────────────────
+
+/** 后端 /api/synthesis/modes 返回的单条模式 */
+type RawModeGroup = {
   id: string
   name: string
-  Icon: React.ComponentType<{ size?: number; strokeWidth?: number }>
+  icon_name: string
   description: string
+  default_model: string
+  needs_reference: boolean
+  reference_label?: string
+  reference_hint?: string
+  needs_roi: boolean
+  needs_prompt: boolean
+  prompt_required?: boolean
+  prompt_label?: string
+  prompt_hint?: string
+}
+
+/** 前端运行时模式配置（icon_name 解析为 Icon 组件） */
+type ModeGroup = {
+  id: SynthesisTagValue
+  name: string
+  Icon: LucideIcon
+  description: string
+  defaultModel: string
   needsReference: boolean
   referenceLabel?: string
   referenceHint?: string
   needsROI: boolean
   needsPrompt: boolean
+  promptRequired?: boolean
   promptLabel?: string
   promptHint?: string
-  promptRequired?: boolean
 }
 
-const MODE_GROUPS: ModeGroup[] = [
-  {
-    id: 'background_replace',
-    name: '换背景',
-    Icon: Image,
-    description: '智能抠图后替换背景，支持全图或指定区域',
-    needsReference: true,
-    referenceLabel: '新背景图',
-    referenceHint: '拖拽或点击上传新背景图片',
-    needsROI: false,
-    needsPrompt: false,
-  },
-  {
-    id: 'outfit_swap',
-    name: '换装模拟',
-    Icon: Shirt,
-    description: '在指定区域替换服装纹理，边缘自然融合',
-    needsReference: true,
-    referenceLabel: '目标服装图',
-    referenceHint: '上传想要替换的目标服装图片',
-    needsROI: false,
-    needsPrompt: false,
-  },
-  {
-    id: 'face_swap',
-    name: '换脸模拟',
-    Icon: User,
-    description: '替换人脸区域，搭配 GFPGAN 增强细节（仅限合法创作）',
-    needsReference: true,
-    referenceLabel: '目标人脸图',
-    referenceHint: '上传目标人物的人脸图片',
-    needsROI: false,
-    needsPrompt: false,
-  },
-  {
-    id: 'virtual_tryon',
-    name: '虚拟试穿',
-    Icon: Sparkles,
-    description: '将服装自然叠合到人物身上（AI 近似方案）',
-    needsReference: true,
-    referenceLabel: '服装图',
-    referenceHint: '上传想要试穿的服装图片',
-    needsROI: false,
-    needsPrompt: false,
-  },
-  {
-    id: 'prompt_inpaint',
-    name: '精准替换',
-    Icon: Crosshair,
-    description: '手动框选区域，输入文字描述，SD 1.5 按描述替换选定区域',
-    needsReference: false,
-    needsROI: true,
-    needsPrompt: true,
-    promptRequired: true,
-    promptLabel: '替换描述',
-    promptHint: '例：a red down jacket / 一件红色羽绒服',
-  },
-  {
-    id: 'auto_segment_edit',
-    name: '智能定位',
-    Icon: Wand2,
-    description: '输入中文指令自动识别服装部位并换色/换风格，无需手动框选',
-    needsReference: false,
-    needsROI: false,
-    needsPrompt: true,
-    promptRequired: true,
-    promptLabel: '编辑指令',
-    promptHint: '例：将上衣换成黑色 / 把裤子改成牛仔风格',
-  },
-  {
-    id: 'instruction_edit',
-    name: '自由编辑',
-    Icon: MessageSquare,
-    description: '自然语言指令驱动全图语义编辑，无需参考图或框选区域',
-    needsReference: false,
-    needsROI: false,
-    needsPrompt: true,
-    promptRequired: true,
-    promptLabel: '编辑指令',
-    promptHint: '例：make the background a forest / 将背景换成夜晚城市',
-  },
-]
-
-// ─── 模型配置（与后端 SYNTHESIS_MODELS 对应）─────────────────────────────
-const ALL_MODELS = [
-  // ── 换背景（质量优先排序）──
-  {
-    id: 'birefnet',
-    name: 'BiRefNet-General',
-    tags: ['background_replace'],
-    description: '双向精化网络，2024 SOTA 抠图，边缘细节极佳，复杂场景首选',
-    badge: '推荐',
-  },
-  {
-    id: 'rmbg',
-    name: 'RMBG 2.0',
-    tags: ['background_replace'],
-    description: 'BRIA 商业级抠图精度，人像与产品图均优秀',
-    badge: '',
-  },
-  {
-    id: 'isnet',
-    name: 'IS-Net General',
-    tags: ['background_replace'],
-    description: 'ISNet 通用目标分割，产品图与商品摄影效果极佳',
-    badge: '',
-  },
-  {
-    id: 'isnet_anime',
-    name: 'IS-Net Anime',
-    tags: ['background_replace'],
-    description: '专为动漫/插画优化，发丝与细线条保留精准',
-    badge: '动漫',
-  },
-  {
-    id: 'u2net',
-    name: 'U²-Net',
-    tags: ['background_replace'],
-    description: '经典通用分割模型，人像/商品/动物均兼顾',
-    badge: '',
-  },
-  {
-    id: 'modnet',
-    name: 'MODNet',
-    tags: ['background_replace'],
-    description: '轻量实时人像抠图，速度极快，适合批量与快速预览',
-    badge: '快速',
-  },
-  // ── 换装 / 换脸 / 试穿（质量优先排序）──
-  {
-    id: 'flux_fill',
-    name: 'FLUX.1-Fill-dev',
-    tags: ['outfit_swap', 'face_swap', 'virtual_tryon'],
-    description: 'FLUX.1 专用 Inpainting，2024 SOTA，细节与语义一致性最佳（需 16GB+ VRAM，建议 24GB）',
-    badge: '高质量',
-  },
-  {
-    id: 'sdxl',
-    name: 'Stable Diffusion XL',
-    tags: ['outfit_swap', 'virtual_tryon'],
-    description: 'SDXL 高分辨率 Inpainting，1024px 输出，服装纹理自然（需 12GB+ VRAM）',
-    badge: '',
-  },
-  {
-    id: 'powerpaint',
-    name: 'PowerPaint v2',
-    tags: ['outfit_swap', 'virtual_tryon'],
-    description: '多任务 Inpainting，专为局部换装/试穿设计，结构保留优秀',
-    badge: '推荐',
-  },
-  {
-    id: 'mat',
-    name: 'MAT',
-    tags: ['outfit_swap', 'face_swap'],
-    description: 'Mask-Aware Transformer，不规则掩码处理精度最高，边缘自然无痕',
-    badge: '',
-  },
-  {
-    id: 'lama_inpaint',
-    name: 'LaMa',
-    tags: ['outfit_swap', 'face_swap'],
-    description: '大感受野卷积修复，纹理延续自然，速度快，小显存可用',
-    badge: '',
-  },
-  {
-    id: 'zits',
-    name: 'ZITS',
-    tags: ['outfit_swap'],
-    description: '专为结构线修复，布料纹理/格纹/条纹类服装效果出色',
-    badge: '',
-  },
-  {
-    id: 'sd15',
-    name: 'Stable Diffusion 1.5',
-    tags: ['outfit_swap', 'face_swap', 'virtual_tryon'],
-    description: '文字引导 Inpainting，可用提示词描述目标样式，创意度高',
-    badge: '',
-  },
-  {
-    id: 'gfpgan',
-    name: 'GFPGAN v1.4',
-    tags: ['face_swap'],
-    description: '人脸生成对抗网络，专精人脸修复与超分增强，换脸合成首选',
-    badge: '推荐',
-  },
-  // ── 精准替换（质量优先排序）──
-  {
-    id: 'flux_fill_prompt',
-    name: 'FLUX.1-Fill-dev',
-    tags: ['prompt_inpaint'],
-    description: 'FLUX.1 专用 Inpainting，语义理解与细节还原最佳，精准替换首选（需 16GB+ VRAM）',
-    badge: '高质量',
-  },
-  {
-    id: 'sdxl_inpaint_prompt',
-    name: 'SDXL Inpainting',
-    tags: ['prompt_inpaint'],
-    description: 'SDXL 文字引导替换，1024px 高精度输出（需 12GB+ VRAM）',
-    badge: '推荐',
-  },
-  {
-    id: 'powerpaint_prompt',
-    name: 'PowerPaint v2',
-    tags: ['prompt_inpaint'],
-    description: '结构保留佳，替换边缘自然，文字引导效果优秀',
-    badge: '推荐',
-  },
-  {
-    id: 'sd15_inpaint_prompt',
-    name: 'SD 1.5 Inpainting',
-    tags: ['prompt_inpaint'],
-    description: 'SD 1.5 文字引导，速度快，显存需求低，适合快速预览',
-    badge: '',
-  },
-  // ── 智能定位 ──
-  {
-    id: 'grounded_sam_flux',
-    name: 'GroundingDINO + SAM + FLUX.1-Fill',
-    tags: ['auto_segment_edit'],
-    description: '零样本精准检测 + 像素级分割 + FLUX.1-Fill 高质量替换，任意部位均可识别（需 25GB+ VRAM）',
-    badge: '高质量',
-  },
-  {
-    id: 'grounded_sam_sdxl',
-    name: 'GroundingDINO + SAM + SDXL',
-    tags: ['auto_segment_edit'],
-    description: '零样本精准检测 + 像素级分割 + SDXL Inpainting，支持复杂场景，任意部位（需 12GB+ VRAM）',
-    badge: '',
-  },
-  {
-    id: 'auto_segment_hsv',
-    name: 'SegFormer + HSV',
-    tags: ['auto_segment_edit'],
-    description: '自动分割后 HSV 换色，亚秒级响应，保留布料光影，纯色替换首选',
-    badge: '推荐',
-  },
-  {
-    id: 'auto_segment_sd15',
-    name: 'SegFormer + SD 1.5',
-    tags: ['auto_segment_edit'],
-    description: '自动分割后用 SD 1.5 Inpainting，支持纹理/风格类复杂指令',
-    badge: '',
-  },
-  // ── 自由编辑（画质优先排序）──
-  {
-    id: 'flux',
-    name: 'FLUX.1-dev',
-    tags: ['instruction_edit'],
-    description: 'Black Forest Labs 2024 SOTA，文字理解力极强，细节还原最佳（需 24GB+ VRAM）',
-    badge: '高质量',
-  },
-  {
-    id: 'sdxl_img2img',
-    name: 'SDXL Img2Img',
-    tags: ['instruction_edit'],
-    description: 'SDXL 图生图，1024px 高分辨率输出，画质优于 SD 1.5（需 12GB+ VRAM）',
-    badge: '',
-  },
-  {
-    id: 'magicbrush',
-    name: 'MagicBrush',
-    tags: ['instruction_edit'],
-    description: '精准指令跟随的 IP2P 变体，兼顾速度与效果，推荐首选',
-    badge: '推荐',
-  },
-  {
-    id: 'instruct_pix2pix',
-    name: 'InstructPix2Pix',
-    tags: ['instruction_edit'],
-    description: '原版 SD 1.5 底座，显存需求低，适合快速预览',
-    badge: '',
-  },
-]
+/** 后端 /api/synthesis/models 返回的单条模型 */
+type SynthesisModel = {
+  id: string
+  name: string
+  tags: string[]
+  description: string
+  badge: string
+}
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────
 
-function modeModels(modeId: string) {
-  return ALL_MODELS.filter((m) => m.tags.includes(modeId))
+function parseModeGroup(raw: RawModeGroup): ModeGroup {
+  return {
+    id: raw.id as SynthesisTagValue,
+    name: raw.name,
+    Icon: ICON_MAP[raw.icon_name] ?? Image,
+    description: raw.description,
+    defaultModel: raw.default_model,
+    needsReference: raw.needs_reference,
+    referenceLabel: raw.reference_label,
+    referenceHint: raw.reference_hint,
+    needsROI: raw.needs_roi,
+    needsPrompt: raw.needs_prompt,
+    promptRequired: raw.prompt_required,
+    promptLabel: raw.prompt_label,
+    promptHint: raw.prompt_hint,
+  }
 }
 
-function defaultModel(modeId: string) {
-  const models = modeModels(modeId)
-  return models.find((m) => m.badge === '推荐')?.id ?? models[0]?.id ?? ''
+function modeModels(models: SynthesisModel[], modeId: string) {
+  return models.filter((m) => m.tags.includes(modeId))
+}
+
+function defaultModel(models: SynthesisModel[], modeGroup: ModeGroup | undefined) {
+  if (!modeGroup) return ''
+  const candidates = modeModels(models, modeGroup.id)
+  // 优先使用后端 default_model 字段
+  if (candidates.find((m) => m.id === modeGroup.defaultModel)) return modeGroup.defaultModel
+  return candidates.find((m) => m.badge === '推荐')?.id ?? candidates[0]?.id ?? ''
 }
 
 // ─── 组件 ─────────────────────────────────────────────────────────────────
@@ -332,7 +116,7 @@ export default function SmartSynthesis() {
 
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { device, setDevice } = useSettingsStore()
-  const { runSynthesis } = useBackendAPI()
+  const { runSynthesis, getSynthesisModes, getSynthesisModels } = useBackendAPI()
   const { options: deviceOptions } = useDeviceOptions()
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
@@ -341,9 +125,14 @@ export default function SmartSynthesis() {
   const [showResult, setShowResult] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
 
+  // ── 动态加载的模式与模型 ─────────────────────────────────────────────────
+  const [modeGroups, setModeGroups] = useState<ModeGroup[]>([])
+  const [allModels, setAllModels] = useState<SynthesisModel[]>([])
+  const [configLoading, setConfigLoading] = useState(true)
+
   // 合成参数
-  const [activeMode, setActiveMode] = useState('background_replace')
-  const [selectedModel, setSelectedModel] = useState(defaultModel('background_replace'))
+  const [activeMode, setActiveMode] = useState<SynthesisTagValue>('' as SynthesisTagValue)
+  const [selectedModel, setSelectedModel] = useState('')
   const [prompt, setPrompt] = useState('')
 
   // 参考图
@@ -353,13 +142,43 @@ export default function SmartSynthesis() {
   const sourceFileInputRef = useRef<HTMLInputElement>(null)
   const referenceFileInputRef = useRef<HTMLInputElement>(null)
 
-  const activeModeConfig = MODE_GROUPS.find((m) => m.id === activeMode)!
-  const availableModels = modeModels(activeMode)
+  // ── 加载模式与模型配置 ────────────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [modesResp, modelsResp] = await Promise.all([
+          getSynthesisModes(),
+          getSynthesisModels(),
+        ])
+        if (cancelled) return
+        const parsedModes: ModeGroup[] = (modesResp.modes ?? []).map(parseModeGroup)
+        const parsedModels: SynthesisModel[] = modelsResp.models ?? []
+        setModeGroups(parsedModes)
+        setAllModels(parsedModels)
+        // 初始化默认模型
+        const firstMode = parsedModes[0]
+        if (firstMode) {
+          setActiveMode(firstMode.id)
+          setSelectedModel(defaultModel(parsedModels, firstMode))
+        }
+      } catch (err) {
+        if (!cancelled) showToast('error', '获取模型配置失败，请检查后端连接')
+      } finally {
+        if (!cancelled) setConfigLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const activeModeConfig = modeGroups.find((m) => m.id === activeMode)
+  const availableModels = modeModels(allModels, activeMode)
 
   // 切换模式时重置模型选择
   useEffect(() => {
-    setSelectedModel(defaultModel(activeMode))
-  }, [activeMode])
+    if (!activeModeConfig) return
+    setSelectedModel(defaultModel(allModels, activeModeConfig))
+  }, [activeMode])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 图片加载工具 ─────────────────────────────────────────────────────────
 
@@ -480,26 +299,26 @@ export default function SmartSynthesis() {
 
   const handleProcess = async () => {
     if (!sourceImage) return
-    if (activeModeConfig.needsReference && !referenceImage) {
+    if (activeModeConfig?.needsReference && !referenceImage) {
       showToast('warning', `请先上传${activeModeConfig.referenceLabel}`)
       return
     }
-    if (activeModeConfig.needsROI && rois.length === 0) {
+    if (activeModeConfig?.needsROI && rois.length === 0) {
       showToast('warning', '请先在画布上框选处理区域（ROI）')
       return
     }
-    if (activeModeConfig.promptRequired && !prompt.trim()) {
+    if (activeModeConfig?.promptRequired && !prompt.trim()) {
       showToast('warning', `请输入${activeModeConfig.promptLabel ?? '提示词'}`)
       return
     }
 
     // 检查模型下载状态
     const dlTask = downloadTasks[selectedModel]
-    if (dlTask?.status === 'downloading' || dlTask?.status === 'queued') {
-      showToast('info', `模型${dlTask.status === 'queued' ? '排队中，' : ''}下载中，请稍候...`)
+    if (dlTask?.status === DownloadStatus.DOWNLOADING || dlTask?.status === DownloadStatus.QUEUED) {
+      showToast('info', `模型${dlTask.status === DownloadStatus.QUEUED ? '排队中，' : ''}下载中，请稍候...`)
       return
     }
-    if (dlTask?.status === 'missing' || dlTask?.status === 'error') {
+    if (dlTask?.status === ModelStatus.MISSING || dlTask?.status === DownloadStatus.ERROR) {
       showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
       startDownload(selectedModel)
       return
@@ -555,7 +374,7 @@ export default function SmartSynthesis() {
     e.dataTransfer.dropEffect = 'copy'
   }
 
-  const needsPrompt = activeModeConfig.needsPrompt
+  const needsPrompt = activeModeConfig?.needsPrompt ?? false
 
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -564,7 +383,7 @@ export default function SmartSynthesis() {
       <PageHeader
         title="智能合成"
         subtitle={imageWidth > 0 ? `${imageWidth} × ${imageHeight}` : undefined}
-        right={<span className="text-xs text-fg-secondary">{activeModeConfig.name} | {device}</span>}
+        right={<span className="text-xs text-fg-secondary">{activeModeConfig?.name ?? '...'} | {device}</span>}
       />
 
       <div className="flex-1 flex overflow-hidden min-h-0">
@@ -644,23 +463,31 @@ export default function SmartSynthesis() {
           {/* 模式选择 */}
           <section>
             <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">合成模式</h3>
-            <div className="grid grid-cols-2 gap-1.5">
-              {MODE_GROUPS.map(({ id, name, Icon }) => (
-                <button
-                  key={id}
-                  onClick={() => setActiveMode(id)}
-                  className={clsx(
-                    'flex flex-col items-center gap-1 py-2.5 px-1 rounded-lg border text-xs transition-all',
-                    activeMode === id
-                      ? 'border-border-focus bg-bg-active text-fg-accent'
-                      : 'border-border-subtle bg-bg-primary text-fg-secondary hover:bg-bg-hover hover:text-fg-primary'
-                  )}
-                >
-                  <Icon size={18} strokeWidth={1.5} />
-                  <span className="font-medium leading-tight text-center">{name}</span>
-                </button>
-              ))}
-            </div>
+            {configLoading ? (
+              <div className="grid grid-cols-2 gap-1.5">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="h-[58px] rounded-lg bg-bg-primary border border-border-subtle animate-pulse" />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-1.5">
+                {modeGroups.map(({ id, name, Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setActiveMode(id)}
+                    className={clsx(
+                      'flex flex-col items-center gap-1 py-2.5 px-1 rounded-lg border text-xs transition-all',
+                      activeMode === id
+                        ? 'border-border-focus bg-bg-active text-fg-accent'
+                        : 'border-border-subtle bg-bg-primary text-fg-secondary hover:bg-bg-hover hover:text-fg-primary'
+                    )}
+                  >
+                    <Icon size={18} strokeWidth={1.5} />
+                    <span className="font-medium leading-tight text-center">{name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* 模式说明折叠 */}
             <button
@@ -668,13 +495,13 @@ export default function SmartSynthesis() {
               onClick={() => setShowInfo(!showInfo)}
             >
               <Info size={11} />
-              <span>{activeModeConfig.description}</span>
+              <span>{activeModeConfig?.description ?? ''}</span>
               {showInfo ? <ChevronDown size={11} className="ml-auto" /> : <ChevronRight size={11} className="ml-auto" />}
             </button>
           </section>
 
           {/* 参考图上传 */}
-          {activeModeConfig.needsReference && (
+          {activeModeConfig?.needsReference && (
             <section>
               <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">
                 {activeModeConfig.referenceLabel}
@@ -768,7 +595,7 @@ export default function SmartSynthesis() {
           </section>
 
           {/* ROI 必填提示（精准替换模式）*/}
-          {activeModeConfig.needsROI && rois.length === 0 && (
+          {activeModeConfig?.needsROI && rois.length === 0 && (
             <div className="bg-status-warning/10 border border-status-warning/30 rounded px-2 py-1.5 text-[10px] text-status-warning flex items-start gap-1.5">
               <Square size={11} className="mt-0.5 shrink-0" />
               <span>请在左侧画布上拖拽框选要替换的区域</span>
@@ -782,11 +609,11 @@ export default function SmartSynthesis() {
               {availableModels.map((model) => {
                 const dlTask = downloadTasks[model.id]
                 const isSelected = selectedModel === model.id
-                const isOk = dlTask?.status === 'ok' || dlTask?.status === 'done'
-                const isMissing = dlTask?.status === 'missing'
-                const isDownloading = dlTask?.status === 'downloading'
-                const isQueued = dlTask?.status === 'queued'
-                const isError = dlTask?.status === 'error'
+                const isOk = dlTask?.status === ModelStatus.OK || dlTask?.status === DownloadStatus.DONE
+                const isMissing = dlTask?.status === ModelStatus.MISSING
+                const isDownloading = dlTask?.status === DownloadStatus.DOWNLOADING
+                const isQueued = dlTask?.status === DownloadStatus.QUEUED
+                const isError = dlTask?.status === DownloadStatus.ERROR
                 return (
                 <button
                   key={model.id}
@@ -858,8 +685,8 @@ export default function SmartSynthesis() {
           {needsPrompt && (
             <section>
               <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">
-                {activeModeConfig.promptLabel ?? '提示词'}
-                {activeModeConfig.promptRequired
+                {activeModeConfig?.promptLabel ?? '提示词'}
+                {activeModeConfig?.promptRequired
                   ? <span className="ml-1 text-status-error">*</span>
                   : <span className="normal-case text-fg-secondary font-normal"> （可选）</span>
                 }
@@ -867,7 +694,7 @@ export default function SmartSynthesis() {
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder={activeModeConfig.promptHint ?? '描述你想要的目标效果'}
+                placeholder={activeModeConfig?.promptHint ?? '描述你想要的目标效果'}
                 className="w-full bg-bg-primary border border-border-subtle rounded text-xs text-fg-primary p-2 resize-none focus:border-border-focus focus:outline-none"
                 rows={3}
               />
@@ -887,16 +714,16 @@ export default function SmartSynthesis() {
           <div className="mt-auto pt-2 space-y-2">
             {(() => {
               const dlTask = downloadTasks[selectedModel]
-              const isModelBusy = dlTask?.status === 'downloading' || dlTask?.status === 'queued'
+              const isModelBusy = dlTask?.status === DownloadStatus.DOWNLOADING || dlTask?.status === DownloadStatus.QUEUED
               return (
                 <Button
                   onClick={handleProcess}
                   disabled={
                     isProcessing
                     || !sourceImage
-                    || (activeModeConfig.needsReference && !referenceImage)
-                    || (activeModeConfig.needsROI && rois.length === 0)
-                    || (activeModeConfig.promptRequired && !prompt.trim())
+                    || (activeModeConfig?.needsReference && !referenceImage)
+                    || (activeModeConfig?.needsROI && rois.length === 0)
+                    || (activeModeConfig?.promptRequired && !prompt.trim())
                     || isModelBusy
                   }
                   loading={isProcessing}
@@ -905,13 +732,13 @@ export default function SmartSynthesis() {
                 >
                   {isProcessing
                     ? statusMessage
-                    : dlTask?.status === 'downloading'
+                    : dlTask?.status === DownloadStatus.DOWNLOADING
                       ? '等待下载...'
-                      : dlTask?.status === 'queued'
+                      : dlTask?.status === DownloadStatus.QUEUED
                         ? `排队中 #${dlTask.position}`
-                        : (dlTask?.status === 'missing' || dlTask?.status === 'error')
+                        : (dlTask?.status === ModelStatus.MISSING || dlTask?.status === DownloadStatus.ERROR)
                           ? '点击下载并处理'
-                          : `执行${activeModeConfig.name}`}
+                          : `执行${activeModeConfig?.name ?? ''}`}
                 </Button>
               )
             })()}
