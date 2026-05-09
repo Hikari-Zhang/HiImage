@@ -21,6 +21,9 @@ import type { DownloadTask } from '../stores/useDownloadStore'
 /** model_id → EventSource。全局唯一，不随组件卸载而销毁。 */
 const _sseMap = new Map<string, EventSource>()
 
+/** 已取消的 modelId 集合，用于防止 startDownload 的 POST 回调覆盖 cancelled 状态 */
+const _cancelledSet = new Set<string>()
+
 /** 确保 syncModelStatus 只在应用启动时执行一次 */
 let _syncDone = false
 let _onDownloadDone: (() => void) | null = null
@@ -214,6 +217,9 @@ export function useDownloadManager() {
       return
     }
 
+    // 清除取消标记（用户重新发起下载）
+    _cancelledSet.delete(modelId)
+
     // 先重置为 queued 状态，给用户即时反馈并避免 SSE onerror 竞态
     // 计算临时排队位置：当前队列中 queued/downloading 的任务数 + 1
     const allTasks = useDownloadStore.getState().tasks
@@ -228,15 +234,32 @@ export function useDownloadManager() {
       const res = await fetch(`${url}${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, {
         method: 'POST',
       })
+      // POST 返回后检查是否已被取消
+      if (_cancelledSet.has(modelId)) {
+        console.log(`[startDownload] POST 返回但已被取消，忽略: ${modelId}`)
+        _cancelledSet.delete(modelId)
+        return
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as Record<string, unknown>
         throw new Error((body.detail as string) || `提交下载失败 (${res.status})`)
       }
       const task = await res.json() as Record<string, unknown>
       console.log(`[startDownload] POST 响应:`, task)
+      // 再次检查（json 解析也是异步的）
+      if (_cancelledSet.has(modelId)) {
+        console.log(`[startDownload] 解析响应后已被取消，忽略: ${modelId}`)
+        _cancelledSet.delete(modelId)
+        return
+      }
       setTask(modelId, normalizeTask(task))
       ensureSubscribed(modelId, url)
     } catch (err: unknown) {
+      // 如果已被取消，不设置 error 状态
+      if (_cancelledSet.has(modelId)) {
+        _cancelledSet.delete(modelId)
+        return
+      }
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[startDownload] 失败:`, msg)
       setTask(modelId, { status: DownloadStatus.ERROR, message: msg })
@@ -247,6 +270,9 @@ export function useDownloadManager() {
   // ── 取消单模型下载 ──────────────────────────────────────────────────────────
 
   const cancelDownload = useCallback(async (modelId: string) => {
+    // 标记为已取消，防止 startDownload 的 POST 回调覆盖状态
+    _cancelledSet.add(modelId)
+
     const es = _sseMap.get(modelId)
     if (es) {
       es.close()
@@ -254,6 +280,10 @@ export function useDownloadManager() {
     }
     _sseRetryCount.delete(modelId)
 
+    // 先立即更新前端状态
+    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELED, message: '', speed: '', downloaded: '' })
+
+    // 再通知后端取消
     const url = await getURL()
     try {
       await fetch(`${url}${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, {
@@ -262,8 +292,11 @@ export function useDownloadManager() {
     } catch {
       // 忽略
     }
+<<<<<<< HEAD
 
     useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELLED, message: '', speed: '', downloaded: '' })
+=======
+>>>>>>> be5597a (fix: 修复取消下载竞态问题)
   }, [getURL])
 
   // ── 一键下载 ────────────────────────────────────────────────────────────────
