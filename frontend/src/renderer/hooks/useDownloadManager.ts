@@ -44,6 +44,13 @@ function normalizeTask(data: Record<string, unknown>): Partial<DownloadTask> {
   }
 }
 
+/** SSE 重试计数器：model_id → 已重试次数 */
+const _sseRetryCount = new Map<string, number>()
+/** SSE 最大重试次数（对 queued 状态的任务宽容一些） */
+const SSE_MAX_RETRIES = 3
+/** SSE 重试间隔 (ms) */
+const SSE_RETRY_DELAY = 2000
+
 /** 建立或复用 SSE 连接（全局单例，不重复建立）。 */
 function ensureSubscribed(modelId: string, url: string) {
   const existing = _sseMap.get(modelId)
@@ -59,6 +66,8 @@ function ensureSubscribed(modelId: string, url: string) {
 
   es.onopen = () => {
     console.log(`[SSE] 连接已打开: ${modelId}`)
+    // 连接成功，重置重试计数
+    _sseRetryCount.delete(modelId)
   }
 
   es.addEventListener('status', (e: MessageEvent) => {
@@ -67,6 +76,8 @@ function ensureSubscribed(modelId: string, url: string) {
       const patch = normalizeTask(data)
       console.log(`[SSE] 收到 status 事件: ${modelId} status=${patch.status}`, data)
 
+      // 收到有效事件，重置重试计数
+      _sseRetryCount.delete(modelId)
       useDownloadStore.getState().setTask(modelId, patch)
 
       if (patch.status === 'done') {
@@ -96,12 +107,30 @@ function ensureSubscribed(modelId: string, url: string) {
 
   es.onerror = (e) => {
     console.error(`[SSE] 连接错误: ${modelId}`, e)
-    const current = useDownloadStore.getState().getTask(modelId)
-    if (current?.status === 'downloading' || current?.status === 'queued') {
-      useDownloadStore.getState().setTask(modelId, { status: 'error', message: '连接中断，请重试' })
-    }
     es.close()
     _sseMap.delete(modelId)
+
+    const current = useDownloadStore.getState().getTask(modelId)
+    // 对于 queued/downloading 状态的任务，尝试重连而不是立即标记为 error
+    if (current?.status === 'downloading' || current?.status === 'queued') {
+      const retries = _sseRetryCount.get(modelId) ?? 0
+      if (retries < SSE_MAX_RETRIES) {
+        _sseRetryCount.set(modelId, retries + 1)
+        console.log(`[SSE] 将在 ${SSE_RETRY_DELAY}ms 后重试 (${retries + 1}/${SSE_MAX_RETRIES}): ${modelId}`)
+        setTimeout(() => {
+          // 重连前再次检查状态，如果已经不再是 queued/downloading 就不重连
+          const latest = useDownloadStore.getState().getTask(modelId)
+          if (latest?.status === 'queued' || latest?.status === 'downloading') {
+            ensureSubscribed(modelId, url)
+          }
+        }, SSE_RETRY_DELAY)
+      } else {
+        // 超过重试次数，标记为 error
+        console.log(`[SSE] 重试次数耗尽，标记为 error: ${modelId}`)
+        _sseRetryCount.delete(modelId)
+        useDownloadStore.getState().setTask(modelId, { status: 'error', message: '连接中断，请重试' })
+      }
+    }
   }
 }
 
@@ -184,6 +213,14 @@ export function useDownloadManager() {
       return
     }
 
+    // 先重置为 queued 状态，给用户即时反馈并避免 SSE onerror 竞态
+    // 计算临时排队位置：当前队列中 queued/downloading 的任务数 + 1
+    const allTasks = useDownloadStore.getState().tasks
+    const queuedCount = Object.values(allTasks).filter(
+      (t) => t.status === 'queued' || t.status === 'downloading'
+    ).length
+    setTask(modelId, { status: 'queued', position: queuedCount + 1, message: '提交中...', speed: '', downloaded: '', totalSize: '' })
+
     const url = await getURL()
     console.log(`[startDownload] POST ${url}/api/models/download/${modelId}`)
     try {
@@ -214,6 +251,7 @@ export function useDownloadManager() {
       es.close()
       _sseMap.delete(modelId)
     }
+    _sseRetryCount.delete(modelId)
 
     const url = await getURL()
     try {
