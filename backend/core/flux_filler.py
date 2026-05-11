@@ -17,7 +17,9 @@ import numpy as np
 import cv2
 from typing import Optional
 
+from core.model_checker import resolve_hf_model_path
 
+# 模型 ID 常量
 _MODEL_ID = "black-forest-labs/FLUX.1-Fill-dev"
 _INFER_SIZE = 1024    # 推理短边，FLUX 推荐 1024
 
@@ -45,9 +47,10 @@ class FluxFiller:
 
         # FLUX 使用 bfloat16（CUDA）或 float32（CPU/MPS）
         dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
+        local_path = resolve_hf_model_path(_MODEL_ID)
 
         pipe = FluxFillPipeline.from_pretrained(
-            _MODEL_ID,
+            local_path,
             torch_dtype=dtype,
         )
 
@@ -81,7 +84,7 @@ class FluxFiller:
         :param prompt:             文字引导描述
         :param negative_prompt:    负向提示（FLUX.1 原生不支持，预留兼容）
         :param num_inference_steps: 扩散步数（默认 50）
-        :param guidance_scale:     CFG 强度（FLUX.1-Fill 推荐 7-30，默认 30）
+        :param guidance_scale:      CFG 强度（FLUX.1-Fill 推荐 7-30，默认 30）
         :param seed:               随机种子
         :return:                   修复后的 RGB 图像（与输入同分辨率）
         """

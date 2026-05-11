@@ -15,6 +15,8 @@ import numpy as np
 import cv2
 from typing import Optional
 
+from core.model_checker import resolve_hf_model_path
+
 # 模型 ID 常量
 _MODEL_IDS = {
     "instruct_pix2pix": "timbrooks/instruct-pix2pix",
@@ -77,9 +79,10 @@ class InstructionEditor:
         import torch
         from diffusers import StableDiffusionInstructPix2PixPipeline
 
+        local_path = resolve_hf_model_path(model_id)
         dtype = torch.float16 if self.device == "cuda" else torch.float32
         pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
-            model_id,
+            local_path,
             torch_dtype=dtype,
             safety_checker=None,
         )
@@ -93,10 +96,11 @@ class InstructionEditor:
         import torch
         from diffusers import StableDiffusionXLImg2ImgPipeline
 
+        local_path = resolve_hf_model_path(model_id)
         # SDXL 推荐 fp16（CUDA）；MPS/CPU 降为 fp32
         dtype = torch.float16 if self.device == "cuda" else torch.float32
         pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-            model_id,
+            local_path,
             torch_dtype=dtype,
             use_safetensors=True,
         )
@@ -115,9 +119,10 @@ class InstructionEditor:
         import torch
         from diffusers import FluxImg2ImgPipeline
 
+        local_path = resolve_hf_model_path(model_id)
         dtype = torch.bfloat16 if self.device == "cuda" else torch.float32
         pipe = FluxImg2ImgPipeline.from_pretrained(
-            model_id,
+            local_path,
             torch_dtype=dtype,
         )
         # FLUX 模型体积大，优先使用 CPU offload 减少 VRAM 压力

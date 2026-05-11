@@ -37,6 +37,30 @@ export default function ImageCanvas({
   const [drawStart, setDrawStart] = useState({ x: 0, y: 0 })
   const [drawCurrent, setDrawCurrent] = useState({ x: 0, y: 0 })
   const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+  const [spaceDown, setSpaceDown] = useState(false)   // 空格键是否按住
+
+  // 空格键按下/松开 → 临时 pan 模式
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault()
+        setSpaceDown(true)
+      }
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpaceDown(false)
+        // 松开空格时若还在拖拽，结束拖拽
+        setIsPanning(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [])
 
   // Observe container size
   useEffect(() => {
@@ -169,7 +193,7 @@ export default function ImageCanvas({
     const mx = e.clientX - rect.left
     const my = e.clientY - rect.top
 
-    if (tool === 'pan' || e.button === 1) {
+    if (tool === 'pan' || e.button === 1 || spaceDown) {
       setIsPanning(true)
       setPanStart({ x: mx - offset.x, y: my - offset.y })
     } else if (tool === 'draw' && imageRef.current) {
@@ -196,7 +220,27 @@ export default function ImageCanvas({
     const my = e.clientY - rect.top
 
     if (isPanning) {
-      setOffset({ x: mx - panStart.x, y: my - panStart.y })
+      const img = imageRef.current
+      const cs = containerSizeRef.current
+      let newX = mx - panStart.x
+      let newY = my - panStart.y
+
+      if (img) {
+        const imgW = img.naturalWidth * scale
+        const imgH = img.naturalHeight * scale
+        if (imgW > cs.w) {
+          newX = Math.min(0, Math.max(cs.w - imgW, newX))
+        } else {
+          newX = (cs.w - imgW) / 2
+        }
+        if (imgH > cs.h) {
+          newY = Math.min(0, Math.max(cs.h - imgH, newY))
+        } else {
+          newY = (cs.h - imgH) / 2
+        }
+      }
+
+      setOffset({ x: newX, y: newY })
     } else if (isDrawing) {
       setDrawCurrent({ x: mx, y: my })
     }
@@ -251,7 +295,7 @@ export default function ImageCanvas({
     const imgW = img.naturalWidth * newScale
     const imgH = img.naturalHeight * newScale
 
-    // 图片能完全放入容器时居中，否则保持以鼠标为中心缩放
+    // 图片能完全放入容器时居中，否则保持以鼠标为中心缩放后 clamp
     if (imgW <= cs.w && imgH <= cs.h) {
       setOffset({
         x: (cs.w - imgW) / 2,
@@ -261,19 +305,35 @@ export default function ImageCanvas({
       // Zoom towards mouse position
       const dx = mx - offset.x
       const dy = my - offset.y
-      setOffset({
-        x: mx - dx * (newScale / scale),
-        y: my - dy * (newScale / scale),
-      })
+      let newOffsetX = mx - dx * (newScale / scale)
+      let newOffsetY = my - dy * (newScale / scale)
+
+      // Clamp：图片大于容器的轴，边缘不能超出窗口
+      // X 轴：offset 在 [cs.w - imgW, 0] 范围内（若图片比容器宽）
+      if (imgW > cs.w) {
+        newOffsetX = Math.min(0, Math.max(cs.w - imgW, newOffsetX))
+      } else {
+        newOffsetX = (cs.w - imgW) / 2
+      }
+      // Y 轴：offset 在 [cs.h - imgH, 0] 范围内（若图片比容器高）
+      if (imgH > cs.h) {
+        newOffsetY = Math.min(0, Math.max(cs.h - imgH, newOffsetY))
+      } else {
+        newOffsetY = (cs.h - imgH) / 2
+      }
+
+      setOffset({ x: newOffsetX, y: newOffsetY })
     }
     setScale(newScale)
   }
+
+  const cursor = isPanning ? 'grabbing' : (tool === 'pan' || spaceDown) ? 'grab' : 'crosshair'
 
   return (
     <div
       ref={containerRef}
       className="w-full h-full relative overflow-hidden"
-      style={{ cursor: tool === 'pan' ? 'grab' : 'crosshair' }}
+      style={{ cursor }}
     >
       <canvas
         ref={canvasRef}

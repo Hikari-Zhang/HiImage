@@ -30,6 +30,29 @@ export default function ImageCompare({
   const [translate, setTranslate] = useState({ x: 0, y: 0 })
   const [isPanning, setIsPanning] = useState(false)
   const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+  const [spaceDown, setSpaceDown] = useState(false)
+
+  // 空格键按下/松开 → 临时 pan 模式
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault()
+        setSpaceDown(true)
+      }
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        setSpaceDown(false)
+        setIsPanning(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
+  }, [])
 
   /**
    * 将屏幕坐标转换为容器内变换后的"图片本地"百分比
@@ -57,12 +80,12 @@ export default function ImageCompare({
 
   // Container mouse down
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      // Middle button or Alt+Left: pan
+    if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && spaceDown)) {
+      // Middle button / Alt+Left / Space+Left: pan
       e.preventDefault()
       setIsPanning(true)
       setPanStart({ x: e.clientX - translate.x, y: e.clientY - translate.y })
-    } else if (e.button === 0 && !e.altKey) {
+    } else if (e.button === 0 && !e.altKey && !spaceDown) {
       // Left click: move slider
       e.preventDefault()
       setIsDraggingSlider(true)
@@ -129,7 +152,7 @@ export default function ImageCompare({
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden rounded-md border border-border-subtle select-none"
-      style={{ cursor: isPanning ? 'grabbing' : 'col-resize' }}
+      style={{ cursor: isPanning ? 'grabbing' : spaceDown ? 'grab' : 'col-resize' }}
       onMouseDown={handleMouseDown}
       onWheel={handleWheel}
       onContextMenu={(e) => e.preventDefault()}
@@ -231,7 +254,7 @@ export default function ImageCompare({
       {/* Hint */}
       {scale > 1 && (
         <div className="absolute bottom-3 left-3 bg-black/70 px-2 py-1 rounded text-[11px] text-fg-secondary pointer-events-none z-20">
-          Alt+拖拽 平移 | 滚轮 缩放
+          空格/Alt+拖拽 平移 | 滚轮 缩放
         </div>
       )}
     </div>

@@ -161,7 +161,8 @@ class Synthesizer:
 
         src_bgr = cv2.cvtColor(source_rgb, cv2.COLOR_RGB2BGR)
         _, src_bytes = cv2.imencode(".png", src_bgr)
-        rgba_bytes = rembg.remove(src_bytes.tobytes(), model_name=rembg_model)
+        session = rembg.new_session(rembg_model)
+        rgba_bytes = rembg.remove(src_bytes.tobytes(), session=session)
         rgba_arr = np.frombuffer(rgba_bytes, np.uint8)
         fg_rgba = cv2.imdecode(rgba_arr, cv2.IMREAD_UNCHANGED)  # BGRA
 
@@ -247,19 +248,10 @@ class Synthesizer:
             finally:
                 filler.offload()
         else:
-            # 将前端模型 ID 映射到 IOPaint 实际模型名
-            _iopaint_model_map = {
-                "sdxl":         "diffusers_sd_xl_inpaint",
-                "powerpaint":   "PowerPaint",
-                "mat":          "mat",
-                "lama_inpaint": "lama",
-                "zits":         "zits",
-                "sd15":         "runwayml/stable-diffusion-inpainting",
-            }
-            inpaint_model = _iopaint_model_map.get(self.model_id, "lama")
-
+            # 直接传入 registry model_id，由 Inpainter 内部通过注册表解析
+            # iopaint_model_id 和 server/cli 模式判断，无需在此硬编码映射。
             inpainter = Inpainter(
-                model_name=inpaint_model,
+                model_name=self.model_id,
                 device=self.device,
                 dilation=0,
                 disable_nsfw=False,
@@ -364,26 +356,18 @@ class Synthesizer:
             finally:
                 filler.offload()
 
-        # 其余模型走 IOPaint
-        _prompt_model_map = {
-            "sdxl_inpaint_prompt":  "diffusers_sd_xl_inpaint",
-            "powerpaint_prompt":    "PowerPaint",
-            "sd15_inpaint_prompt":  "runwayml/stable-diffusion-inpainting",
-        }
-        iopaint_model = _prompt_model_map.get(
-            self.model_id, "runwayml/stable-diffusion-inpainting"
-        )
-
-        return inpaint_via_server(
-            image_rgb=source_rgb,
-            mask=mask,
-            model_name=iopaint_model,
+        # 其余模型走 IOPaint，直接传 registry model_id 由 Inpainter 内部解析
+        from core.inpainter import Inpainter
+        inpainter = Inpainter(
+            model_name=self.model_id,
             device=self.device,
+            dilation=0,
             disable_nsfw=True,
             iopaint_path=self.iopaint_path,
             prompt=self.prompt,
             progress_callback=self.progress_callback,
         )
+        return inpainter.remove_watermark_with_mask(source_rgb, mask)
 
     # ------------------------------------------------------------------
     # 方案B：智能定位（auto_segment_edit）
@@ -451,45 +435,48 @@ class Synthesizer:
                 finally:
                     filler.offload()
             else:
-                # grounded_sam_sdxl → SDXL Inpainting
-                return inpaint_via_server(
-                    image_rgb=source_rgb,
-                    mask=mask,
-                    model_name="diffusers_sd_xl_inpaint",
+                # grounded_sam_sdxl → SDXL Inpainting（via Inpainter 解析注册表）
+                from core.inpainter import Inpainter
+                inpainter = Inpainter(
+                    model_name="sdxl",
                     device=self.device,
+                    dilation=0,
                     disable_nsfw=True,
                     iopaint_path=self.iopaint_path,
                     prompt=inpaint_prompt,
                     progress_callback=self.progress_callback,
                 )
+                return inpainter.remove_watermark_with_mask(source_rgb, mask)
 
         elif intent.action == "color_change" and use_sd:
             # SD 换色：效果更真实，耗时更长
             sd_prompt = f"{intent.value} colored clothing, photorealistic, high quality"
-            return inpaint_via_server(
-                image_rgb=source_rgb,
-                mask=mask,
-                model_name="runwayml/stable-diffusion-inpainting",
+            from core.inpainter import Inpainter
+            inpainter = Inpainter(
+                model_name="sd15",
                 device=self.device,
+                dilation=0,
                 disable_nsfw=True,
                 iopaint_path=self.iopaint_path,
                 prompt=sd_prompt,
                 progress_callback=self.progress_callback,
             )
+            return inpainter.remove_watermark_with_mask(source_rgb, mask)
 
         elif intent.action == "style_change":
             # 风格替换：调用 SD Inpainting
             sd_prompt = f"{intent.value} style clothing, high quality, detailed"
-            return inpaint_via_server(
-                image_rgb=source_rgb,
-                mask=mask,
-                model_name="runwayml/stable-diffusion-inpainting",
+            from core.inpainter import Inpainter
+            inpainter = Inpainter(
+                model_name="sd15",
                 device=self.device,
+                dilation=0,
                 disable_nsfw=True,
                 iopaint_path=self.iopaint_path,
                 prompt=sd_prompt,
                 progress_callback=self.progress_callback,
             )
+            return inpainter.remove_watermark_with_mask(source_rgb, mask)
 
         else:
             raise ValueError(f"无法解析指令：{self.prompt}\n支持格式：将[部位]换成[颜色/风格]")

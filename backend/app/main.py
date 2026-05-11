@@ -38,6 +38,14 @@ async def lifespan(app: FastAPI):
     os.environ["HF_HOME"] = os.path.join(MODELS_DIR, "huggingface")
     os.environ["TORCH_HOME"] = os.path.join(MODELS_DIR, "torch")
 
+    # 为所有已下载的 IOPaint server 模式模型补全 hub/ 软链接，
+    # 使 iopaint scan_diffusers_models() 能识别本地缓存，避免重复触发下载
+    try:
+        from core.model_checker import ensure_iopaint_hub_links
+        ensure_iopaint_hub_links()
+    except Exception as _e:
+        print(f"[Backend] iopaint hub 链接补全失败（非致命）: {_e}")
+
     print(f"[Backend] HiImage API 启动")
     print(f"[Backend] 项目根目录: {PROJECT_ROOT}")
     print(f"[Backend] 模型目录: {MODELS_DIR}")

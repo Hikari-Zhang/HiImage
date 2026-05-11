@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { Upload, Wand2, Trash2, Download, ZoomIn, ZoomOut, Move, Square, RotateCcw, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
+import { Upload, Wand2, Trash2, Download, Move, Square, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import ImageCanvas from '../components/ImageCanvas'
 import ImageCompare from '../components/ImageCompare'
@@ -292,11 +292,12 @@ export default function WatermarkRemoval() {
   // 将处理结果作为新的源图进行再次处理
   const handleUseResultAsSource = () => {
     if (!resultImage) return
+    const { sourceFilePath } = useImageStore.getState()
     reset()
     clearROIs()
-    setSourceImage(resultImage, undefined)
+    setSourceImage(resultImage, sourceFilePath ?? undefined)
     setShowResult(false)
-    showToast('success', '已将处理结果设为新源图，可继续去水印')
+    showToast('success', '已将处理结果设为原图')
   }
 
   // Delete selected ROIs
@@ -568,11 +569,11 @@ export default function WatermarkRemoval() {
                 <Button
                   variant="ghost"
                   onClick={handleUseResultAsSource}
-                  icon={<RefreshCw size={14} />}
+                  icon={<Upload size={14} />}
                   className="w-full"
                   size="sm"
                 >
-                  再次去水印
+                  将结果设为原图
                 </Button>
                 <Button
                   variant="ghost"

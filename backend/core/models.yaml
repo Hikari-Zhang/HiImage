@@ -309,6 +309,8 @@ models:
     size_mb: 7000
     badge: ""
     hf_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    iopaint_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    iopaint_mode: server
     download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     supported_params:
       <<: *sdxl_inpaint
@@ -321,11 +323,18 @@ models:
     description: 多任务 Inpainting，专为局部换装/试穿设计，结构保留优秀
     recommended_for: 换装 / 试穿
     requires_reference: false
-    size_mb: 4500
+    size_mb: 8500   # PowerPaint_v2 ~4500 + SD1.5 base ~4000
     badge: 推荐
-    hf_model_id: Sanster/PowerPaint_v2
-    iopaint_model_id: Sanster/PowerPaint_v2
+    hf_models:
+      - id: Sanster/PowerPaint_v2
+        name: PowerPaint v2
+        size_mb: 4500
+      - id: runwayml/stable-diffusion-v1-5
+        name: SD 1.5 Base（PowerPaint 依赖）
+        size_mb: 4000
+    iopaint_model_id: runwayml/stable-diffusion-v1-5
     iopaint_mode: server
+    iopaint_enable_powerpaint_v2: true   # 推理时传 enable_powerpaint_v2=true，触发 PowerPaintV2 路径
     download_url: https://huggingface.co/Sanster/PowerPaint_v2
     supported_params:
       <<: *sd_inpaint
@@ -384,6 +393,8 @@ models:
     size_mb: 4000
     badge: ""
     hf_model_id: runwayml/stable-diffusion-inpainting
+    iopaint_model_id: runwayml/stable-diffusion-inpainting
+    iopaint_mode: server
     download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
     supported_params:
       <<: *sd_inpaint
@@ -431,6 +442,8 @@ models:
     size_mb: 7000
     badge: 推荐
     hf_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    iopaint_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    iopaint_mode: server
     download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     supported_params:
       <<: *sdxl_inpaint
@@ -443,11 +456,18 @@ models:
     description: PowerPaint 文字引导，结构保留佳，替换自然，推荐首选
     recommended_for: 精准替换
     requires_reference: false
-    size_mb: 4500
+    size_mb: 8500
     badge: 推荐
-    hf_model_id: Sanster/PowerPaint_v2
-    iopaint_model_id: Sanster/PowerPaint_v2
+    hf_models:
+      - id: Sanster/PowerPaint_v2
+        name: PowerPaint v2
+        size_mb: 4500
+      - id: runwayml/stable-diffusion-v1-5
+        name: SD 1.5 Base（PowerPaint 依赖）
+        size_mb: 4000
+    iopaint_model_id: runwayml/stable-diffusion-v1-5
     iopaint_mode: server
+    iopaint_enable_powerpaint_v2: true   # 推理时传 enable_powerpaint_v2=true，触发 PowerPaintV2 路径
     download_url: https://huggingface.co/Sanster/PowerPaint_v2
     supported_params:
       <<: *sd_inpaint
@@ -463,6 +483,8 @@ models:
     size_mb: 4000
     badge: ""
     hf_model_id: runwayml/stable-diffusion-inpainting
+    iopaint_model_id: runwayml/stable-diffusion-inpainting
+    iopaint_mode: server
     download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
     supported_params:
       <<: *sd_inpaint

@@ -98,6 +98,7 @@ class _ModelServer:
         self._current_nsfw: Optional[bool] = None
         self._last_used: float = 0.0
         self._idle_timer: Optional[threading.Timer] = None
+        self._active_inferences: int = 0   # 正在进行的推理请求数，> 0 时不允许 idle 关闭
         self._iopaint_path = _detect_iopaint_path()
         self._log_lines: list = []   # 缓存子进程最近输出，供错误诊断
 
@@ -117,7 +118,8 @@ class _ModelServer:
         则以 override 值为准，避免在 MPS/CPU 之间无意义地重启保活服务。
         """
         with self._lock:
-            self._reset_idle_timer()
+            # 不在此处重置 idle 计时器：计时应从推理结束后开始（由 end_inference 负责）。
+            # 这里只检查进程是否需要重启。
 
             # 计算此次请求的有效设备（可能被 models.yaml 的 device_override 覆盖）
             effective_device = self._resolve_effective_device(model_name, device)
@@ -229,6 +231,10 @@ class _ModelServer:
             env['HUGGING_FACE_HUB_TOKEN'] = hf_token  # 兼容旧版 huggingface_hub
         if hf_endpoint:
             env['HF_ENDPOINT'] = hf_endpoint
+        # 强制离线模式：模型已通过 HiImage 下载到本地，iopaint 子进程不应再联网。
+        # 避免 AutoencoderKL / from_pretrained 等因网络失败而报错。
+        env['HF_HUB_OFFLINE'] = '1'
+        env['TRANSFORMERS_OFFLINE'] = '1'
 
         print(f"[ModelServer] 启动服务: {' '.join(cmd)}")
         self._log_lines = []   # 重置日志缓冲
@@ -339,9 +345,33 @@ class _ModelServer:
         self._idle_timer.start()
         self._last_used = time.time()
 
+    def begin_inference(self):
+        """推理开始前调用，暂停 idle 关闭计时（线程安全）"""
+        with self._lock:
+            self._active_inferences += 1
+            # 取消当前 idle 计时器，推理期间不允许触发
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+
+    def end_inference(self):
+        """推理结束后调用，恢复 idle 计时（线程安全）"""
+        with self._lock:
+            self._active_inferences = max(0, self._active_inferences - 1)
+            self._last_used = time.time()
+            # 只有无活跃推理时才重启 idle 计时
+            if self._active_inferences == 0 and self._proc is not None:
+                self._reset_idle_timer()
+
     def _idle_shutdown(self):
         """空闲超时回调（在后台线程调用）"""
         with self._lock:
+            # 有推理正在进行时不关闭（双重保险）
+            if self._active_inferences > 0:
+                print(f"[ModelServer] idle 触发但有 {self._active_inferences} 个活跃推理，跳过关闭")
+                # 重新启动计时
+                self._reset_idle_timer()
+                return
             keepalive = _keepalive()
             idle = time.time() - self._last_used
             if idle >= keepalive - 1:
@@ -479,6 +509,7 @@ def inpaint_via_server(
     sd_guidance_scale: float = 7.5,
     sd_seed: int = 42,
     progress_callback=None,
+    enable_powerpaint_v2: bool = False,
 ) -> np.ndarray:
     """
     通过 iopaint HTTP server 执行修复，返回 RGB numpy 图像。
@@ -495,6 +526,9 @@ def inpaint_via_server(
     srv = get_server()
     srv.set_iopaint_path(iopaint_path)
     base_url = srv.ensure_running(model_name, device, disable_nsfw)
+
+    # 标记推理开始：暂停 idle 计时，防止长时间推理期间 server 被自动关闭
+    srv.begin_inference()
 
     # ── 启动 socket.io 进度监听线程 ─────────────────────────────────
     # iopaint server 通过 socket.io (/ws) emit diffusion_progress 事件，
@@ -531,10 +565,17 @@ def inpaint_via_server(
             negative_prompt if negative_prompt
             else 'blurry, low quality, deformed, artifacts, watermark'
         ),
-        'hd_strategy': 'Crop',
+        'hd_strategy': 'Resize',
+        'hd_strategy_resize_limit': 1024,   # SDXL 推理分辨率上限；超出则等比缩放后推理再还原
+        # Crop 参数保留（兼容性），但 Resize 策略下不生效
         'hd_strategy_crop_trigger_size': 800,
         'hd_strategy_crop_margin': 196,
     }
+
+    # PowerPaint v2：需要在 InpaintRequest 里传 enable_powerpaint_v2=true
+    # 以触发 iopaint ModelManager 的 PowerPaintV2 加载路径
+    if enable_powerpaint_v2:
+        payload_dict["enable_powerpaint_v2"] = True
 
     payload = json.dumps(payload_dict).encode('utf-8')
 
@@ -559,6 +600,8 @@ def inpaint_via_server(
             f"--- iopaint 服务器最近日志 ---\n{log_tail}"
         )
     finally:
+        # 推理结束：恢复 idle 计时（无论成功/失败都必须执行）
+        srv.end_inference()
         # HTTP 请求结束（无论成功/失败），通知 socket.io 线程退出
         stop_event.set()
         if sio_thread is not None:

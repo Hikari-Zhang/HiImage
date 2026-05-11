@@ -20,6 +20,8 @@ import numpy as np
 import cv2
 from typing import Optional
 
+from core.model_checker import resolve_hf_model_path
+
 _GDINO_MODEL_ID = "IDEA-Research/grounding-dino-base"
 _SAM_MODEL_ID   = "facebook/sam-vit-large"
 
@@ -92,13 +94,15 @@ class GroundedSegmenter:
         )
 
         print(f"[GroundedSegmenter] 加载 GroundingDINO: {_GDINO_MODEL_ID}")
-        self._gdino_processor = AutoProcessor.from_pretrained(_GDINO_MODEL_ID)
-        self._gdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(_GDINO_MODEL_ID)
+        gdino_path = resolve_hf_model_path(_GDINO_MODEL_ID)
+        self._gdino_processor = AutoProcessor.from_pretrained(gdino_path)
+        self._gdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(gdino_path)
         self._gdino_model.eval()
 
         print(f"[GroundedSegmenter] 加载 SAM: {_SAM_MODEL_ID}")
-        self._sam_model = SamModel.from_pretrained(_SAM_MODEL_ID)
-        self._sam_processor = SamProcessor.from_pretrained(_SAM_MODEL_ID)
+        sam_path = resolve_hf_model_path(_SAM_MODEL_ID)
+        self._sam_model = SamModel.from_pretrained(sam_path)
+        self._sam_processor = SamProcessor.from_pretrained(sam_path)
         self._sam_model.eval()
 
         self._loaded = True

@@ -62,6 +62,31 @@ def _build_model_groups() -> list:
     return list(groups.items())
 
 
+def _is_server_mode(model_id: str) -> bool:
+    """
+    判断模型是否应使用 iopaint HTTP Server 保活模式。
+
+    直接从注册表读取 iopaint_mode 字段，比 is_diffusion_model() 更可靠：
+      1. 优先按 registry ID 精确匹配（如 "wm_sdxl"）
+      2. 按 iopaint_model_id 反向查找（向后兼容旧代码直接传 HF repo_id 的情况）
+      3. 回退到 model_server.is_diffusion_model（兜底，保持向后兼容）
+    """
+    try:
+        from core.model_registry import MODEL_BY_ID, MODELS
+        from core.constants import IOPaintMode
+        cfg = MODEL_BY_ID.get(model_id)
+        if cfg is not None:
+            return cfg.get("iopaint_mode") == IOPaintMode.SERVER
+        # 反向查找：model_id 可能是 iopaint_model_id（如 "Sanster/AnyText"）
+        for m in MODELS:
+            if m.get("iopaint_model_id") == model_id:
+                return m.get("iopaint_mode") == IOPaintMode.SERVER
+    except Exception:
+        pass
+    # 最终兜底
+    return is_diffusion_model(model_id)
+
+
 def _resolve_iopaint_model_id(model_id: str) -> str:
     """
     将 registry ID（如 "wm_anytext"）解析为 iopaint 实际模型参数（如 "Sanster/AnyText"）。
@@ -118,6 +143,16 @@ class Inpainter:
         # 保留原始 registry ID 供外部查询；内部使用 _iopaint_model_id 与 iopaint 交互
         self.model_name = model_name
         self._iopaint_model_id = _resolve_iopaint_model_id(model_name)
+        self._use_server_mode = _is_server_mode(model_name)  # 初始化时确定，避免重复查询
+        # PowerPaint v2 需要在每次推理请求中传 enable_powerpaint_v2=True
+        self._enable_powerpaint_v2 = False
+        try:
+            from core.model_registry import MODEL_BY_ID
+            cfg = MODEL_BY_ID.get(model_name)
+            if cfg:
+                self._enable_powerpaint_v2 = bool(cfg.get("iopaint_enable_powerpaint_v2", False))
+        except Exception:
+            pass
         self.iopaint_path = iopaint_path or _detect_iopaint_path()
         self.device = device
         self.dilation = dilation
@@ -129,7 +164,7 @@ class Inpainter:
         self.sd_seed = sd_seed
         self.progress_callback = progress_callback
         # CLI 模式超时：快速模型 5 分钟，扩散模型 30 分钟（首次下载时 CLI 也用得上）
-        self._timeout = 1800 if is_diffusion_model(model_name) else 300
+        self._timeout = 1800 if self._use_server_mode else 300
         self._project_tmp = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tmp'
         )
@@ -204,7 +239,7 @@ class Inpainter:
         :return: 去除水印后的图像
         """
         try:
-            if is_diffusion_model(self.model_name):
+            if self._use_server_mode:
                 # 扩散模型 → HTTP Server 模式（保活5分钟，无需每次重载）
                 # 注意：传给 server 的是 iopaint_model_id（如 "Sanster/AnyText"）
                 # progress_callback 同步透传：inpaint_via_server 在后台线程通过
@@ -222,6 +257,7 @@ class Inpainter:
                     sd_guidance_scale=self.sd_guidance_scale,
                     sd_seed=self.sd_seed,
                     progress_callback=self.progress_callback,
+                    enable_powerpaint_v2=self._enable_powerpaint_v2,
                 )
             else:
                 # 快速模型 → CLI 模式

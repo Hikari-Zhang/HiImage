@@ -43,7 +43,8 @@ function run(cmd, args, opts) {
 }
 
 function runSync(cmd, args, opts) {
-  return execSync(cmd + ' ' + args.join(' '), { ...opts, stdio: 'inherit', shell: true });
+  const safeArgs = args.map(a => (a.includes('<') || a.includes('>') || a.includes(' ')) ? `"${a}"` : a);
+  return execSync(cmd + ' ' + safeArgs.join(' '), { ...opts, stdio: 'inherit', shell: true });
 }
 
 /**
@@ -198,6 +199,18 @@ async function main() {
   log('\n📦 Installing backend dependencies...');
   const reqFile = path.join(ROOT, 'backend', 'requirements.txt');
   runSync(pip, ['install', '-r', reqFile]);
+
+  // diffusers/transformers/huggingface-hub/peft 与 iopaint 1.6.0 存在版本冲突，
+  // 需要 --no-deps 强制覆盖，绕过 pip 严格解析。
+  log('\n📦 Installing FLUX-compatible packages (overriding iopaint constraints)...');
+  runSync(pip, [
+    'install',
+    'diffusers>=0.32.0',
+    'transformers>=4.47.0,<5.0',
+    'huggingface-hub>=0.27.0,<1.0',
+    'peft>=0.9.0',
+    '--no-deps',
+  ]);
 
   // --- post-install 补丁 ---
   log('\n🔧 Applying post-install patches...');

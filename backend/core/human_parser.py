@@ -13,6 +13,7 @@ import numpy as np
 import cv2
 from typing import Optional
 
+from core.model_checker import resolve_hf_model_path
 
 # ──────────────────────────────────────────────────────────────
 # SegFormer 标签 ID 映射
@@ -75,8 +76,10 @@ class HumanParser:
             return
         print(f"[HumanParser] 加载 SegFormer 服装分割模型: {_MODEL_ID}")
         from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
-        self._processor = SegformerImageProcessor.from_pretrained(_MODEL_ID)
-        self._model = SegformerForSemanticSegmentation.from_pretrained(_MODEL_ID)
+
+        local_path = resolve_hf_model_path(_MODEL_ID)
+        self._processor = SegformerImageProcessor.from_pretrained(local_path)
+        self._model = SegformerForSemanticSegmentation.from_pretrained(local_path)
         self._model.eval()
         self._loaded = True
         print("[HumanParser] 模型就绪")

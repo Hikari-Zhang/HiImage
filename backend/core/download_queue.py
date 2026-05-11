@@ -406,6 +406,13 @@ class DownloadQueue:
             task.updated_at = time.monotonic()
             logger.info(f"[队列] ✓ 完成: {task.model_name}")
 
+            # 为 IOPaint server 模式模型补全 hub/ 软链接（使 iopaint 能扫描到本地缓存）
+            try:
+                from core.model_checker import ensure_iopaint_hub_links
+                ensure_iopaint_hub_links(model_id)
+            except Exception as _link_err:
+                logger.warning(f"[队列] iopaint hub 链接补全失败（非致命）: {_link_err}")
+
         except Exception as e:
             task.status = DS.ERROR
             task.message = f"下载失败: {str(e)[:200]}"
