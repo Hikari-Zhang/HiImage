@@ -40,6 +40,7 @@ export interface UpscaleModelsResponse {
       name: string
       description: string
       scale: number
+      outscale: number
     }>
   }>
 }

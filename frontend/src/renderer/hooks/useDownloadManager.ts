@@ -281,7 +281,7 @@ export function useDownloadManager() {
     _sseRetryCount.delete(modelId)
 
     // 先立即更新前端状态
-    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELED, message: '', speed: '', downloaded: '' })
+    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELLED, message: '', speed: '', downloaded: '' })
 
     // 再通知后端取消
     const url = await getURL()
@@ -292,11 +292,6 @@ export function useDownloadManager() {
     } catch {
       // 忽略
     }
-<<<<<<< HEAD
-
-    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELLED, message: '', speed: '', downloaded: '' })
-=======
->>>>>>> be5597a (fix: 修复取消下载竞态问题)
   }, [getURL])
 
   // ── 一键下载 ────────────────────────────────────────────────────────────────

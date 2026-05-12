@@ -46,6 +46,7 @@ async def get_upscale_models():
             "name":        m.get("name", m["id"]),
             "description": m.get("description", ""),
             "scale":       m.get("scale", 4),
+            "outscale":    m.get("outscale", m.get("scale", 4)),
             "badge":       m.get("badge", ""),
         })
 
@@ -60,6 +61,7 @@ class UpscaleRequest(BaseModel):
     image: str  # Base64 encoded
     model: str = "RealESRGAN_x4plus"
     device: str = "mps"
+    outscale: int | None = None  # 前端覆盖倍率；None 则使用模型默认值
 
 
 @router.post("/upscale")
@@ -70,14 +72,14 @@ async def upscale_image(req: UpscaleRequest):
     image = decode_image(req.image)
     h_in, w_in = image.shape[:2]
     log_manager.info(
-        f"开始超分辨率: model={req.model}, device={req.device}, input={w_in}x{h_in}",
+        f"开始超分辨率: model={req.model}, device={req.device}, outscale={req.outscale}, input={w_in}x{h_in}",
         source="upscale",
     )
 
     await progress_manager.send_progress(10, "正在加载超分辨率模型...")
 
     def _process():
-        upscaler = Upscaler(model_name=req.model, device=req.device)
+        upscaler = Upscaler(model_name=req.model, device=req.device, outscale=req.outscale)
         return upscaler.upscale(image)
 
     loop = asyncio.get_event_loop()

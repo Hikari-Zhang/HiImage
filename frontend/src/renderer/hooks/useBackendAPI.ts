@@ -63,7 +63,7 @@ export function useBackendAPI() {
   /**
    * 超分辨率
    */
-  const upscale = async (params: { image: string; model: string; device: string }) => {
+  const upscale = async (params: { image: string; model: string; device: string; outscale?: number }) => {
     const url = await getURL()
     const res = await fetch(`${url}/api/upscale`, {
       method: 'POST',

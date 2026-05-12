@@ -23,26 +23,22 @@ export default function SuperResolution() {
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { upscale } = useBackendAPI()
   const { device, upscaleModel, setDevice, setUpscaleModel } = useSettingsStore()
-  const { upscaleGroups } = useModelStore()
+  const { upscaleGroups, upscaleModelMeta } = useModelStore()
   const { options: deviceOptions } = useDeviceOptions()
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
 
   const [resultImage, setResultImage] = useState<string | null>(null)
   const [outputSize, setOutputSize] = useState({ w: 0, h: 0 })
+  // outscale: null 表示跟随模型默认值，用户可手动覆盖
+  const [outscale, setOutscale] = useState<number | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const scaleMap: Record<string, number> = {
-    RealESRGAN_x4plus: 4,
-    RealESRGAN_x4plus_anime_6B: 4,
-    RealESRGAN_x2plus: 2,
-    'realesr-general-x4v3': 4,
-    RealESRNet_x4plus: 4,
-    'realesr-animevideov3': 4,
-  }
-
-  const currentScale = scaleMap[upscaleModel] || 4
+  // 当前模型的默认 outscale（从 store 读，fallback 4）
+  const defaultOutscale = upscaleModelMeta[upscaleModel]?.defaultOutscale ?? 4
+  // 实际使用的倍率（用户覆盖优先）
+  const currentScale = outscale ?? defaultOutscale
 
   // 加载原图（写入共享 useImageStore）
   const loadSource = (dataUrl: string, filePath?: string) => {
@@ -92,7 +88,8 @@ export default function SuperResolution() {
   // Update output size when model changes
   const handleModelChange = (newModel: string) => {
     setUpscaleModel(newModel)
-    const scale = scaleMap[newModel] || 4
+    setOutscale(null)  // 重置为新模型的默认倍率
+    const scale = upscaleModelMeta[newModel]?.defaultOutscale ?? 4
     if (imageWidth > 0) {
       setOutputSize({ w: imageWidth * scale, h: imageHeight * scale })
     }
@@ -137,7 +134,7 @@ export default function SuperResolution() {
 
     try {
       startProcess(upscaleModel)
-      const result = await upscale({ image: sourceImage, model: upscaleModel, device })
+      const result = await upscale({ image: sourceImage, model: upscaleModel, device, outscale: currentScale })
       setResultImage(`data:image/png;base64,${result.image}`)
       setOutputSize({ w: result.width, h: result.height })
       finishProcess('超分辨率处理完成')
@@ -247,6 +244,26 @@ export default function SuperResolution() {
             onChange={(e) => setDevice(e.target.value)}
             size="sm"
             options={deviceOptions}
+          />
+
+          {/* Output scale */}
+          <Select
+            label="输出倍率"
+            value={String(currentScale)}
+            onChange={(e) => {
+              const val = Number(e.target.value)
+              setOutscale(val)
+              if (imageWidth > 0) {
+                setOutputSize({ w: imageWidth * val, h: imageHeight * val })
+              }
+            }}
+            size="sm"
+            options={[
+              { value: '1', label: '1x（清晰化，不放大）' },
+              { value: '2', label: '2x' },
+              { value: '4', label: '4x' },
+              { value: '8', label: '8x' },
+            ]}
           />
 
           {/* Image info */}

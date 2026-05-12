@@ -56,6 +56,7 @@
 # arch            网络架构：RRDBNet（标准大模型）或 SRVGGNetCompact（轻量模型）
 # num_block       RRDBNet 专用：dense block 数（23 = 标准；6 = anime 小模型）
 # num_conv        SRVGGNetCompact 专用：conv 层数（32 = general-x4v3；16 = animevideo）
+# outscale        实际输出倍率（可选）：不设则等于 scale；设为 1 表示同分辨率清晰化增强
 #
 # supported_params 推理参数说明（key → type/default/range?/desc）
 # features        能力标签列表：
@@ -1043,6 +1044,49 @@ models:
     num_conv: 16                                 # animevideo 更轻量，仅 16 conv
     display_group: 动漫/插画
     download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth
+    supported_params: {}
+    features: [upscale]
+
+  # ── 清晰化增强（同分辨率去噪/去模糊）──────────────────────────────────────
+  # outscale: 1 — 网络先 4x 放大再缩回，等效于在保持分辨率的同时去噪/锐化
+
+  - id: clarity-general
+    name: 清晰化增强·通用
+    provider: realesrgan
+    tags: [upscale]
+    description: 保持原始分辨率，通过 Real-ESRGAN 去噪+锐化提升清晰度，适合照片/截图｜复用 realesr-general-x4v3 权重（~5 MB）
+    recommended_for: 清晰化增强（照片/截图，不放大）
+    requires_reference: false
+    size_mb: 5
+    badge: 推荐
+    scale: 4                                     # 权重内置倍率（网络结构要求）
+    outscale: 1                                  # 实际输出倍率：1 = 同分辨率
+    weight_filename: realesr-general-x4v3.pth    # 复用已有权重
+    local_path: models/realesrgan/realesr-general-x4v3.pth
+    arch: SRVGGNetCompact
+    num_conv: 32
+    display_group: 清晰化增强（不放大）
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth
+    supported_params: {}
+    features: [upscale]
+
+  - id: clarity-anime
+    name: 清晰化增强·动漫
+    provider: realesrgan
+    tags: [upscale]
+    description: 保持原始分辨率，针对动漫/插画去噪+锐化，线条更清晰｜复用 RealESRGAN_x4plus_anime_6B 权重（~18 MB）
+    recommended_for: 清晰化增强（动漫/插画，不放大）
+    requires_reference: false
+    size_mb: 18
+    badge: 动漫
+    scale: 4
+    outscale: 1
+    weight_filename: RealESRGAN_x4plus_anime_6B.pth
+    local_path: models/realesrgan/RealESRGAN_x4plus_anime_6B.pth
+    arch: RRDBNet
+    num_block: 6
+    display_group: 清晰化增强（不放大）
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
     supported_params: {}
     features: [upscale]
 

@@ -64,8 +64,10 @@ def _build_upscale_structures():
     arch_map      = {m["id"]: m.get("arch", "RRDBNet")   for m in models}
     num_block_map = {m["id"]: m.get("num_block", 23)      for m in models}
     num_conv_map  = {m["id"]: m.get("num_conv", 32)       for m in models}
+    # outscale: 实际输出倍率，不设则等于 scale（权重倍率）
+    outscale_map  = {m["id"]: m.get("outscale", m.get("scale", 4)) for m in models}
 
-    return model_list, model_groups, (scale_map, weight_map, url_map, arch_map, num_block_map, num_conv_map)
+    return model_list, model_groups, (scale_map, weight_map, url_map, arch_map, num_block_map, num_conv_map, outscale_map)
 
 
 # ── 模块级数据（进程内只构建一次）───────────────────────────────────────────
@@ -76,7 +78,7 @@ UPSCALE_MODEL_LIST   = _list
 UPSCALE_MODEL_GROUPS = _groups
 
 _MODEL_SCALE, _MODEL_WEIGHT, _MODEL_URL, \
-_MODEL_ARCH, _MODEL_NUM_BLOCK, _MODEL_NUM_CONV = _dicts
+_MODEL_ARCH, _MODEL_NUM_BLOCK, _MODEL_NUM_CONV, _MODEL_OUTSCALE = _dicts
 
 # 扁平化 model_id 列表（向后兼容旧接口）
 AVAILABLE_UPSCALE_MODELS = [entry[0] for entry in UPSCALE_MODEL_LIST]
@@ -133,12 +135,17 @@ class Upscaler:
         result_rgb = upscaler.upscale(image_rgb)
     """
 
-    def __init__(self, model_name: str = 'RealESRGAN_x4plus', device: str = 'cpu'):
+    def __init__(self, model_name: str = 'RealESRGAN_x4plus', device: str = 'cpu', outscale: int | None = None):
         if model_name not in AVAILABLE_UPSCALE_MODELS:
             raise ValueError(f"不支持的模型: {model_name}，可选: {AVAILABLE_UPSCALE_MODELS}")
         self.model_name = model_name
         self.device = device
-        self.scale = _MODEL_SCALE[model_name]
+        self.scale = _MODEL_SCALE[model_name]          # 权重内置倍率（用于网络构建）
+        # outscale: 实际输出倍率；前端传值优先，否则用 YAML outscale，最后 fallback 到 scale
+        if outscale is not None:
+            self.outscale = outscale
+        else:
+            self.outscale = _MODEL_OUTSCALE[model_name]
         self._upsampler = None  # 懒加载
 
     # ------------------------------------------------------------------
@@ -161,7 +168,7 @@ class Upscaler:
         img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
         try:
-            output_bgr, _ = self._upsampler.enhance(img_bgr, outscale=self.scale)
+            output_bgr, _ = self._upsampler.enhance(img_bgr, outscale=self.outscale)
         except RuntimeError as e:
             raise RuntimeError(f"超分辨率处理失败: {e}") from e
 
@@ -248,6 +255,7 @@ class Upscaler:
             half=half,
             gpu_id=gpu_id,
         )
-        print(f"[Upscaler] 模型加载完成: {self.model_name} (device={self.device}, scale={self.scale}x)")
+        outscale_info = f", outscale={self.outscale}x" if self.outscale != self.scale else ""
+        print(f"[Upscaler] 模型加载完成: {self.model_name} (device={self.device}, scale={self.scale}x{outscale_info})")
         return upsampler
 

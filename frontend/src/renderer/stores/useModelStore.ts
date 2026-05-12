@@ -64,6 +64,8 @@ interface ModelStoreState {
   inpaintGroups: ModelGroup[]
   /** 超分辨率模型分组列表 */
   upscaleGroups: ModelGroup[]
+  /** 每个超分辨率模型的默认 outscale（model_id → outscale） */
+  upscaleModelMeta: Record<string, { defaultOutscale: number }>
   /** 是否已加载完成 */
   isLoaded: boolean
   /** 加载中 */
@@ -78,6 +80,7 @@ interface ModelStoreState {
 export const useModelStore = create<ModelStoreState>((set) => ({
   inpaintGroups: DEFAULT_INPAINT_GROUPS,
   upscaleGroups: DEFAULT_UPSCALE_GROUPS,
+  upscaleModelMeta: {},
   isLoaded: false,
   isLoading: false,
   error: null,
@@ -111,18 +114,22 @@ export const useModelStore = create<ModelStoreState>((set) => ({
         })
       )
 
+      const upscaleModelMeta: Record<string, { defaultOutscale: number }> = {}
       const upscaleGroups: ModelGroup[] = upscaleData.groups.map(
-        (g: { label: string; models: Array<{ id: string; name: string; description: string; scale: number }> }) => ({
+        (g: { label: string; models: Array<{ id: string; name: string; description: string; scale: number; outscale: number }> }) => ({
           label: stripDecorators(g.label),
-          options: g.models.map((m) => ({
-            value: m.id,
-            label: m.name,
-            description: m.description,
-          })),
+          options: g.models.map((m) => {
+            upscaleModelMeta[m.id] = { defaultOutscale: m.outscale ?? m.scale ?? 4 }
+            return {
+              value: m.id,
+              label: m.name,
+              description: m.description,
+            }
+          }),
         })
       )
 
-      set({ inpaintGroups, upscaleGroups, isLoaded: true, isLoading: false })
+      set({ inpaintGroups, upscaleGroups, upscaleModelMeta, isLoaded: true, isLoading: false })
     } catch (err: any) {
       console.warn('[ModelStore] 加载模型列表失败，使用默认配置:', err.message)
       // 失败时保留默认值
