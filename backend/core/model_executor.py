@@ -98,10 +98,6 @@ class ModelExecutorFactory:
             from .restormer_executor import RestormerExecutor
             return RestormerExecutor(model_config, device)
 
-        elif provider == "nafnet":
-            from .nafnet_executor import NAFNetExecutor
-            return NAFNetExecutor(model_config, device)
-
         elif provider == "realesrgan":
             # 复用现有 upscaler 实现
             from .realesrgan_executor import RealESRGANExecutor

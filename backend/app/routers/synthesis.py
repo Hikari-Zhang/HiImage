@@ -34,10 +34,6 @@ async def _ensure_model_ready_with_progress(model_id: str, operation_name: str) 
     :return: (success, error_message)
     """
     from core.model_download_helper import ensure_model_ready
-    from app.websocket.progress import progress_manager
-    import logging
-    
-    logger = logging.getLogger("synthesis")
     
     async def _progress_callback(percent: int, message: str):
         """进度回调函数，通过 WebSocket 推送进度"""
@@ -50,16 +46,16 @@ async def _ensure_model_ready_with_progress(model_id: str, operation_name: str) 
             else:
                 await progress_manager.send_error(message)
         except Exception as e:
-            logger.error(f"进度推送失败: {e}")
+            log_manager.error(f"进度推送失败: {e}", source="synthesis")
     
-    logger.info(f"[{operation_name}] 检查模型就绪状态: {model_id}")
+    log_manager.info(f"[{operation_name}] 检查模型就绪状态: {model_id}", source="synthesis")
     success, error_msg = await ensure_model_ready(
         model_id=model_id,
         progress_callback=_progress_callback,
     )
     
     if not success:
-        logger.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}")
+        log_manager.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}", source="synthesis")
     
     return success, error_msg
 

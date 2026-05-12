@@ -9,6 +9,7 @@ import os
 import cv2
 import numpy as np
 import urllib.request
+from .paths import PROJECT_ROOT as _PR
 
 
 def _build_upscale_structures():
@@ -83,9 +84,8 @@ _MODEL_ARCH, _MODEL_NUM_BLOCK, _MODEL_NUM_CONV, _MODEL_OUTSCALE = _dicts
 # 扁平化 model_id 列表（向后兼容旧接口）
 AVAILABLE_UPSCALE_MODELS = [entry[0] for entry in UPSCALE_MODEL_LIST]
 
-# 项目内模型缓存目录（backend/core/ → backend/ → HiImage/）
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_WEIGHTS_DIR = os.path.join(_PROJECT_ROOT, 'models', 'realesrgan')
+# 模型权重缓存目录
+_WEIGHTS_DIR = str(_PR / 'models' / 'realesrgan')
 
 
 def _get_weight_path(model_name: str) -> str:

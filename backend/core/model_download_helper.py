@@ -20,8 +20,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from core.model_checker import ModelChecker, ModelCheckResult
 from core.model_registry import MODEL_BY_ID
@@ -31,9 +32,34 @@ from core.download_queue import get_download_queue
 logger = logging.getLogger("model_download_helper")
 
 
+async def _call_progress_callback(
+    callback: Optional[Callable[..., Any]],
+    percent: int,
+    message: str,
+) -> None:
+    """
+    调用进度回调函数，支持同步和异步回调。
+    
+    :param callback: 进度回调函数（同步或异步）
+    :param percent: 进度百分比
+    :param message: 进度消息
+    """
+    if not callback:
+        return
+    
+    result = callback(percent, message)
+    
+    # 如果回调返回协程（异步函数），则等待完成
+    if inspect.iscoroutine(result):
+        try:
+            await result
+        except Exception as e:
+            logger.warning(f"进度回调执行失败: {e}")
+
+
 async def ensure_model_ready(
     model_id: str,
-    progress_callback: Optional[Callable[[int, str], None]] = None,
+    progress_callback: Optional[Callable[..., Any]] = None,
     timeout: int = 1800,  # 30 minutes
 ) -> Tuple[bool, str]:
     """
@@ -76,22 +102,19 @@ async def ensure_model_ready(
     # 如果模型已就绪，直接返回
     if check_result.status == MS.OK:
         logger.info(f"[ensure_model_ready] 模型已就绪: {name}")
-        if progress_callback:
-            progress_callback(100, f"模型已就绪: {name}")
+        await _call_progress_callback(progress_callback, 100, f"模型已就绪: {name}")
         return True, ""
     
     # IOPaint CLI 模式模型：由 iopaint 在首次使用时自动下载，无需手动触发
     from core.constants import Provider, IOPaintMode
     if cfg.get("provider") == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
         logger.info(f"[ensure_model_ready] IOPaint CLI 模型将在首次使用时自动下载: {name}")
-        if progress_callback:
-            progress_callback(100, f"模型将自动下载: {name}")
+        await _call_progress_callback(progress_callback, 100, f"模型将自动下载: {name}")
         return True, ""
     
     # 3. 模型未下载或下载不完整，触发下载
     logger.info(f"[ensure_model_ready] 模型未就绪，开始下载: {name} (status={check_result.status})")
-    if progress_callback:
-        progress_callback(0, f"开始下载模型: {name}")
+    await _call_progress_callback(progress_callback, 0, f"开始下载模型: {name}")
     
     queue = get_download_queue()
     
@@ -111,33 +134,29 @@ async def ensure_model_ready(
         
         if success:
             logger.info(f"[ensure_model_ready] 模型下载完成: {name}")
-            if progress_callback:
-                progress_callback(100, f"模型下载完成: {name}")
+            await _call_progress_callback(progress_callback, 100, f"模型下载完成: {name}")
         else:
             logger.error(f"[ensure_model_ready] 模型下载失败: {name} - {error_msg}")
-            if progress_callback:
-                progress_callback(-1, f"模型下载失败: {error_msg}")
+            await _call_progress_callback(progress_callback, -1, f"模型下载失败: {error_msg}")
         
         return success, error_msg
         
     except asyncio.TimeoutError:
         error_msg = f"模型下载超时（{timeout}秒）: {name}"
         logger.error(f"[ensure_model_ready] {error_msg}")
-        if progress_callback:
-            progress_callback(-1, error_msg)
+        await _call_progress_callback(progress_callback, -1, error_msg)
         return False, error_msg
     except Exception as e:
         error_msg = f"模型下载过程出错: {name} - {str(e)}"
         logger.error(f"[ensure_model_ready] {error_msg}", exc_info=True)
-        if progress_callback:
-            progress_callback(-1, error_msg)
+        await _call_progress_callback(progress_callback, -1, error_msg)
         return False, error_msg
 
 
 async def _wait_for_download_completion_poll(
     model_id: str,
     queue: "DownloadQueue",
-    progress_callback: Optional[Callable[[int, str], None]],
+    progress_callback: Optional[Callable[..., Any]],
     model_name: str,
     timeout: int,
 ) -> Tuple[bool, str]:
@@ -180,7 +199,7 @@ async def _wait_for_download_completion_poll(
         # 更新进度
         if progress_callback and status == DS.DOWNLOADING:
             percent = _parse_progress_percent(message)
-            progress_callback(percent, f"下载中: {model_name} - {message}")
+            await _call_progress_callback(progress_callback, percent, f"下载中: {model_name} - {message}")
         
         # 检查终态
         if status == DS.DONE:

@@ -23,6 +23,8 @@ from typing import Optional
 import numpy as np
 import cv2
 
+# 使用统一路径管理器
+from core.paths import MODELS_DIR as _MODELS_DIR, HF_HOME as _HF_HOME
 import app.config as _cfg
 
 
@@ -163,30 +165,48 @@ class _ModelServer:
     @staticmethod
     def _is_model_cached(model_name: str) -> bool:
         """
-        检查模型是否在本地 HuggingFace 缓存中。
+        检查模型是否在本地缓存中。
         对于内置 IOPaint 模型（名称不含 /），始终返回 True。
+        
+        检查路径（按优先级）：
+          1. 项目自定义路径：{MODELS_DIR}/huggingface/hub/ 和 manual/
+          2. HuggingFace 默认路径：~/.cache/huggingface/hub
         """
         # 内置模型（lama/migan/zits 等）由 iopaint 自行管理缓存，无需检查
         if '/' not in model_name:
             return True
         try:
             from pathlib import Path
-            hf_cache = Path(_cfg.MODELS_DIR) / "huggingface"
-            # 检查 manual 下载目录（HiImage 下载路径）
-            manual_dir = hf_cache / "manual" / model_name.replace("/", "--")
+            from huggingface_hub import scan_cache_dir
+            
+            # 收集所有需要检查的 hub 缓存目录
+            hub_dirs = []
+            
+            # 1. 项目自定义路径
+            custom_hub = Path(_MODELS_DIR) / "hub"
+            if custom_hub.exists():
+                hub_dirs.append(custom_hub)
+            
+            # 2. HuggingFace 默认路径
+            default_hub = Path(_HF_HOME) / "hub"
+            if default_hub.exists() and default_hub not in hub_dirs:
+                hub_dirs.append(default_hub)
+            
+            # 检查 manual 下载目录（项目自定义路径）
+            manual_dir = Path(_HF_HOME) / "manual" / model_name.replace("/", "--")
             if manual_dir.exists() and any(manual_dir.iterdir()):
                 return True
-            # 检查标准 hub 缓存
-            try:
-                from huggingface_hub import scan_cache_dir
-                hub_dir = hf_cache / "hub"
-                if hub_dir.exists():
+            
+            # 扫描所有 hub 缓存目录
+            for hub_dir in hub_dirs:
+                try:
                     cache_info = scan_cache_dir(hub_dir)
                     for repo in cache_info.repos:
                         if repo.repo_id == model_name:
                             return True
-            except Exception:
-                pass
+                except Exception:
+                    continue
+            
             return False
         except Exception:
             return False
@@ -202,9 +222,8 @@ class _ModelServer:
 
     def _start_unlocked(self, model_name: str, device: str, disable_nsfw: bool):
         """启动 iopaint start 子进程并等待就绪（已持锁）"""
-        # 使用 config 中统一定义的 models 目录（项目根目录/models），
-        # 避免因文件位置不同导致的路径计算错误
-        model_dir = _cfg.MODELS_DIR
+        # 使用 paths.py 中统一定义的 models 目录
+        model_dir = str(_MODELS_DIR)
 
         # 部分扩散模型在特定设备上存在兼容性问题，需要从注册表读取强制设备覆盖。
         # 例如：AnyText 的 LDM/DDIM pipeline 使用了 MPS 不支持的 float64 cast
@@ -237,8 +256,11 @@ class _ModelServer:
             '--port', str(_port()),
             '--model', model_name,
             '--device', effective_device,
-            '--model-dir', model_dir,
         ]
+        # 本地模型（不含 /）使用项目模型目录
+        # 扩散模型（含 /）不指定 --model-dir，使用 HuggingFace 默认缓存路径
+        if '/' not in model_name:
+            cmd.extend(['--model-dir', model_dir])
         if disable_nsfw:
             cmd.append('--disable-nsfw-checker')
         # 显存优化参数（从 settings.json 读取，默认值偏向省显存）

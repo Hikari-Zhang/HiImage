@@ -45,16 +45,16 @@ async def _ensure_model_ready_with_progress(model_id: str, operation_name: str) 
             else:
                 await progress_manager.send_error(message)
         except Exception as e:
-            logger.error(f"进度推送失败: {e}")
+            log_manager.error(f"进度推送失败: {e}", source="inpaint")
     
-    logger.info(f"[{operation_name}] 检查模型就绪状态: {model_id}")
+    log_manager.info(f"[{operation_name}] 检查模型就绪状态: {model_id}", source="inpaint")
     success, error_msg = await ensure_model_ready(
         model_id=model_id,
         progress_callback=_progress_callback,
     )
     
     if not success:
-        logger.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}")
+        log_manager.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}", source="inpaint")
     
     return success, error_msg
 

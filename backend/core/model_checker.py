@@ -21,12 +21,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
 
+# 使用统一路径管理器
+from core.paths import (
+    PROJECT_ROOT as _PR,
+    HF_HOME as _HF_HOME,
+    U2NET_HOME as _U2NET_HOME,
+    resolve_hf_model_path as _resolve_hf,
+)
+
 
 def resolve_hf_model_path(repo_id: str) -> str:
     """
     解析 HF 模型加载路径。
 
-    优先使用 _download_hf 下载的 manual/ 目录（扁平结构），
+    优先使用 paths.py 中定义的逻辑（检查 manual/ 目录），
     找不到时返回原始 repo_id，由 transformers/diffusers 自行解析标准 HF 缓存。
 
     用法：
@@ -34,14 +42,7 @@ def resolve_hf_model_path(repo_id: str) -> str:
         local_path = resolve_hf_model_path("timbrooks/instruct-pix2pix")
         pipe = SomePipeline.from_pretrained(local_path, ...)
     """
-    # hf_cache_dir 计算逻辑与 ModelChecker.__init__ 保持一致
-    # HF_HOME 由 app/main.py 启动时设为 <MODELS_DIR>/huggingface
-    # 下载时写入路径为 <HF_HOME>/manual/<repo>，因此这里必须用 Path(hf_home) / "manual"
-    hf_home = os.environ.get("HF_HOME") or str(Path.home() / ".cache" / "huggingface")
-    manual_dir = Path(hf_home) / "manual" / repo_id.replace("/", "--")
-    if manual_dir.exists() and manual_dir.is_dir():
-        return str(manual_dir)
-    return repo_id
+    return _resolve_hf(repo_id)
 
 def ensure_iopaint_hub_links(model_id: str = None) -> None:
     """
@@ -56,14 +57,16 @@ def ensure_iopaint_hub_links(model_id: str = None) -> None:
       - 解决方案：在 hub/ 下创建 snapshots/main -> manual/<repo> 的软链接
 
     :param model_id: 指定单个 registry ID（如 "wm_sdxl"）；
-                     为 None 时处理所有 iopaint_mode: server 的模型。
+                    为 None 时处理所有 iopaint_mode: server 的模型。
     """
     import logging
     _log = logging.getLogger("model_checker")
 
-    hf_home = os.environ.get("HF_HOME") or str(Path.home() / ".cache" / "huggingface")
-    manual_dir = Path(hf_home) / "manual"
-    hub_dir = Path(hf_home) / "hub"
+    # 使用 paths.py 中定义的 HF_HOME
+    from core.paths import HF_HOME as _HF
+    hf_home = str(_HF)
+    manual_dir = _HF / "manual"
+    hub_dir = _HF / "hub"
 
     # 延迟导入避免循环依赖
     from core.model_registry import MODELS, MODEL_BY_ID
@@ -155,13 +158,12 @@ class ModelChecker:
     """
 
     def __init__(self, project_root: Optional[Path] = None):
-        # 默认为 backend/ 目录的父级（即 PROJECT_ROOT）
-        self.project_root = project_root or Path(__file__).parent.parent.parent
+        # 使用 paths.py 中定义的 PROJECT_ROOT（单一数据源）
+        self.project_root = project_root or _PR
         self.models_dir = self.project_root / "models"
 
-        # HF_HOME 由 app/main.py 在启动时设置；此处读取环境变量，回退到默认值
-        hf_home = os.environ.get("HF_HOME") or str(self.models_dir / "huggingface")
-        self.hf_cache_dir = Path(hf_home) / "hub"
+        # HF 缓存目录：使用 paths.py 中的定义
+        self.hf_cache_dir = _HF_HOME / "hub"
 
     # ── 公共 API ─────────────────────────────────────────────────────────────
 
@@ -228,7 +230,9 @@ class ModelChecker:
           isnet         → isnet-general-use.onnx
           rmbg          → bria-rmbg-2.0.onnx
         """
-        u2net_home = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
+        # 使用 paths.py 中定义的 U2NET_HOME
+        from core.paths import U2NET_HOME as _U2NET
+        u2net_home = _U2NET
         onnx_filename = cfg.get("onnx_filename")
         if not onnx_filename:
             # 向后兼容旧字段
@@ -241,9 +245,10 @@ class ModelChecker:
     def _check_local_path(self, cfg: dict) -> ModelCheckResult:
         """
         直接路径模型（GFPGAN、Real-ESRGAN 等）：
-        local_path 为相对于 PROJECT_ROOT 的路径。
+        使用 paths.py 中的 resolve_model_path() 统一解析路径。
         """
-        path = self.project_root / cfg["local_path"]
+        from core.paths import resolve_model_path
+        path = resolve_model_path(cfg["local_path"], self.project_root)
         return self._check_file(cfg, path)
 
     def _check_hf_multi(self, cfg: dict) -> ModelCheckResult:

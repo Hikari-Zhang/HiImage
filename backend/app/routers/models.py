@@ -482,9 +482,9 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
     import urllib.request
     from huggingface_hub import list_repo_files, hf_hub_url
     from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
-    from app.config import MODELS_DIR
 
-    hf_cache = str(Path(MODELS_DIR) / "huggingface")
+    # 使用默认 HF 缓存路径（遵循 HF_HOME 环境变量，默认 ~/.cache/huggingface/）
+    hf_cache = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
     token = os.environ.get("HF_TOKEN") or None
     repo_id = cfg["hf_model_id"]
     name = cfg.get("name", repo_id)
@@ -683,11 +683,13 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
 
 def _download_direct(cfg: dict, progress_cb=None) -> None:
     """通过 urllib 直接下载单文件模型（如 Real-ESRGAN .pth 文件），支持速度回调。"""
+    import os
     import time
     import urllib.request
-    from app.config import PROJECT_ROOT
+    from core.paths import resolve_model_path
 
-    dest = Path(PROJECT_ROOT) / cfg["local_path"]
+    # 使用 paths.py 统一解析模型路径
+    dest = Path(resolve_model_path(cfg["local_path"]))
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     url = cfg["download_url"]
@@ -1074,7 +1076,7 @@ async def delete_model_files(model_id: str):
     - IOPaint cli 内置模型 → 无文件可删，直接返回提示
     """
     from core.model_registry import MODEL_BY_ID
-    from app.config import PROJECT_ROOT, MODELS_DIR
+    from core.paths import PROJECT_ROOT as _PR, MODELS_DIR as _MD, U2NET_HOME as _U2NET, HF_HOME as _HF, resolve_model_path as _resolve
     import shutil
 
     cfg = MODEL_BY_ID.get(model_id)
@@ -1092,7 +1094,7 @@ async def delete_model_files(model_id: str):
 
     # ── rembg 模型 ──────────────────────────────────────────────────────────
     if provider == "rembg":
-        u2net_home = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
+        u2net_home = _U2NET
         rembg_name = cfg.get("rembg_model_name", model_id)
 
         # 可能是子目录形式（如 briaai/RMBG-2.0）
@@ -1110,10 +1112,10 @@ async def delete_model_files(model_id: str):
 
     # ── 本地路径文件（realesrgan/facexlib 等）──────────────────────────────
     if cfg.get("local_path"):
-        local = Path(PROJECT_ROOT) / cfg["local_path"]
+        local = _resolve(cfg["local_path"], _PR)
         # 安全检查：只允许删 models/ 目录下的文件
         try:
-            local.resolve().relative_to(Path(PROJECT_ROOT).resolve() / "models")
+            local.resolve().relative_to(Path(_PR).resolve() / "models")
         except ValueError:
             raise HTTPException(status_code=400, detail=f"路径安全检查失败，拒绝删除: {local}")
 
@@ -1132,7 +1134,7 @@ async def delete_model_files(model_id: str):
         hf_repo_ids = [cfg["hf_model_id"]]
 
     for repo_id in hf_repo_ids:
-        hf_cache_dir = Path(MODELS_DIR) / "huggingface"
+        hf_cache_dir = _HF
         manual_dir = hf_cache_dir / "manual" / repo_id.replace("/", "--")
 
         # 1. 优先删手动下载目录（_download_hf 使用的路径）

@@ -6,9 +6,10 @@ import os
 from typing import Any
 
 # 项目根目录（backend/ 的上级）
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 使用 core.paths 中的定义（单一数据源）
+from core.paths import PROJECT_ROOT, MODELS_DIR
+
 CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "settings.json")
-MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
 
 # 默认值
 DEFAULTS = {

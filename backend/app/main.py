@@ -11,7 +11,16 @@ from fastapi.middleware.cors import CORSMiddleware
 # 确保 backend/ 在 sys.path 中（core 模块可导入）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.config import get, PROJECT_ROOT, MODELS_DIR
+# 优先使用 core.paths 作为路径的唯一数据源
+from core.paths import PROJECT_ROOT, MODELS_DIR, apply_default_env_vars
+
+# 如果 core.paths 未定义（向后兼容），则从 app.config 导入
+try:
+    PROJECT_ROOT
+except NameError:
+    from app.config import PROJECT_ROOT, MODELS_DIR
+
+from app.config import get
 from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, models as models_router_module
 from app.websocket.progress import router as ws_router
 from app.logging_manager import log_manager, setup_logging
@@ -34,11 +43,9 @@ async def lifespan(app: FastAPI):
     if hf_token:
         os.environ["HF_TOKEN"] = hf_token
 
-    # 模型缓存目录
-    os.environ["HF_HOME"] = os.path.join(MODELS_DIR, "huggingface")
-    os.environ["TORCH_HOME"] = os.path.join(MODELS_DIR, "torch")
-
-    # 为所有已下载的 IOPaint server 模式模型补全 hub/ 软链接，
+    # 为依赖环境变量的库设置默认路径（仅设置未定义的环境变量）
+    apply_default_env_vars()
+    # 为已下载的 IOPaint server 模式模型补全 hub/ 软链接，
     # 使 iopaint scan_diffusers_models() 能识别本地缓存，避免重复触发下载
     try:
         from core.model_checker import ensure_iopaint_hub_links

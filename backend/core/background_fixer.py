@@ -16,9 +16,15 @@ from typing import Optional, Literal
 
 PostMethod = Literal["poisson", "gfpgan", "lama_refine", "none"]
 
-# GFPGAN 权重存放目录（放在项目 models/ 下统一管理）
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_GFPGAN_WEIGHTS_DIR = os.path.join(_PROJECT_ROOT, "models", "gfpgan")
+# GFPGAN 权重存放目录：使用 paths.py 中的定义
+# 可通过环境变量 GFPGAN_HOME 自定义
+from core.paths import GFPGAN_HOME as _GFPGAN_HOME
+
+_GFPGAN_WEIGHTS_DIR = str(_GFPGAN_HOME)
+_GFPGAN_WEIGHT_FILE = "GFPGANv1.4.pth"
+_GFPGAN_WEIGHT_URL = (
+    "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth"
+)
 _GFPGAN_WEIGHT_FILE = "GFPGANv1.4.pth"
 _GFPGAN_WEIGHT_URL = (
     "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth"

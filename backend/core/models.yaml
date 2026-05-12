@@ -411,7 +411,7 @@ models:
     size_mb: 340
     badge: 推荐
     download_url: https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth
-    local_path: models/gfpgan/GFPGANv1.4.pth   # 相对于 PROJECT_ROOT
+    local_path: ~/.cache/gfpgan/GFPGANv1.4.pth   # 默认缓存路径，可通过 GFPGAN_HOME 环境变量自定义
     supported_params:
       <<: *gfpgan
     features: [face_enhance]
@@ -666,6 +666,7 @@ models:
     badge: 推荐
     iopaint_model_id: lama # 传给 iopaint --model 的参数
     iopaint_mode: cli      # 调用方式：iopaint run（CLI 批处理）；首次自动下载
+    device_override: cpu   # conv2d_gradfix 不支持 MPS，强制回退 CPU
     display_group: 快速修复（首次运行自动下载）
     supported_params: {}
     features: [inpaint_region]
@@ -681,6 +682,7 @@ models:
     badge: ""
     iopaint_model_id: migan
     iopaint_mode: cli
+    device_override: cpu   # conv2d_gradfix 不支持 MPS
     display_group: 快速修复（首次运行自动下载）
     supported_params: {}
     features: [inpaint_region]
@@ -696,6 +698,7 @@ models:
     badge: ""
     iopaint_model_id: zits
     iopaint_mode: cli
+    device_override: cpu   # conv2d_gradfix 不支持 MPS
     display_group: 快速修复（首次运行自动下载）
     supported_params: {}
     features: [inpaint_region]
@@ -711,6 +714,7 @@ models:
     badge: ""
     iopaint_model_id: fcf
     iopaint_mode: cli
+    device_override: cpu   # conv2d_gradfix 不支持 MPS
     display_group: 快速修复（首次运行自动下载）
     supported_params: {}
     features: [inpaint_region]
@@ -726,6 +730,7 @@ models:
     badge: ""
     iopaint_model_id: mat
     iopaint_mode: cli
+    device_override: cpu   # conv2d_gradfix 不支持 MPS
     display_group: 快速修复（首次运行自动下载）
     supported_params: {}
     features: [inpaint_region]
@@ -757,6 +762,7 @@ models:
     badge: 动漫
     iopaint_model_id: manga
     iopaint_mode: cli
+    device_override: cpu   # conv2d_gradfix 不支持 MPS
     display_group: 快速修复（首次运行自动下载）
     supported_params: {}
     features: [inpaint_region]
@@ -1126,20 +1132,6 @@ models:
         type: str
         default: deblur
         desc: 任务类型
-    features: [image_restoration]
-
-  - id: nafnet_deblur
-    name: NAFNet（去模糊·快速）
-    provider: nafnet
-    tags: [image_restoration]
-    description: Nonlinear Activation Free Network，极快速度的去模糊
-    recommended_for: 图像复原（去模糊·快速预览）
-    requires_reference: false
-    size_mb: 26
-    badge: 快速
-    local_path: models/nafnet/nafnet_l_8f8_g5.pth
-    download_url: https://github.com/megvii-model/NAFNet/releases/download/v1.0/nafnet_l_8f8_g5.pth
-    supported_params: {}
     features: [image_restoration]
 
 
