@@ -741,6 +741,7 @@ models:
     badge: ""
     iopaint_model_id: ldm
     iopaint_mode: cli
+    device_override: cpu    # LDM 的 einsum/cumsum 等操作 MPS 不支持，强制回退 CPU
     display_group: 快速修复（首次运行自动下载）
     supported_params: {}
     features: [inpaint_region]
@@ -781,10 +782,10 @@ models:
     name: AnyText（文字水印专用）
     provider: IOPaint
     tags: [watermark_removal]
-    description: 识别字体、颜色后重建背景，文字类水印效果显著优于 LaMa；常驻内存保活5分钟｜下载 ~3 GB，运行 ~10 GB 统一内存
+    description: 识别字体、颜色后重建背景，文字类水印效果显著优于 LaMa；常驻内存保活5分钟｜下载 ~8.2 GB，运行 ~10 GB 统一内存
     recommended_for: 去水印（文字/字幕水印）
     requires_reference: false
-    size_mb: 3000
+    size_mb: 8200
     badge: 推荐
     hf_model_id: Sanster/AnyText           # HF 缓存检测用
     iopaint_model_id: Sanster/AnyText       # 传给 iopaint --model 的参数
@@ -1090,6 +1091,57 @@ models:
     supported_params: {}
     features: [upscale]
 
+  # ── 图像复原（image_restoration）────────────────────────────────────
+  - id: restormer_denoise
+    name: Restormer（去噪）
+    provider: restormer
+    tags: [image_restoration]
+    description: Transformer-based 图像去噪，保留细节效果最佳
+    recommended_for: 图像复原（去噪）
+    requires_reference: false
+    size_mb: 89
+    badge: 推荐
+    local_path: models/restormer/denoise.pth
+    download_url: https://github.com/swz30/Restormer/releases/download/v1.0/denoise.pth
+    supported_params:
+      task_type:
+        type: str
+        default: denoise
+        desc: 任务类型（denoise/deblur/derain/dehaze）
+    features: [image_restoration]
+
+  - id: restormer_deblur
+    name: Restormer（去模糊）
+    provider: restormer
+    tags: [image_restoration]
+    description: 图像去模糊，适合失焦/运动模糊场景
+    recommended_for: 图像复原（去模糊）
+    requires_reference: false
+    size_mb: 89
+    badge: ""
+    local_path: models/restormer/deblur.pth
+    download_url: https://github.com/swz30/Restormer/releases/download/v1.0/deblur.pth
+    supported_params:
+      task_type:
+        type: str
+        default: deblur
+        desc: 任务类型
+    features: [image_restoration]
+
+  - id: nafnet_deblur
+    name: NAFNet（去模糊·快速）
+    provider: nafnet
+    tags: [image_restoration]
+    description: Nonlinear Activation Free Network，极快速度的去模糊
+    recommended_for: 图像复原（去模糊·快速预览）
+    requires_reference: false
+    size_mb: 26
+    badge: 快速
+    local_path: models/nafnet/nafnet_l_8f8_g5.pth
+    download_url: https://github.com/megvii-model/NAFNet/releases/download/v1.0/nafnet_l_8f8_g5.pth
+    supported_params: {}
+    features: [image_restoration]
+
 
 # ==============================================================================
 # 模式分组
@@ -1198,6 +1250,16 @@ mode_groups:
     icon: zoom-in
     description: Real-ESRGAN 智能放大图像，支持 2x/4x，多种场景优化
     default_model: RealESRGAN_x4plus
+    needs_reference: false
+    needs_roi: false
+    needs_prompt: false
+
+  - id: image_restoration
+    name: 图像复原
+    icon: droplet
+    icon_name: Droplet
+    description: 使用 AI 模型修复图像质量（去噪/去模糊/去雨/去雾）
+    default_model: restormer_denoise
     needs_reference: false
     needs_roi: false
     needs_prompt: false

@@ -37,6 +37,7 @@ interface SettingsState {
   downloadMaxConcurrent: number
 
   isLoading: boolean
+  defaultsLoaded: boolean   // 默认配置是否已从后端加载
 
   // Actions
   setDevice: (device: string) => void
@@ -51,12 +52,13 @@ interface SettingsState {
   setSettings: (settings: Partial<SettingsState>) => void
   loadSettings: (backendURL: string) => Promise<void>
   saveSettings: (backendURL: string) => Promise<void>
+  loadDefaults: (backendURL: string) => Promise<void>  // 从后端加载默认模型配置
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   device: 'cpu',
   disableNsfw: true,
-  inpaintModel: 'lama',
+  inpaintModel: 'wm_lama',  // 硬编码兜底值，将从后端API覆盖
   defaultDilation: 10,
   sensitivity: 50,
   postprocessMethod: 'none',
@@ -74,6 +76,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   githubMirror: '',
   downloadMaxConcurrent: 3,
   isLoading: false,
+  defaultsLoaded: false,
 
   setDevice: (device) => set({ device }),
   setInpaintModel: (model) => set({ inpaintModel: model }),
@@ -128,12 +131,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           hf_endpoint: state.hfEndpoint,
           hf_token: state.hfToken,
           github_mirror: state.githubMirror,
-        default_dilation: state.defaultDilation,
-        disable_nsfw: state.disableNsfw,
-        low_mem: state.lowMem,
-        cpu_offload: state.cpuOffload,
-        cpu_textencoder: state.cpuTextencoder,
-        download_max_concurrent: state.downloadMaxConcurrent,
+          default_dilation: state.defaultDilation,
+          disable_nsfw: state.disableNsfw,
+          low_mem: state.lowMem,
+          cpu_offload: state.cpuOffload,
+          cpu_textencoder: state.cpuTextencoder,
+          download_max_concurrent: state.downloadMaxConcurrent,
         }),
       })
     } catch (err) {
@@ -141,5 +144,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       throw err
     }
   },
-}))
 
+  loadDefaults: async (backendURL) => {
+    try {
+      const res = await fetch(`${backendURL}/api/models/defaults`)
+      const defaults = await res.json()
+      set({
+        inpaintModel: defaults.watermark_removal ?? 'wm_lama',
+        defaultsLoaded: true,
+      })
+    } catch (err) {
+      console.error('Failed to load defaults:', err)
+      set({ defaultsLoaded: true })  // 使用硬编码兜底值
+    }
+  },
+}))

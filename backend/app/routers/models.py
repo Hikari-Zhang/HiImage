@@ -809,7 +809,7 @@ async def queue_download_single(model_id: str):
 
     返回格式：
     ```json
-    {"modelId": "lama", "modelName": "LaMa", "status": "downloading", "position": 0, ...}
+    {"modelId": "wm_lama", "modelName": "LaMa", "status": "downloading", "position": 0, ...}
     ```
     """
     from core.model_registry import MODEL_BY_ID
@@ -1174,3 +1174,28 @@ async def delete_model_files(model_id: str):
         "deleted": deleted,
         "not_found": not_found,
     }
+
+
+@router.get("/defaults")
+async def get_defaults():
+    """
+    返回所有模式的默认模型配置。
+
+    返回格式：
+    ```json
+    {
+      "watermark_removal": "wm_lama",
+      "background_replace": "birefnet",
+      ...
+    }
+    ```
+    """
+    from core.model_registry import MODE_GROUPS
+    
+    result = {}
+    for g in MODE_GROUPS:
+        default = g.get("default_model")
+        if default:
+            result[g["id"]] = default
+    
+    return result

@@ -3,34 +3,44 @@ import type { ModelGroup } from '../types/models'
 
 /**
  * 默认模型配置 — 后端不可用时的 fallback
+ * 
+ * 注意：value 必须使用 models.yaml 中的内部 ID（如 'wm_lama'），
+ * 而不是 iopaint_model_id（如 'lama'）
  */
 const DEFAULT_INPAINT_GROUPS: ModelGroup[] = [
   {
     label: '快速修复（本地推理）',
     options: [
-      { value: 'lama', label: 'LaMa（推荐·通用）', description: '综合最佳首选：速度快、质量好' },
-      { value: 'migan', label: 'MiGAN（GAN·快速）', description: '基于GAN，速度快' },
-      { value: 'zits', label: 'ZITS（边缘感知）', description: '边缘过渡自然' },
-      { value: 'fcf', label: 'FCF（快速填充）', description: '背景简单时效果佳' },
-      { value: 'mat', label: 'MAT（精细修复）', description: '质量最高但速度较慢' },
-      { value: 'ldm', label: 'LDM（轻量扩散）', description: '质量与速度均衡' },
-      { value: 'manga', label: 'Manga（漫画专用）', description: '针对漫画/线稿优化' },
-      { value: 'cv2', label: 'CV2（传统算法）', description: '速度最快，质量有限' },
+      { value: 'wm_lama', label: 'LaMa（推荐·通用）', description: '综合最佳首选：速度快、质量好' },
+      { value: 'wm_migan', label: 'MiGAN（GAN·快速）', description: '基于GAN，速度快' },
+      { value: 'wm_zits', label: 'ZITS（边缘感知）', description: '边缘过渡自然' },
+      { value: 'wm_fcf', label: 'FCF（快速填充）', description: '背景简单时效果佳' },
+      { value: 'wm_mat', label: 'MAT（精细修复）', description: '质量最高但速度较慢' },
+      { value: 'wm_ldm', label: 'LDM（轻量扩散）', description: '质量与速度均衡' },
+      { value: 'wm_manga', label: 'Manga（漫画专用）', description: '针对漫画/线稿优化' },
+      { value: 'wm_cv2', label: 'CV2（传统算法）', description: '速度最快，质量有限' },
     ],
   },
   {
     label: '专用模型（首次使用自动下载）',
     options: [
-      { value: 'Sanster/AnyText', label: 'AnyText（文字水印专用）', description: '文字类水印效果显著' },
+      { value: 'wm_anytext', label: 'AnyText（文字水印专用）', description: '文字类水印效果显著' },
+      { value: 'wm_powerpaint_v1', label: 'PowerPaint V1（最强通用）', description: '支持文字引导，综合效果最强' },
     ],
   },
   {
-    label: '扩散模型（高质量·首次下载较大）',
+    label: '扩散模型 SD 1.5（高质量·首次下载较大）',
     options: [
-      { value: 'runwayml/stable-diffusion-inpainting', label: 'SD Inpainting（复杂背景）', description: '复杂/渐变背景效果自然' },
-      { value: 'andregn/Realistic_Vision_V3.0-inpainting', label: 'Realistic Vision（写实照片）', description: '写实照片真实感最强' },
-      { value: 'JunhaoZhuang/PowerPaint-v2-1', label: 'PowerPaintV2（最强通用）', description: '综合效果最强' },
-      { value: 'diffusers/stable-diffusion-xl-1.0-inpainting-0.1', label: 'SDXL Inpainting（高分辨率）', description: '2K+ 图像细节最佳' },
+      { value: 'wm_sd15', label: 'SD 1.5 Inpainting（通用）', description: '复杂/渐变背景效果自然' },
+      { value: 'wm_realistic_vision', label: 'Realistic Vision V5.1（写实照片）', description: '写实照片真实感最强' },
+      { value: 'wm_dreamshaper', label: 'DreamShaper（艺术风格）', description: '艺术感强，人像/插画自然' },
+      { value: 'wm_anything_v4', label: 'Anything V4（动漫/插画）', description: '二次元/动漫/CG 插图专用' },
+    ],
+  },
+  {
+    label: '扩散模型 SDXL（超高质量）',
+    options: [
+      { value: 'wm_sdxl', label: 'SDXL Inpainting（高分辨率）', description: '2K+ 图像细节最佳' },
     ],
   },
 ]

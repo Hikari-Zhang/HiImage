@@ -11,14 +11,52 @@ import cv2
 import numpy as np
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import get
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
+from core.model_registry import get_default_model
 
 router = APIRouter()
 executor = ThreadPoolExecutor(max_workers=1)
+
+
+# ============ 模型检查辅助函数 ============
+
+async def _ensure_model_ready_with_progress(model_id: str, operation_name: str) -> tuple[bool, str]:
+    """
+    检查并确保模型已下载，支持进度推送。
+    
+    :param model_id: 模型 ID
+    :param operation_name: 操作名称（用于日志和进度消息）
+    :return: (success, error_message)
+    """
+    from core.model_download_helper import ensure_model_ready
+    
+    async def _progress_callback(percent: int, message: str):
+        """进度回调函数，通过 WebSocket 推送进度"""
+        try:
+            if percent >= 0:
+                await progress_manager.send_progress(
+                    max(5, min(percent, 30)),  # 限制在 5-30% 范围内
+                    f"{operation_name}：{message}"
+                )
+            else:
+                await progress_manager.send_error(message)
+        except Exception as e:
+            logger.error(f"进度推送失败: {e}")
+    
+    logger.info(f"[{operation_name}] 检查模型就绪状态: {model_id}")
+    success, error_msg = await ensure_model_ready(
+        model_id=model_id,
+        progress_callback=_progress_callback,
+    )
+    
+    if not success:
+        logger.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}")
+    
+    return success, error_msg
 
 
 # ============ Request/Response Models ============
@@ -32,7 +70,7 @@ class DetectRequest(BaseModel):
 class InpaintRequest(BaseModel):
     image: str  # Base64 encoded
     rois: List[List[int]]  # [[x1, y1, x2, y2], ...]
-    model: str = "lama"
+    model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = "mps"
     dilation: int = 10
     disable_nsfw: bool = False
@@ -41,7 +79,7 @@ class InpaintRequest(BaseModel):
 class InpaintWithMaskRequest(BaseModel):
     image: str  # Base64 encoded
     mask: str  # Base64 encoded mask
-    model: str = "lama"
+    model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = "mps"
     dilation: int = 10
     disable_nsfw: bool = False
@@ -159,6 +197,17 @@ async def inpaint_with_rois(req: InpaintRequest):
         source="inpaint",
     )
 
+    # 检查并确保模型已下载
+    await progress_manager.send_progress(5, f"正在检查模型...")
+    success, error_msg = await _ensure_model_ready_with_progress(req.model, "水印去除")
+    if not success:
+        await progress_manager.send_error(error_msg)
+        log_manager.error(f"水印去除失败（模型未就绪）: {error_msg}", source="inpaint")
+        return JSONResponse(
+            status_code=422,
+            content={"detail": error_msg, "message": error_msg}
+        )
+
     await progress_manager.send_progress(10, "正在初始化模型...")
 
     loop = asyncio.get_event_loop()
@@ -176,14 +225,23 @@ async def inpaint_with_rois(req: InpaintRequest):
         return callback
 
     def _process():
-        inpainter = Inpainter(
-            model_name=req.model,
-            device=req.device,
-            dilation=req.dilation,
-            disable_nsfw=req.disable_nsfw,
-            progress_callback=_make_progress_callback(),
-        )
-        return inpainter.remove_watermark(image, req.rois)
+        # 使用新的执行器框架（支持 IOPaint / Restormer / NAFNet 等）
+        from core.model_registry import get_model
+        from core.model_executor import ModelExecutorFactory
+
+        # 获取模型配置
+        model_config = get_model(req.model)
+
+        # 创建对应的执行器（自动根据 provider 分发）
+        executor = ModelExecutorFactory.create_executor(model_config, req.device)
+
+        # 统一调用接口
+        if executor.supports_mask():
+            # IOPaint 类模型：需要 mask 或 rois
+            return executor.execute(image, rois=req.rois, progress_callback=_make_progress_callback())
+        else:
+            # Restormer / NAFNet 类模型：直接处理（不需要 mask）
+            return executor.execute(image, progress_callback=_make_progress_callback())
 
     await progress_manager.send_progress(20, "正在处理...")
 
@@ -213,6 +271,17 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
         source="inpaint",
     )
 
+    # 检查并确保模型已下载
+    await progress_manager.send_progress(5, f"正在检查模型...")
+    success, error_msg = await _ensure_model_ready_with_progress(req.model, "掩码修复")
+    if not success:
+        await progress_manager.send_error(error_msg)
+        log_manager.error(f"掩码修复失败（模型未就绪）: {error_msg}", source="inpaint")
+        return JSONResponse(
+            status_code=422,
+            content={"detail": error_msg, "message": error_msg}
+        )
+
     await progress_manager.send_progress(10, "正在初始化模型...")
 
     loop = asyncio.get_event_loop()
@@ -230,14 +299,18 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
         return callback
 
     def _process():
-        inpainter = Inpainter(
-            model_name=req.model,
-            device=req.device,
-            dilation=req.dilation,
-            disable_nsfw=req.disable_nsfw,
-            progress_callback=_make_progress_callback(),
-        )
-        return inpainter.remove_watermark_with_mask(image, mask)
+        # 使用新的执行器框架（支持 IOPaint / Restormer / NAFNet 等）
+        from core.model_registry import get_model
+        from core.model_executor import ModelExecutorFactory
+
+        # 获取模型配置
+        model_config = get_model(req.model)
+
+        # 创建对应的执行器（自动根据 provider 分发）
+        executor = ModelExecutorFactory.create_executor(model_config, req.device)
+
+        # 统一调用接口
+        return executor.execute(image, mask=mask, progress_callback=_make_progress_callback())
 
     await progress_manager.send_progress(20, "正在处理...")
 

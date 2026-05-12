@@ -5,7 +5,7 @@ Pipeline 处理链 - 串联 inpaint → postprocess → upscale
     from core.pipeline import Pipeline, PipelineConfig, InpaintStep, PostprocessStep, UpscaleStep
 
     config = PipelineConfig(
-        inpaint=InpaintStep(model="lama", device="mps", dilation=10),
+        inpaint=InpaintStep(model="wm_lama", device="mps", dilation=10),
         postprocess=PostprocessStep(method="poisson"),
         upscale=UpscaleStep(model="RealESRGAN_x4plus", enabled=False),
     )
@@ -15,8 +15,10 @@ Pipeline 处理链 - 串联 inpaint → postprocess → upscale
 from __future__ import annotations
 
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import List, Optional, Tuple
+
+from core.model_registry import get_default_model
 
 
 # ──────────────────────────────────────────────────────────────
@@ -25,18 +27,16 @@ from typing import List, Optional, Tuple
 
 @dataclass
 class InpaintStep:
-    model: str = "lama"
+    model: str = field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = "mps"
     dilation: int = 10
     disable_nsfw: bool = False
-    iopaint_path: Optional[str] = None
 
 
 @dataclass
 class PostprocessStep:
     method: str = "none"       # none / poisson / gfpgan / lama_refine
     device: str = "mps"
-    iopaint_path: Optional[str] = None
     enabled: bool = True
 
 
@@ -93,26 +93,30 @@ class Pipeline:
         _progress("inpaint", 10)
         print(f"[Pipeline] Step 1/3 - Inpaint: model={cfg.inpaint.model}")
 
-        from core.inpainter import Inpainter
-        inpainter = Inpainter(
-            model_name=cfg.inpaint.model,
-            device=cfg.inpaint.device,
-            dilation=cfg.inpaint.dilation,
-            disable_nsfw=cfg.inpaint.disable_nsfw,
-            iopaint_path=cfg.inpaint.iopaint_path,
-        )
+        from core.model_registry import get_model
+        from core.model_executor import ModelExecutorFactory
+        
+        model_config = get_model(cfg.inpaint.model)
+        executor = ModelExecutorFactory.create_executor(model_config, cfg.inpaint.device)
 
         if mask is not None:
             # 使用外部传入的 mask
             inpaint_mask = mask
-            inpainted = inpainter.remove_watermark_with_mask(original_rgb, inpaint_mask)
+            inpainted = executor.execute(original_rgb, mask=inpaint_mask, 
+                                       dilation=cfg.inpaint.dilation, 
+                                       disable_nsfw=cfg.inpaint.disable_nsfw)
         elif rois:
             # 从 ROI 生成 mask
-            inpaint_mask = inpainter.create_mask(original_rgb.shape, rois, cfg.inpaint.dilation)
-            inpainted = inpainter.remove_watermark_with_mask(original_rgb, inpaint_mask)
+            h, w = original_rgb.shape[:2]
+            inpaint_mask = np.zeros((h, w), dtype=np.uint8)
+            for (x1, y1, x2, y2) in rois:
+                inpaint_mask[y1:y2, x1:x2] = 255
+            inpainted = executor.execute(original_rgb, mask=inpaint_mask)
         else:
+            executor.unload_model()
             raise ValueError("[Pipeline] 必须提供 rois 或 mask 之一")
 
+        executor.unload_model()
         _progress("inpaint", 50)
 
         # ── Step 2: 后处理 ───────────────────────────────────────
@@ -130,7 +134,6 @@ class Pipeline:
                 mask=inpaint_mask,
                 method=post_method,
                 device=cfg.postprocess.device,
-                iopaint_path=cfg.postprocess.iopaint_path,
             )
             _progress("postprocess", 75)
         else:

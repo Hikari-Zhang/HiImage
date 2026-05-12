@@ -47,7 +47,6 @@ def fix_background(
     mask: np.ndarray,
     method: PostMethod = "poisson",
     device: str = "mps",
-    iopaint_path: Optional[str] = None,
 ) -> np.ndarray:
     """
     对 inpainting 结果做后处理修复。
@@ -70,7 +69,7 @@ def fix_background(
         return _gfpgan_enhance(inpainted_rgb, device=device)
 
     if method == "lama_refine":
-        return _lama_refine(original_rgb, inpainted_rgb, mask, device=device, iopaint_path=iopaint_path)
+        return _lama_refine(original_rgb, inpainted_rgb, mask, device=device)
 
     raise ValueError(f"不支持的后处理方法: {method}，可选: {AVAILABLE_METHODS}")
 
@@ -217,7 +216,6 @@ def _lama_refine(
     inpainted_rgb: np.ndarray,
     mask: np.ndarray,
     device: str = "mps",
-    iopaint_path: Optional[str] = None,
 ) -> np.ndarray:
     """
     用 LaMa 对 inpainting 结果做二次精修：
@@ -232,14 +230,14 @@ def _lama_refine(
         return inpainted_rgb
 
     try:
-        from core.inpainter import Inpainter
-        inpainter = Inpainter(
-            model_name="lama",
-            device=device,
-            dilation=0,       # 已经有 mask，不需要再扩张
-            iopaint_path=iopaint_path,
-        )
-        return inpainter.remove_watermark_with_mask(inpainted_rgb, refined_mask)
+        from core.model_registry import get_model
+        from core.model_executor import ModelExecutorFactory
+        
+        model_config = get_model("lama_inpaint")
+        executor = ModelExecutorFactory.create_executor(model_config, device)
+        result = executor.execute(inpainted_rgb, mask=refined_mask)
+        executor.unload_model()
+        return result
     except Exception as e:
         print(f"[BackgroundFixer] LaMa 二次精修失败（退化为 inpainting 结果）: {e}")
         return inpainted_rgb

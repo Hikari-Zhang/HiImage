@@ -50,14 +50,12 @@ class Synthesizer:
         mode: str,
         model_id: str,
         device: str = "mps",
-        iopaint_path: Optional[str] = None,
         prompt: str = "",
         progress_callback=None,
     ):
         self.mode = mode
         self.model_id = model_id
         self.device = device
-        self.iopaint_path = iopaint_path
         self.prompt = prompt
         self.progress_callback = progress_callback
 
@@ -231,35 +229,15 @@ class Synthesizer:
                 # 简单叠覆（后续 inpaint 会做语义融合）
                 base_rgb[y1:y2, x1:x2] = ref_resized
 
-        # 使用 IOPaint Inpainter 做修复
-        from core.inpainter import Inpainter
-        from core.model_server import inpaint_via_server
-
-        # flux_fill：直接走 FluxFiller，不经 IOPaint
-        if self.model_id == "flux_fill":
-            from core.flux_filler import FluxFiller
-            filler = FluxFiller(device=self.device)
-            try:
-                result = filler.inpaint(
-                    image_rgb=base_rgb,
-                    mask=mask,
-                    prompt=self.prompt or "high quality, photorealistic",
-                )
-            finally:
-                filler.offload()
-        else:
-            # 直接传入 registry model_id，由 Inpainter 内部通过注册表解析
-            # iopaint_model_id 和 server/cli 模式判断，无需在此硬编码映射。
-            inpainter = Inpainter(
-                model_name=self.model_id,
-                device=self.device,
-                dilation=0,
-                disable_nsfw=False,
-                iopaint_path=self.iopaint_path,
-                prompt=self.prompt,
-                progress_callback=self.progress_callback,
-            )
-            result = inpainter.remove_watermark_with_mask(base_rgb, mask)
+        # 使用 ModelExecutorFactory 创建执行器（支持所有 provider）
+        from core.model_registry import get_model
+        
+        model_config = get_model(self.model_id)
+        executor = ModelExecutorFactory.create_executor(model_config, self.device)
+        
+        # flux_fill 由 DiffusersExecutor 处理，无需特殊处理
+        result = executor.execute(base_rgb, mask=mask)
+        executor.unload_model()
 
         # 人脸模式：使用 GFPGAN 进一步增强脸部细节
         if hint == "face" and self.model_id == "gfpgan":
@@ -343,31 +321,15 @@ class Synthesizer:
             x2, y2 = min(w, int(x2)), min(h, int(y2))
             mask[y1:y2, x1:x2] = 255
 
-        # flux_fill_prompt：直接走 FluxFiller，不经 IOPaint
-        if self.model_id == "flux_fill_prompt":
-            from core.flux_filler import FluxFiller
-            filler = FluxFiller(device=self.device)
-            try:
-                return filler.inpaint(
-                    image_rgb=source_rgb,
-                    mask=mask,
-                    prompt=self.prompt,
-                )
-            finally:
-                filler.offload()
-
-        # 其余模型走 IOPaint，直接传 registry model_id 由 Inpainter 内部解析
-        from core.inpainter import Inpainter
-        inpainter = Inpainter(
-            model_name=self.model_id,
-            device=self.device,
-            dilation=0,
-            disable_nsfw=True,
-            iopaint_path=self.iopaint_path,
-            prompt=self.prompt,
-            progress_callback=self.progress_callback,
-        )
-        return inpainter.remove_watermark_with_mask(source_rgb, mask)
+        # flux_fill_prompt 由 DiffusersExecutor 处理
+        # 其余模型统一使用 ModelExecutorFactory
+        from core.model_registry import get_model
+        
+        model_config = get_model(self.model_id)
+        executor = ModelExecutorFactory.create_executor(model_config, self.device)
+        result = executor.execute(source_rgb, mask=mask, prompt=self.prompt)
+        executor.unload_model()
+        return result
 
     # ------------------------------------------------------------------
     # 方案B：智能定位（auto_segment_edit）
@@ -435,48 +397,36 @@ class Synthesizer:
                 finally:
                     filler.offload()
             else:
-                # grounded_sam_sdxl → SDXL Inpainting（via Inpainter 解析注册表）
-                from core.inpainter import Inpainter
-                inpainter = Inpainter(
-                    model_name="sdxl",
-                    device=self.device,
-                    dilation=0,
-                    disable_nsfw=True,
-                    iopaint_path=self.iopaint_path,
-                    prompt=inpaint_prompt,
-                    progress_callback=self.progress_callback,
-                )
-                return inpainter.remove_watermark_with_mask(source_rgb, mask)
+                # grounded_sam_sdxl → SDXL Inpainting（使用 ModelExecutorFactory）
+                from core.model_registry import get_model
+                
+                model_config = get_model("sdxl")
+                executor = ModelExecutorFactory.create_executor(model_config, self.device)
+                result = executor.execute(source_rgb, mask=mask, prompt=inpaint_prompt)
+                executor.unload_model()
+                return result
 
         elif intent.action == "color_change" and use_sd:
             # SD 换色：效果更真实，耗时更长
             sd_prompt = f"{intent.value} colored clothing, photorealistic, high quality"
-            from core.inpainter import Inpainter
-            inpainter = Inpainter(
-                model_name="sd15",
-                device=self.device,
-                dilation=0,
-                disable_nsfw=True,
-                iopaint_path=self.iopaint_path,
-                prompt=sd_prompt,
-                progress_callback=self.progress_callback,
-            )
-            return inpainter.remove_watermark_with_mask(source_rgb, mask)
+            from core.model_registry import get_model
+            
+            model_config = get_model("sd15")
+            executor = ModelExecutorFactory.create_executor(model_config, self.device)
+            result = executor.execute(source_rgb, mask=mask, prompt=sd_prompt)
+            executor.unload_model()
+            return result
 
         elif intent.action == "style_change":
             # 风格替换：调用 SD Inpainting
             sd_prompt = f"{intent.value} style clothing, high quality, detailed"
-            from core.inpainter import Inpainter
-            inpainter = Inpainter(
-                model_name="sd15",
-                device=self.device,
-                dilation=0,
-                disable_nsfw=True,
-                iopaint_path=self.iopaint_path,
-                prompt=sd_prompt,
-                progress_callback=self.progress_callback,
-            )
-            return inpainter.remove_watermark_with_mask(source_rgb, mask)
+            from core.model_registry import get_model
+            
+            model_config = get_model("sd15")
+            executor = ModelExecutorFactory.create_executor(model_config, self.device)
+            result = executor.execute(source_rgb, mask=mask, prompt=sd_prompt)
+            executor.unload_model()
+            return result
 
         else:
             raise ValueError(f"无法解析指令：{self.prompt}\n支持格式：将[部位]换成[颜色/风格]")

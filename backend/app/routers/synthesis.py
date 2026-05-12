@@ -18,10 +18,50 @@ from app.routers.inpaint import decode_image, encode_image
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.config import get
-from core.model_server import _detect_iopaint_path
 
 router = APIRouter()
 executor = ThreadPoolExecutor(max_workers=1)
+
+
+# ============ 模型检查辅助函数 ============
+
+async def _ensure_model_ready_with_progress(model_id: str, operation_name: str) -> tuple[bool, str]:
+    """
+    检查并确保模型已下载，支持进度推送。
+    
+    :param model_id: 模型 ID
+    :param operation_name: 操作名称（用于日志和进度消息）
+    :return: (success, error_message)
+    """
+    from core.model_download_helper import ensure_model_ready
+    from app.websocket.progress import progress_manager
+    import logging
+    
+    logger = logging.getLogger("synthesis")
+    
+    async def _progress_callback(percent: int, message: str):
+        """进度回调函数，通过 WebSocket 推送进度"""
+        try:
+            if percent >= 0:
+                await progress_manager.send_progress(
+                    max(5, min(percent, 30)),
+                    f"{operation_name}：{message}"
+                )
+            else:
+                await progress_manager.send_error(message)
+        except Exception as e:
+            logger.error(f"进度推送失败: {e}")
+    
+    logger.info(f"[{operation_name}] 检查模型就绪状态: {model_id}")
+    success, error_msg = await ensure_model_ready(
+        model_id=model_id,
+        progress_callback=_progress_callback,
+    )
+    
+    if not success:
+        logger.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}")
+    
+    return success, error_msg
 
 
 # ──────────────────────────────────────────────────────────────
@@ -69,9 +109,19 @@ async def run_synthesis(req: SynthesisRequest):
         f"rois={len(rois) if rois else 0}, has_reference={reference is not None}",
         source="synthesis",
     )
-    await progress_manager.send_progress(5, f"正在初始化 [{req.mode}] 处理...")
-
-    iopaint_path = get("inpaint.iopaint_path") or _detect_iopaint_path()
+    
+    # 检查并确保模型已下载
+    await progress_manager.send_progress(5, f"正在检查模型...")
+    success, error_msg = await _ensure_model_ready_with_progress(req.model_id, "智能合成")
+    if not success:
+        await progress_manager.send_error(error_msg)
+        log_manager.error(f"智能合成失败（模型未就绪）: {error_msg}", source="synthesis")
+        return JSONResponse(
+            status_code=422,
+            content={"detail": error_msg, "message": error_msg}
+        )
+    
+    await progress_manager.send_progress(10, f"正在初始化 [{req.mode}] 处理...")
 
     loop = asyncio.get_event_loop()
 
@@ -92,7 +142,6 @@ async def run_synthesis(req: SynthesisRequest):
             mode=req.mode,
             model_id=req.model_id,
             device=req.device,
-            iopaint_path=iopaint_path,
             prompt=req.prompt,
             progress_callback=_make_progress_callback(),
         )

@@ -154,7 +154,8 @@ class Inpainter:
         except Exception:
             pass
         self.iopaint_path = iopaint_path or _detect_iopaint_path()
-        self.device = device
+        # 读取 models.yaml 中的 device_override，覆盖用户传入的 device
+        self.device = self._get_effective_device(device)
         self.dilation = dilation
         self.disable_nsfw = disable_nsfw
         self.prompt = prompt
@@ -169,6 +170,22 @@ class Inpainter:
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tmp'
         )
         self._cleanup_old_tmp()
+
+    def _get_effective_device(self, device: str) -> str:
+        """
+        获取有效设备：优先使用 models.yaml 中的 device_override，否则使用传入的 device。
+        用于处理某些模型不兼容 MPS 等后端的情况。
+        """
+        try:
+            from core.model_registry import MODEL_BY_ID
+            cfg = MODEL_BY_ID.get(self.model_name)
+            if cfg:
+                override = cfg.get("device_override")
+                if override:
+                    return override
+        except Exception:
+            pass
+        return device
 
     def _cleanup_old_tmp(self, max_age_hours: int = 24):
         """

@@ -46,6 +46,24 @@ MODE_BY_ID:  dict[str, dict] = {g["id"]: g for g in MODE_GROUPS}
 
 # ── 工具函数 ────────────────────────────────────────────────────────────────
 
+def get_default_model(mode_id: str) -> str:
+    """
+    返回指定模式的默认模型 ID。
+    
+    从 models.yaml 的 mode_groups 中读取 default_model 字段。
+    用于替代代码中的硬编码默认值。
+    
+    :param mode_id: 模式 ID（如 "watermark_removal"）
+    :return: 默认模型 ID（如 "wm_lama"）
+    :raises KeyError: 模式不存在或未配置 default_model
+    """
+    mode = get_mode(mode_id)
+    default = mode.get("default_model")
+    if not default:
+        raise KeyError(f"模式 {mode_id!r} 未配置 default_model")
+    return default
+
+
 def get_models_for_mode(mode_id: str) -> list[dict]:
     """返回指定模式下的所有模型（保留 YAML 中的原始顺序）。"""
     return [m for m in MODELS if mode_id in m.get("tags", [])]

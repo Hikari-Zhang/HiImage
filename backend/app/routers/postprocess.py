@@ -13,13 +13,13 @@ from typing import List, Optional
 import numpy as np
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.routers.inpaint import decode_image, decode_mask, encode_image
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.config import get
-from core.model_server import _detect_iopaint_path
+from core.model_registry import get_default_model
 
 router = APIRouter()
 executor = ThreadPoolExecutor(max_workers=1)
@@ -43,9 +43,9 @@ class PipelineRequest(BaseModel):
     image: str                        # 原始图像 base64
     rois: Optional[List[List[int]]] = None   # [[x1,y1,x2,y2],...]
     mask: Optional[str] = None        # 或直接传 mask base64
-
+    
     # Inpaint 参数
-    inpaint_model: str = "lama"
+    inpaint_model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = "mps"
     dilation: int = 10
     disable_nsfw: bool = False
@@ -90,8 +90,6 @@ async def postprocess_fix(req: PostprocessRequest):
     )
     await progress_manager.send_progress(10, f"正在进行后处理（{req.method}）...")
 
-    iopaint_path = get("inpaint.iopaint_path") or _detect_iopaint_path()
-
     def _process():
         from core.background_fixer import fix_background
         return fix_background(
@@ -100,7 +98,6 @@ async def postprocess_fix(req: PostprocessRequest):
             mask=mask,
             method=req.method,
             device=req.device,
-            iopaint_path=iopaint_path,
         )
 
     loop = asyncio.get_event_loop()
@@ -131,8 +128,6 @@ async def run_pipeline(req: PipelineRequest):
     )
     await progress_manager.send_progress(5, "正在初始化处理流程...")
 
-    iopaint_path = get("inpaint.iopaint_path") or _detect_iopaint_path()
-
     def _process():
         from core.pipeline import Pipeline, PipelineConfig, InpaintStep, PostprocessStep, UpscaleStep
 
@@ -142,12 +137,10 @@ async def run_pipeline(req: PipelineRequest):
                 device=req.device,
                 dilation=req.dilation,
                 disable_nsfw=req.disable_nsfw,
-                iopaint_path=iopaint_path,
             ),
             postprocess=PostprocessStep(
                 method=req.postprocess_method,
                 device=req.device,
-                iopaint_path=iopaint_path,
                 enabled=req.postprocess_enabled,
             ),
             upscale=UpscaleStep(

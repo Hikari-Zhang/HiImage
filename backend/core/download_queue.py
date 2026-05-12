@@ -87,8 +87,8 @@ class DownloadQueue:
 
     用法：
         queue = get_download_queue()
-        task = queue.submit("lama")
-        async for event in queue.subscribe("lama"):
+        task = queue.submit("wm_lama")
+        async for event in queue.subscribe("wm_lama"):
             yield event
     """
 

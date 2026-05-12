@@ -160,6 +160,37 @@ class _ModelServer:
             pass
         return device
 
+    @staticmethod
+    def _is_model_cached(model_name: str) -> bool:
+        """
+        检查模型是否在本地 HuggingFace 缓存中。
+        对于内置 IOPaint 模型（名称不含 /），始终返回 True。
+        """
+        # 内置模型（lama/migan/zits 等）由 iopaint 自行管理缓存，无需检查
+        if '/' not in model_name:
+            return True
+        try:
+            from pathlib import Path
+            hf_cache = Path(_cfg.MODELS_DIR) / "huggingface"
+            # 检查 manual 下载目录（HiImage 下载路径）
+            manual_dir = hf_cache / "manual" / model_name.replace("/", "--")
+            if manual_dir.exists() and any(manual_dir.iterdir()):
+                return True
+            # 检查标准 hub 缓存
+            try:
+                from huggingface_hub import scan_cache_dir
+                hub_dir = hf_cache / "hub"
+                if hub_dir.exists():
+                    cache_info = scan_cache_dir(hub_dir)
+                    for repo in cache_info.repos:
+                        if repo.repo_id == model_name:
+                            return True
+            except Exception:
+                pass
+            return False
+        except Exception:
+            return False
+
     def stop(self):
         """主动停止（如程序退出时调用）"""
         with self._lock:
@@ -231,10 +262,11 @@ class _ModelServer:
             env['HUGGING_FACE_HUB_TOKEN'] = hf_token  # 兼容旧版 huggingface_hub
         if hf_endpoint:
             env['HF_ENDPOINT'] = hf_endpoint
-        # 强制离线模式：模型已通过 HiImage 下载到本地，iopaint 子进程不应再联网。
-        # 避免 AutoencoderKL / from_pretrained 等因网络失败而报错。
-        env['HF_HUB_OFFLINE'] = '1'
-        env['TRANSFORMERS_OFFLINE'] = '1'
+        # 离线模式：仅当模型已在本地缓存中时才强制离线，
+        # 否则允许 iopaint 首次使用时从 HuggingFace Hub 下载。
+        if self._is_model_cached(model_name):
+            env['HF_HUB_OFFLINE'] = '1'
+            env['TRANSFORMERS_OFFLINE'] = '1'
 
         print(f"[ModelServer] 启动服务: {' '.join(cmd)}")
         self._log_lines = []   # 重置日志缓冲
