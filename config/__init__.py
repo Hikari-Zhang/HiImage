@@ -17,7 +17,7 @@ _DEFAULTS = {
     'server.startup_timeout': 1800,
     'inpaint.default_dilation': 10,
     'inpaint.default_device': 'mps',
-    'network.hf_endpoint': 'https://huggingface.co',
+    'network.hf_endpoint': 'https://huggingface.com',
     'network.hf_token': '',
 }
 

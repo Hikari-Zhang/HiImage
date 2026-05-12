@@ -278,7 +278,7 @@ class _ModelServer:
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
         hf_token = _cfg.get('network.hf_token', '')
-        hf_endpoint = _cfg.get('network.hf_endpoint', 'https://huggingface.co')
+        hf_endpoint = _cfg.get('network.hf_endpoint', 'https://huggingface.com')
         if hf_token:
             env['HF_TOKEN'] = hf_token
             env['HUGGING_FACE_HUB_TOKEN'] = hf_token  # 兼容旧版 huggingface_hub

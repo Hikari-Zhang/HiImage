@@ -327,7 +327,9 @@ class DownloadQueue:
             logger.error(f"[_run_download] 找不到 task: {model_id!r}")
             return
 
-        cfg = MODEL_BY_ID.get(model_id, {})
+        cfg = dict(MODEL_BY_ID.get(model_id, {}))  # 浅拷贝，避免修改全局配置
+        # 添加取消检查函数，供下载函数周期性检查
+        cfg['_cancel_check'] = lambda: task._cancel_flag
         logger.info(f"[_run_download] cfg 字段: provider={cfg.get('provider')!r}, hf_model_id={cfg.get('hf_model_id')!r}, local_path={cfg.get('local_path')!r}, download_url={cfg.get('download_url')!r}")
 
         loop = asyncio.get_event_loop()

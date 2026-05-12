@@ -17,7 +17,7 @@ const DEFAULTS = {
   serverPort: 51821,
   keepaliveSeconds: 300,
   startupTimeout: 1800,
-  hfEndpoint: 'https://huggingface.co',
+  hfEndpoint: 'https://huggingface.com',
   hfToken: '',
   githubMirror: '',
   defaultDilation: 10,

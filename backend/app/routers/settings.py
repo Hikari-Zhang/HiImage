@@ -37,7 +37,7 @@ async def get_settings():
         "server_port": all_settings.get("server.port", 51821),
         "server_keepalive": all_settings.get("server.keepalive_seconds", 300),
         "server_startup_timeout": all_settings.get("server.startup_timeout", 1800),
-        "hf_endpoint": all_settings.get("network.hf_endpoint", "https://huggingface.co"),
+        "hf_endpoint": all_settings.get("network.hf_endpoint", "https://huggingface.com"),
         "hf_token": all_settings.get("network.hf_token", ""),
         "github_mirror": all_settings.get("network.github_mirror", ""),
         "default_dilation": all_settings.get("inpaint.default_dilation", 10),

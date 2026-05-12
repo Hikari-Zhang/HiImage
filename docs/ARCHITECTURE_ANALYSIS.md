@@ -706,7 +706,7 @@ all_settings = config.get_all()
     "disable_nsfw": true
   },
   "network": {
-    "hf_endpoint": "https://huggingface.co",
+    "hf_endpoint": "https://huggingface.com",
     "hf_token": "hf_xxx",
     "github_mirror": ""
   }

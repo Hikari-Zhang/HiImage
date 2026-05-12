@@ -295,7 +295,7 @@ models:
     size_mb: 23800
     badge: 高质量
     hf_model_id: black-forest-labs/FLUX.1-Fill-dev
-    download_url: https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev
+    download_url: https://huggingface.com/black-forest-labs/FLUX.1-Fill-dev
     supported_params:
       <<: *flux
     features: [inpaint_region]
@@ -312,7 +312,7 @@ models:
     hf_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     iopaint_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     iopaint_mode: server
-    download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    download_url: https://huggingface.com/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     supported_params:
       <<: *sdxl_inpaint
     features: [inpaint_region, texture]
@@ -336,7 +336,7 @@ models:
     iopaint_model_id: runwayml/stable-diffusion-v1-5
     iopaint_mode: server
     iopaint_enable_powerpaint_v2: true   # 推理时传 enable_powerpaint_v2=true，触发 PowerPaintV2 路径
-    download_url: https://huggingface.co/Sanster/PowerPaint_v2
+    download_url: https://huggingface.com/Sanster/PowerPaint_v2
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_region, texture, style]
@@ -396,7 +396,7 @@ models:
     hf_model_id: runwayml/stable-diffusion-inpainting
     iopaint_model_id: runwayml/stable-diffusion-inpainting
     iopaint_mode: server
-    download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
+    download_url: https://huggingface.com/runwayml/stable-diffusion-inpainting
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_region, inpaint_prompt]
@@ -428,7 +428,7 @@ models:
     size_mb: 23800
     badge: 高质量
     hf_model_id: black-forest-labs/FLUX.1-Fill-dev
-    download_url: https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev
+    download_url: https://huggingface.com/black-forest-labs/FLUX.1-Fill-dev
     supported_params:
       <<: *flux
     features: [inpaint_prompt]
@@ -445,7 +445,7 @@ models:
     hf_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     iopaint_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     iopaint_mode: server
-    download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    download_url: https://huggingface.com/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     supported_params:
       <<: *sdxl_inpaint
     features: [inpaint_prompt]
@@ -469,7 +469,7 @@ models:
     iopaint_model_id: runwayml/stable-diffusion-v1-5
     iopaint_mode: server
     iopaint_enable_powerpaint_v2: true   # 推理时传 enable_powerpaint_v2=true，触发 PowerPaintV2 路径
-    download_url: https://huggingface.co/Sanster/PowerPaint_v2
+    download_url: https://huggingface.com/Sanster/PowerPaint_v2
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_prompt]
@@ -486,7 +486,7 @@ models:
     hf_model_id: runwayml/stable-diffusion-inpainting
     iopaint_model_id: runwayml/stable-diffusion-inpainting
     iopaint_mode: server
-    download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
+    download_url: https://huggingface.com/runwayml/stable-diffusion-inpainting
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_prompt]
@@ -512,7 +512,7 @@ models:
       - id: black-forest-labs/FLUX.1-Fill-dev
         name: FLUX.1-Fill-dev
         size_mb: 21300
-    download_url: https://huggingface.co/black-forest-labs/FLUX.1-Fill-dev
+    download_url: https://huggingface.com/black-forest-labs/FLUX.1-Fill-dev
     supported_params:
       <<: *flux
       <<: *edit_prompt
@@ -537,7 +537,7 @@ models:
       - id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
         name: SDXL Inpainting
         size_mb: 5300
-    download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    download_url: https://huggingface.com/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     supported_params:
       <<: *sdxl_inpaint
       <<: *edit_prompt
@@ -553,7 +553,7 @@ models:
     size_mb: 400
     badge: 推荐
     hf_model_id: mattmdjaga/segformer_b2_clothes
-    download_url: https://huggingface.co/mattmdjaga/segformer_b2_clothes
+    download_url: https://huggingface.com/mattmdjaga/segformer_b2_clothes
     supported_params:
       <<: *hsv
       <<: *edit_prompt
@@ -575,7 +575,7 @@ models:
       - id: runwayml/stable-diffusion-inpainting
         name: SD 1.5 Inpainting
         size_mb: 4000
-    download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
+    download_url: https://huggingface.com/runwayml/stable-diffusion-inpainting
     supported_params:
       <<: *sd_inpaint
       <<: *edit_prompt
@@ -593,7 +593,7 @@ models:
     size_mb: 24000
     badge: 高质量
     hf_model_id: black-forest-labs/FLUX.1-dev
-    download_url: https://huggingface.co/black-forest-labs/FLUX.1-dev
+    download_url: https://huggingface.com/black-forest-labs/FLUX.1-dev
     supported_params:
       <<: *flux
       strength:
@@ -613,7 +613,7 @@ models:
     size_mb: 7000
     badge: ""
     hf_model_id: stabilityai/stable-diffusion-xl-base-1.0
-    download_url: https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0
+    download_url: https://huggingface.com/stabilityai/stable-diffusion-xl-base-1.0
     supported_params:
       <<: *sdxl_inpaint
       strength:
@@ -633,7 +633,7 @@ models:
     size_mb: 5000
     badge: 推荐
     hf_model_id: timbrooks/instruct-pix2pix
-    download_url: https://huggingface.co/timbrooks/instruct-pix2pix
+    download_url: https://huggingface.com/timbrooks/instruct-pix2pix
     supported_params:
       <<: *ip2p
     features: [instruction]
@@ -800,7 +800,7 @@ models:
                                             # torch.float64 cast 与 cumsum 等 MPS
                                             # 不支持的操作，强制回退 CPU 避免 500
     display_group: 专用模型（首次使用自动下载）
-    download_url: https://huggingface.co/Sanster/AnyText
+    download_url: https://huggingface.com/Sanster/AnyText
     supported_params: {}
     features: [inpaint_region]
 
@@ -817,7 +817,7 @@ models:
     iopaint_model_id: Sanster/PowerPaint-V1-stable-diffusion-inpainting
     iopaint_mode: server
     display_group: 专用模型（首次使用自动下载）
-    download_url: https://huggingface.co/Sanster/PowerPaint-V1-stable-diffusion-inpainting
+    download_url: https://huggingface.com/Sanster/PowerPaint-V1-stable-diffusion-inpainting
     supported_params:
       prompt:
         type: str
@@ -840,7 +840,7 @@ models:
     iopaint_model_id: runwayml/stable-diffusion-inpainting
     iopaint_mode: server
     display_group: 扩散模型 SD 1.5（高质量·首次下载较大）
-    download_url: https://huggingface.co/runwayml/stable-diffusion-inpainting
+    download_url: https://huggingface.com/runwayml/stable-diffusion-inpainting
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_region, inpaint_prompt]
@@ -858,7 +858,7 @@ models:
     iopaint_model_id: Uminosachi/realisticVisionV51_v51VAE-inpainting
     iopaint_mode: server
     display_group: 扩散模型 SD 1.5（高质量·首次下载较大）
-    download_url: https://huggingface.co/Uminosachi/realisticVisionV51_v51VAE-inpainting
+    download_url: https://huggingface.com/Uminosachi/realisticVisionV51_v51VAE-inpainting
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_region, inpaint_prompt]
@@ -876,7 +876,7 @@ models:
     iopaint_model_id: redstonehero/dreamshaper-inpainting
     iopaint_mode: server
     display_group: 扩散模型 SD 1.5（高质量·首次下载较大）
-    download_url: https://huggingface.co/redstonehero/dreamshaper-inpainting
+    download_url: https://huggingface.com/redstonehero/dreamshaper-inpainting
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_region, inpaint_prompt]
@@ -894,7 +894,7 @@ models:
     iopaint_model_id: Sanster/anything-4.0-inpainting
     iopaint_mode: server
     display_group: 扩散模型 SD 1.5（高质量·首次下载较大）
-    download_url: https://huggingface.co/Sanster/anything-4.0-inpainting
+    download_url: https://huggingface.com/Sanster/anything-4.0-inpainting
     supported_params:
       <<: *sd_inpaint
     features: [inpaint_region, inpaint_prompt]
@@ -914,7 +914,7 @@ models:
     iopaint_model_id: diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     iopaint_mode: server
     display_group: 扩散模型 SDXL（超高质量·2K+）
-    download_url: https://huggingface.co/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
+    download_url: https://huggingface.com/diffusers/stable-diffusion-xl-1.0-inpainting-0.1
     supported_params:
       <<: *sdxl_inpaint
     features: [inpaint_region, inpaint_prompt]

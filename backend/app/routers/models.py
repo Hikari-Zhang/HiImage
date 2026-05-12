@@ -489,7 +489,7 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
     repo_id = cfg["hf_model_id"]
     name = cfg.get("name", repo_id)
 
-    hf_endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
+    hf_endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.com")
     logger.info(f"[HF 下载] 开始: {name} (repo: {repo_id}, endpoint: {hf_endpoint})")
 
     IGNORE_SUFFIXES = {".msgpack", ".h5"}
@@ -531,7 +531,7 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
             name = cfg.get("name", repo_id)
             raise RuntimeError(
                 f"{name} 是门控模型，需要先在 HuggingFace 网站同意使用协议，"
-                f"并在设置中填写 HF Token（https://huggingface.co/{repo_id}）"
+                f"并在设置中填写 HF Token（https://huggingface.com/{repo_id}）"
             )
         except RepositoryNotFoundError:
             raise RuntimeError(

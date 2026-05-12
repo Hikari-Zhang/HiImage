@@ -21,7 +21,7 @@ DEFAULTS = {
     "server.cpu_textencoder": False,
     "inpaint.default_dilation": 10,
     "inpaint.default_device": "mps",
-    "network.hf_endpoint": "https://huggingface.co",
+    "network.hf_endpoint": "https://huggingface.com",
     "network.hf_token": "",
     "download.max_concurrent": 3,
 }

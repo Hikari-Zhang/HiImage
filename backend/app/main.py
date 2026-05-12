@@ -35,11 +35,12 @@ async def lifespan(app: FastAPI):
     log_manager.set_loop(asyncio.get_event_loop())
 
     # Startup: 设置环境变量
-    hf_endpoint = get("network.hf_endpoint", "https://huggingface.co")
+    hf_endpoint = get("network.hf_endpoint", "https://huggingface.com")
     hf_token = get("network.hf_token", "")
 
     if hf_endpoint:
         os.environ["HF_ENDPOINT"] = hf_endpoint
+        print(f"[Backend] HuggingFace 端点: {hf_endpoint}")
     if hf_token:
         os.environ["HF_TOKEN"] = hf_token
 
