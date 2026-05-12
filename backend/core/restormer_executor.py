@@ -84,11 +84,23 @@ class RestormerExecutor(BaseModelExecutor):
         return False
 
     def _get_model_path(self) -> str:
-        """获取模型权重路径"""
+        """获取模型权重路径（完整文件路径）"""
         import os
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        local_path = self.model_config.get("local_path", "models/restormer")
-        return os.path.join(project_root, local_path)
+        local_path = self.model_config.get("local_path")
+        if not local_path:
+            raise ValueError("models.yaml 中未配置 local_path，请检查 restormer 相关配置")
+        # local_path 可能是文件或目录
+        full_path = os.path.join(project_root, local_path)
+        
+        # 如果是目录，查找其中的 .pth 文件
+        if os.path.isdir(full_path):
+            for f in os.listdir(full_path):
+                if f.endswith(".pth") or f.endswith(".pt"):
+                    return os.path.join(full_path, f)
+            raise FileNotFoundError(f"目录中未找到 .pth 文件: {full_path}")
+        
+        return full_path
 
     @staticmethod
     def _numpy_to_tensor(image: np.ndarray) -> torch.Tensor:
