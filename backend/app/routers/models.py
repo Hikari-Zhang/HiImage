@@ -335,6 +335,15 @@ def _download_rembg(cfg: dict, progress_cb=None) -> None:
 
     下载后写入 ~/.u2net/<onnx_filename>，与 rembg 的 U2NET_HOME 保持一致。
     """
+
+    # 提取取消检查函数（使用后从 cfg 中移除，避免影响其他逻辑）
+    _cancel_check = cfg.pop('_cancel_check', None)
+
+    def _check_cancel():
+        """检查是否收到取消请求，如果是则抛出 InterruptedError。"""
+        if _cancel_check and _cancel_check():
+            raise InterruptedError("下载已取消")
+
     import time
     import urllib.request
     from pathlib import Path
@@ -478,6 +487,14 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
     - 遵循 HF_TOKEN 环境变量（门控模型授权）
     - 401/403 时抛出友好错误信息
     """
+    # 提取取消检查函数（使用后从 cfg 中移除，避免影响其他逻辑）
+    _cancel_check = cfg.pop('_cancel_check', None)
+
+    def _check_cancel():
+        """检查是否收到取消请求，如果是则抛出 InterruptedError。"""
+        if _cancel_check and _cancel_check():
+            raise InterruptedError("下载已取消")
+
     import time
     import urllib.request
     from huggingface_hub import list_repo_files, hf_hub_url
@@ -526,7 +543,7 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
         # 获取文件列表
         logger.info(f"[HF 下载] 获取文件列表: {repo_id}")
         try:
-            all_files = list(list_repo_files(repo_id, token=token))
+            all_files = list(list_repo_files(repo_id, token=token, endpoint=hf_endpoint))
         except GatedRepoError:
             name = cfg.get("name", repo_id)
             raise RuntimeError(
@@ -555,6 +572,9 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
         total_files = len(files)
         skipped_files = 0
         for file_idx, filename in enumerate(files):
+            # 检查取消（每个文件下载前）
+            _check_cancel()
+
             dest = repo_dir / filename
             dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -610,7 +630,7 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
                         })
                     continue
 
-            url = hf_hub_url(repo_id=repo_id, filename=filename)
+            url = hf_hub_url(repo_id=repo_id, filename=filename, endpoint=hf_endpoint)
             headers = {"User-Agent": "HiImage/2.0"}
             if token:
                 headers["Authorization"] = f"Bearer {token}"
@@ -631,6 +651,8 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
 
                     with open(dest, "wb") as f:
                         while True:
+                            # 检查取消（每个 chunk 读取前）
+                            _check_cancel()
                             chunk = resp.read(256 * 1024)  # 256KB chunks
                             if not chunk:
                                 break
@@ -658,6 +680,15 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
                         f"[HF 下载] 文件完成 ({file_idx + 1}/{total_files}): {filename}"
                         f" ({_fmt_size(downloaded)}, {elapsed_file:.1f}s, {_fmt_speed(avg_speed)})"
                     )
+            except InterruptedError:
+                # 取消请求，删除残缺文件并重新抛出
+                if dest.exists():
+                    try:
+                        dest.unlink()
+                        logger.info(f"[HF 下载] 已取消，删除残缺文件: {dest}")
+                    except OSError:
+                        pass
+                raise
             except Exception as file_err:
                 # 删除残缺文件
                 if dest.exists():
@@ -674,6 +705,9 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
         else:
             logger.info(f"[HF 下载] 全部完成: {name} ({total_files - skipped_files} 个新下载, {skipped_files} 个已存在)")
 
+    except InterruptedError:
+        logger.info(f"[HF 下载] 下载已取消: {name}")
+        raise RuntimeError("下载已取消") from None
     except RuntimeError:
         raise
     except Exception as e:
