@@ -17,6 +17,7 @@ import urllib.request
 import urllib.error
 import json
 import sys
+import atexit
 from pathlib import Path
 from typing import Optional
 
@@ -103,6 +104,7 @@ class _ModelServer:
         self._active_inferences: int = 0   # 正在进行的推理请求数，> 0 时不允许 idle 关闭
         self._iopaint_path = _detect_iopaint_path()
         self._log_lines: list = []   # 缓存子进程最近输出，供错误诊断
+        self._iopaint_log_file = None  # 独立日志文件句柄
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -314,8 +316,17 @@ class _ModelServer:
         self._current_nsfw = disable_nsfw
 
         # 异步打印服务日志
-        threading.Thread(target=self._stream_logs, args=(self._proc, self._log_lines), daemon=True).start()
-
+        # 异步打印服务日志
+        # 准备独立日志文件（提升可观测性，与主进程日志分离）
+        import os
+        _log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
+        os.makedirs(_log_dir, exist_ok=True)
+        self._iopaint_log_file = open(os.path.join(_log_dir, "iopaint.log"), "a", encoding="utf-8")
+        threading.Thread(
+            target=self._stream_logs,
+            args=(self._proc, self._log_lines, self._iopaint_log_file),
+            daemon=True,
+        ).start()
         # 等待服务就绪
         self._wait_ready()
 
@@ -346,6 +357,13 @@ class _ModelServer:
         self._current_model = None
         self._current_device = None
         self._current_nsfw = None
+        # 关闭独立日志文件
+        if self._iopaint_log_file:
+            try:
+                self._iopaint_log_file.close()
+            except Exception:
+                pass
+            self._iopaint_log_file = None
 
     def _wait_ready(self):
         """轮询 /api/v1/server-config 直到服务就绪（在已持锁环境下调用）"""
@@ -440,7 +458,7 @@ class _ModelServer:
                 self._stop_unlocked()
 
     @staticmethod
-    def _stream_logs(proc: subprocess.Popen, log_lines: list):
+    def _stream_logs(proc: subprocess.Popen, log_lines: list, log_file=None):
         """
         将子进程 stdout 实时转发到当前进程 stdout，同时缓存到 log_lines 供错误诊断。
         tqdm 进度条使用 \\r 原地刷新（不含 \\n），必须逐字符读取才能正确还原，
