@@ -298,6 +298,21 @@ class DownloadQueue:
         cancel_check = lambda: task._cancel_flag
         logger.info(f"[_run_download] cfg 字段: provider={cfg.get('provider')!r}, hf_model_id={cfg.get('hf_model_id')!r}, local_path={cfg.get('local_path')!r}, download_url={cfg.get('download_url')!r}")
 
+        # 下载依赖模型（dependencies 字段）
+        deps = cfg.get("dependencies", [])
+        if deps:
+            from huggingface_hub import snapshot_download
+            from core.paths import get_hf_hub_dir
+            cache_dir = str(get_hf_hub_dir())
+            for dep_id in deps:
+                if task._cancel_flag:
+                    break
+                try:
+                    snapshot_download(repo_id=dep_id, cache_dir=cache_dir)
+                    logger.info(f"[_run_download] 依赖已下载: {dep_id}")
+                except Exception as dep_e:
+                    logger.warning(f"[_run_download] 依赖下载失败 {dep_id}: {dep_e}")
+
         loop = asyncio.get_event_loop()
         progress_queue: asyncio.Queue = asyncio.Queue()
 
@@ -331,83 +346,87 @@ class DownloadQueue:
                 raise ValueError(f"无下载来源: {model_id}")
 
             future = loop.run_in_executor(None, download_fn)
-
         except Exception as e:
             logger.error(f"[_run_download] 启动下载失败: {e}", exc_info=True)
-            raise
-
-            task._future = future
-            logger.info(f"[_run_download] future 已提交，开始等待完成: {task.model_name}")
-
-            last_broadcast = 0.0  # 上次 broadcast 时间，用于节流
-
-            # 持续消费进度，直到 future 结束或被取消
-            while not future.done():
-                if task._cancel_flag:
-                    future.cancel()
-                    break
-                await asyncio.sleep(0.2)
-                while not progress_queue.empty():
-                    item = progress_queue.get_nowait()
-                    if isinstance(item, dict):
-                        task.speed = item.get("speed", "")
-                        task.downloaded = item.get("downloaded", "")
-                        task.total_size = item.get("total_size", "")
-                        task.message = item.get("message", "")
-                        task.updated_at = time.monotonic()
-                        # 节流：至少间隔 0.5s 才 broadcast 一次
-                        now = time.monotonic()
-                        if now - last_broadcast >= 0.5:
-                            last_broadcast = now
-                            self._broadcast(model_id, task.to_dict())
-
-            # 清空剩余进度（不再 broadcast，直接丢弃，最终状态在 finally 里推送）
-            while not progress_queue.empty():
-                progress_queue.get_nowait()
-
-            if task._cancel_flag:
-                return  # 已在 cancel() 中处理状态
-
-            exc = future.exception() if not future.cancelled() else None
-            if exc:
-                raise exc
-
-            # 成功
-            task.status = DS.DONE
-            task.message = "下载完成"
-            task.speed = ""
-            task.updated_at = time.monotonic()
-            logger.info(f"[队列] ✓ 完成: {task.model_name}")
-
-            # 为 IOPaint server 模式模型补全 hub/ 软链接（使 iopaint 能扫描到本地缓存）
-            try:
-                from core.model_checker import ensure_iopaint_hub_links
-                ensure_iopaint_hub_links(model_id)
-            except Exception as _link_err:
-                logger.warning(f"[队列] iopaint hub 链接补全失败（非致命）: {_link_err}")
-
-        except Exception as e:
+            # 启动失败，直接进 finally
             task.status = DS.ERROR
-            task.message = f"下载失败: {str(e)[:200]}"
-            task.speed = ""
+            task.message = f"启动下载失败: {str(e)[:200]}"
             task.updated_at = time.monotonic()
-            logger.error(f"[队列] ✗ 失败: {task.model_name} — {e}", exc_info=True)
-
-        finally:
-            logger.info(f"[_run_download] finally: status={task.status!r} model={task.model_name!r}")
             # 释放槽位
             if model_id in self._active:
                 del self._active[model_id]
-            self._broadcast(model_id, task.to_dict())
-            # 发送终止信号给订阅者
-            self._close_subscribers(model_id)
-            # 触发下一轮调度
             self._get_slot_event().set()
-            # 失效该模型的检查缓存，确保下次 UI 刷新时获取最新状态
-            try:
-                invalidate_model_cache(model_id)
-            except Exception as _cache_err:
-                logger.warning(f"[_run_download] 缓存失效失败（非致命）: {_cache_err}")
+            return
+
+        # ── future 已提交，下面消费进度并等待完成 ────────────────────────────
+        task._future = future
+        logger.info(f"[_run_download] future 已提交，开始等待完成: {task.model_name}")
+
+        last_broadcast = 0.0  # 上次 broadcast 时间，用于节流
+
+        # 持续消费进度，直到 future 结束或被取消
+        while not future.done():
+            if task._cancel_flag:
+                future.cancel()
+                break
+            await asyncio.sleep(0.2)
+            while not progress_queue.empty():
+                item = progress_queue.get_nowait()
+                if isinstance(item, dict):
+                    task.speed = item.get("speed", "")
+                    task.downloaded = item.get("downloaded", "")
+                    task.total_size = item.get("total_size", "")
+                    task.message = item.get("message", "")
+                    task.updated_at = time.monotonic()
+                    # 节流：至少间隔 0.5s 才 broadcast 一次
+                    now = time.monotonic()
+                    if now - last_broadcast >= 0.5:
+                        last_broadcast = now
+                        self._broadcast(model_id, task.to_dict())
+
+        # 清空剩余进度（不再 broadcast，直接丢弃，最终状态在 finally 里推送）
+        while not progress_queue.empty():
+            progress_queue.get_nowait()
+
+        if task._cancel_flag:
+            # 已在 cancel() 中处理状态，直接返回
+            task.status = DS.CANCELLED
+            task.message = "已取消"
+            task.updated_at = time.monotonic()
+        else:
+            exc = future.exception() if not future.cancelled() else None
+            if exc:
+                task.status = DS.ERROR
+                task.message = f"下载失败: {str(exc)[:200]}"
+                task.speed = ""
+                task.updated_at = time.monotonic()
+                logger.error(f"[队列] ✗ 失败: {task.model_name} — {exc}", exc_info=True)
+            else:
+                # 成功
+                task.status = DS.DONE
+                task.message = "下载完成"
+                task.speed = ""
+                task.updated_at = time.monotonic()
+                logger.info(f"[队列] ✓ 完成: {task.model_name}")
+
+                # 为 IOPaint server 模式模型补全 hub/ 软链接（使 iopaint 能扫描到本地缓存）
+                try:
+                    from core.model_checker import ensure_iopaint_hub_links
+                    ensure_iopaint_hub_links(model_id)
+                except Exception as _link_err:
+                    logger.warning(f"[队列] iopaint hub 链接补全失败（非致命）: {_link_err}")
+
+        # ── 统一收尾：broadcast + 释放槽位 + 触发调度 ─────────────────────────
+        logger.info(f"[_run_download] 收尾: status={task.status!r} model={task.model_name!r}")
+        self._broadcast(model_id, task.to_dict())
+        self._close_subscribers(model_id)
+        if model_id in self._active:
+            del self._active[model_id]
+        self._get_slot_event().set()
+        try:
+            invalidate_model_cache(model_id)
+        except Exception as _cache_err:
+            logger.warning(f"[_run_download] 缓存失效失败（非致命）: {_cache_err}")
 
     def _broadcast(self, model_id: str, event: dict) -> None:
         """向所有订阅指定 model_id 的客户端推送事件。"""

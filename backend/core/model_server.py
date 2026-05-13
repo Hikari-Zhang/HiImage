@@ -167,51 +167,137 @@ class _ModelServer:
     @staticmethod
     def _is_model_cached(model_name: str) -> bool:
         """
-        检查模型是否在本地缓存中。
+        检查模型是否在本地 HF 标准缓存中（hub/ 目录）。
         对于内置 IOPaint 模型（名称不含 /），始终返回 True。
-        
-        检查路径（按优先级）：
-          1. 项目自定义路径：{MODELS_DIR}/huggingface/hub/ 和 manual/
-          2. HuggingFace 默认路径：~/.cache/huggingface/hub
         """
-        # 内置模型（lama/migan/zits 等）由 iopaint 自行管理缓存，无需检查
         if '/' not in model_name:
             return True
         try:
+            from huggingface_hub import snapshot_download
             from pathlib import Path
-            from huggingface_hub import scan_cache_dir
-            
-            # 收集所有需要检查的 hub 缓存目录
-            hub_dirs = []
-            
-            # 1. 项目自定义路径
-            custom_hub = Path(_MODELS_DIR) / "hub"
-            if custom_hub.exists():
-                hub_dirs.append(custom_hub)
-            
-            # 2. HuggingFace 默认路径
-            default_hub = Path(_HF_HOME) / "hub"
-            if default_hub.exists() and default_hub not in hub_dirs:
-                hub_dirs.append(default_hub)
-            
-            # 检查 manual 下载目录（项目自定义路径）
-            manual_dir = Path(_HF_HOME) / "manual" / model_name.replace("/", "--")
-            if manual_dir.exists() and any(manual_dir.iterdir()):
-                return True
-            
-            # 扫描所有 hub 缓存目录
-            for hub_dir in hub_dirs:
-                try:
-                    cache_info = scan_cache_dir(hub_dir)
-                    for repo in cache_info.repos:
-                        if repo.repo_id == model_name:
-                            return True
-                except Exception:
-                    continue
-            
-            return False
+            hub_dir = Path(_HF_HOME) / "hub"
+            snapshot_download(
+                repo_id=model_name,
+                local_files_only=True,
+                cache_dir=str(hub_dir),
+            )
+            return True
         except Exception:
             return False
+
+    @staticmethod
+    def _register_manual_model(model_name: str) -> bool:
+        """
+        将 manual/ 目录中的模型注册到标准 HF hub 缓存中。
+
+        HiImage 的下载功能将模型保存在 manual/ 目录中，但 huggingface_hub /
+        diffusers 只能从标准 hub 缓存结构（hub/models--xxx/snapshots/）加载模型。
+
+        此函数通过 snapshot_download 将 manual/ 中的文件正确地注册到 hub 缓存。
+        如果联网可用，snapshot_download 会验证 repo 并将文件组织到标准结构。
+        如果 manual/ 中已有全部文件，可以离线完成注册（通过创建正确的缓存结构）。
+
+        返回 True 表示注册成功，False 表示失败。
+        """
+        from pathlib import Path
+        import os
+        manual_dir = Path(_HF_HOME) / "manual" / model_name.replace("/", "--")
+        if not manual_dir.exists():
+            return False
+
+        hub_dir = Path(_HF_HOME) / "hub"
+        hub_dir.mkdir(parents=True, exist_ok=True)
+
+        # 先尝试在线注册（snapshot_download 会组织文件到标准缓存结构）
+        try:
+            from huggingface_hub import snapshot_download
+            snapshot_download(
+                repo_id=model_name,
+                cache_dir=str(hub_dir),
+                local_files_only=False,
+            )
+            print(f"[ModelServer] 模型 {model_name} 已注册到标准缓存")
+            return True
+        except Exception as e:
+            print(f"[ModelServer] 在线注册失败: {e}")
+
+        # 在线注册失败，尝试离线注册
+        # 手动创建 hub 缓存目录结构，并将 manual/ 中的文件复制/链接过去
+        try:
+            from huggingface_hub import try_to_load_from_cache
+            # 先尝试从缓存加载（可能 partial 注册过）
+            result = try_to_load_from_cache(
+                repo_id=model_name,
+                filename="model_index.json",
+                cache_dir=str(hub_dir),
+            )
+            if result is not None:
+                print(f"[ModelServer] 模型 {model_name} 已在标准缓存中")
+                return True
+        except Exception:
+            pass
+
+        # 离线场景：手动构建缓存结构
+        # 需要创建一个伪 commit hash 和快照目录
+        try:
+            import hashlib
+            import shutil
+            # 用文件列表的 hash 作为伪 commit hash
+            files = sorted(f.name for f in manual_dir.iterdir() if f.is_file())
+            fake_hash = hashlib.sha256("".join(files).encode()).hexdigest()[:40]
+
+            model_cache_dir = hub_dir / f"models--{model_name.replace('/', '--')}"
+            snapshots_dir = model_cache_dir / "snapshots" / fake_hash
+            refs_dir = model_cache_dir / "refs"
+            refs_dir.mkdir(parents=True, exist_ok=True)
+            refs_dir.joinpath("main").write_text(fake_hash)
+
+            snapshots_dir.mkdir(parents=True, exist_ok=True)
+            # 将 manual/ 中的文件复制（或符号链接）到快照目录
+            for f in manual_dir.iterdir():
+                if f.is_file():
+                    dest = snapshots_dir / f.name
+                    if not dest.exists():
+                        # 优先用符号链接节省空间
+                        try:
+                            os.symlink(str(f.resolve()), str(dest))
+                        except Exception:
+                            shutil.copy2(str(f), str(dest))
+
+            # 创建 blob 文件（huggingface_hub 需要）
+            blobs_dir = model_cache_dir / "blobs"
+            blobs_dir.mkdir(exist_ok=True)
+
+            print(f"[ModelServer] 模型 {model_name} 已手动注册到标准缓存（离线模式）")
+            return True
+        except Exception as e:
+            print(f"[ModelServer] 离线注册失败: {e}")
+            return False
+
+    @staticmethod
+    def _ensure_dependencies(model_name: str) -> None:
+        """
+        确保模型的 HF 依赖项已下载到缓存。
+        在启动 iopaint server 前调用。
+        """
+        from core.model_registry import MODEL_BY_ID
+        cfg = MODEL_BY_ID.get(model_name)
+        if not cfg:
+            return
+        deps = cfg.get("dependencies", [])
+        if not deps:
+            return
+
+        from huggingface_hub import snapshot_download
+        from pathlib import Path
+        cache_dir = str(Path(_HF_HOME) / "hub")
+
+        for dep in deps:
+            try:
+                snapshot_download(repo_id=dep, cache_dir=cache_dir)
+                print(f"[ModelServer] 依赖已缓存: {dep}")
+            except Exception as e:
+                print(f"[ModelServer] 依赖下载失败 {dep}: {e}")
 
     def stop(self):
         """主动停止（如程序退出时调用）"""
@@ -252,6 +338,13 @@ class _ModelServer:
         except Exception:
             pass  # 注册表不可用时，沿用用户设定的设备，不阻断启动
 
+        # 确保依赖模型已下载到缓存
+        self._ensure_dependencies(model_name)
+
+        # 若模型在 manual/ 目录中，先注册到标准 HF hub 缓存
+        # 这样 iopaint 才能通过 repo ID 找到模型
+        self._register_manual_model(model_name)
+
         cmd = [
             self._iopaint_path, 'start',
             '--host', SERVER_HOST,
@@ -280,7 +373,7 @@ class _ModelServer:
         env = os.environ.copy()
         env['PYTHONUNBUFFERED'] = '1'
         hf_token = _cfg.get('network.hf_token', '')
-        hf_endpoint = _cfg.get('network.hf_endpoint', 'https://huggingface.com')
+        hf_endpoint = _cfg.get('network.hf_endpoint', 'https://huggingface.co')
         if hf_token:
             env['HF_TOKEN'] = hf_token
             env['HUGGING_FACE_HUB_TOKEN'] = hf_token  # 兼容旧版 huggingface_hub
@@ -316,9 +409,7 @@ class _ModelServer:
         self._current_nsfw = disable_nsfw
 
         # 异步打印服务日志
-        # 异步打印服务日志
         # 准备独立日志文件（提升可观测性，与主进程日志分离）
-        import os
         _log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
         os.makedirs(_log_dir, exist_ok=True)
         self._iopaint_log_file = open(os.path.join(_log_dir, "iopaint.log"), "a", encoding="utf-8")

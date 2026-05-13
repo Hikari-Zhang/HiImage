@@ -800,6 +800,8 @@ models:
                                             # torch.float64 cast 与 cumsum 等 MPS
                                             # 不支持的操作，强制回退 CPU 避免 500
     display_group: 专用模型（首次使用自动下载）
+    dependencies:
+      - openai/clip-vit-large-patch14
     download_url: https://huggingface.com/Sanster/AnyText
     supported_params: {}
     features: [inpaint_region]

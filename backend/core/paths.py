@@ -32,8 +32,9 @@ CACHE_ROOT = Path(os.environ.get("HIIMAGE_CACHE", str(_DEFAULT_CACHE_ROOT)))
 # ──────────────────────────────────────────────────────────────
 
 # HuggingFace 模型缓存
+# 默认使用 huggingface_hub 官方路径 ~/.cache/huggingface
 # 可通过环境变量 HF_HOME 覆盖（与 huggingface_hub 保持一致）
-HF_HOME = Path(os.environ.get("HF_HOME", str(CACHE_ROOT / "huggingface")))
+HF_HOME = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
 
 # Torch 模型缓存
 # 可通过环境变量 TORCH_HOME 覆盖（与 torch.hub 保持一致）
