@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import urllib.request
 from .paths import PROJECT_ROOT as _PR
+from .paths import MODELS_CACHE_DIR as _MC
 
 
 def _build_upscale_structures():
@@ -85,11 +86,23 @@ _MODEL_ARCH, _MODEL_NUM_BLOCK, _MODEL_NUM_CONV, _MODEL_OUTSCALE = _dicts
 AVAILABLE_UPSCALE_MODELS = [entry[0] for entry in UPSCALE_MODEL_LIST]
 
 # 模型权重缓存目录
-_WEIGHTS_DIR = str(_PR / 'models' / 'realesrgan')
+# 模型权重缓存目录（默认：~/.cache/hiimage/models/realesrgan/）
+_WEIGHTS_DIR = str(_MC / 'realesrgan')
 
 
 def _get_weight_path(model_name: str) -> str:
-    return os.path.join(_WEIGHTS_DIR, _MODEL_WEIGHT[model_name])
+    """
+    获取模型权重路径。
+    使用 paths.py 统一解析（MODELS_CACHE_DIR / 'realesrgan' / weight_filename）。
+    """
+    from .paths import resolve_model_cache_path
+
+    # 构建最小 cfg 字典，供 resolve_model_cache_path() 使用
+    cfg = {
+        "provider": "realesrgan",
+        "weight_filename": _MODEL_WEIGHT.get(model_name, f"{model_name}.pth")
+    }
+    return str(resolve_model_cache_path(cfg))
 
 
 def _download_weight(model_name: str, progress_callback=None) -> str:
@@ -179,15 +192,17 @@ class Upscaler:
     # ------------------------------------------------------------------
 
     def _ensure_model_loaded(self):
-        """懒加载：首次调用时初始化模型（含自动下载权重）"""
+        """懒加载：首次调用时初始化模型"""
         if self._upsampler is not None:
             return
 
-        # 检查并下载权重
+        # 检查权重文件是否存在
         weight_path = _get_weight_path(self.model_name)
         if not os.path.exists(weight_path):
-            print(f"[Upscaler] 权重文件不存在，开始下载...")
-            _download_weight(self.model_name)
+            raise FileNotFoundError(
+                f"模型权重文件不存在: {weight_path}\n"
+                f"请先在「模型管理」中下载模型"
+            )
 
         self._upsampler = self._build_upsampler(weight_path)
 

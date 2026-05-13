@@ -86,17 +86,10 @@ class RestormerExecutor(BaseModelExecutor):
     def _get_model_path(self) -> str:
         """获取模型权重路径（完整文件路径）"""
         import os
-        from .paths import resolve_model_path as _resolve
+        from .paths import resolve_model_cache_path
 
-        # 优先使用配置中的 local_path
-        local_path = self.model_config.get("local_path", "")
-        if local_path:
-            # 使用 paths.py 统一解析路径
-            full_path = str(_resolve(local_path))
-        else:
-            # 否则使用默认路径（从 models.yaml 的 weight_filename 构建）
-            weight_filename = self.model_config.get("weight_filename", f"{self.model_config['id']}.pth")
-            full_path = str(_resolve(f"models/restormer/{weight_filename}"))
+        # 使用 paths.py 统一解析模型缓存路径
+        full_path = str(resolve_model_cache_path(self.model_config))
 
         # 如果是目录，查找其中的 .pth 文件
         if os.path.isdir(full_path):

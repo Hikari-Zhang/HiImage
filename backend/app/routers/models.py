@@ -400,6 +400,8 @@ def _download_rembg(cfg: dict, progress_cb=None) -> None:
 
             with open(dest, "wb") as f:
                 while True:
+                    # 检查取消（每个 chunk 读取前）
+                    _check_cancel()
                     chunk = resp.read(256 * 1024)  # 256KB
                     if not chunk:
                         break
@@ -427,6 +429,15 @@ def _download_rembg(cfg: dict, progress_cb=None) -> None:
             f" ({_fmt_size(downloaded)}, 耗时 {elapsed_total:.1f}s, 均速 {_fmt_speed(avg_speed)})"
         )
 
+    except InterruptedError:
+            # 取消请求，删除残缺文件并重新抛出
+            if dest.exists():
+                try:
+                    dest.unlink()
+                    logger.info(f"[rembg 下载] 已取消，删除残缺文件: {dest}")
+                except OSError:
+                    pass
+            raise
     except Exception as e:
         # 下载失败时删除可能的残缺文件
         if dest.exists():
@@ -543,7 +554,7 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
         # 获取文件列表
         logger.info(f"[HF 下载] 获取文件列表: {repo_id}")
         try:
-            all_files = list(list_repo_files(repo_id, token=token, endpoint=hf_endpoint))
+            all_files = list(list_repo_files(repo_id, token=token))
         except GatedRepoError:
             name = cfg.get("name", repo_id)
             raise RuntimeError(
@@ -630,7 +641,7 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
                         })
                     continue
 
-            url = hf_hub_url(repo_id=repo_id, filename=filename, endpoint=hf_endpoint)
+            url = hf_hub_url(repo_id=repo_id, filename=filename)
             headers = {"User-Agent": "HiImage/2.0"}
             if token:
                 headers["Authorization"] = f"Bearer {token}"
@@ -716,14 +727,25 @@ def _download_hf(cfg: dict, progress_cb=None) -> None:
 
 
 def _download_direct(cfg: dict, progress_cb=None) -> None:
-    """通过 urllib 直接下载单文件模型（如 Real-ESRGAN .pth 文件），支持速度回调。"""
+    """
+    通过 urllib 直接下载单文件模型（如 Real-ESRGAN .pth 文件），支持速度回调。
+    - 支持通过 cfg['_cancel_check'] 检查取消请求。
+    """
+    # 提取取消检查函数（使用后从 cfg 中移除，避免影响其他逻辑）
+    _cancel_check = cfg.pop('_cancel_check', None)
+
+    def _check_cancel():
+        """检查是否收到取消请求，如果是则抛出 InterruptedError。"""
+        if _cancel_check and _cancel_check():
+            raise InterruptedError("下载已取消")
+
     import os
     import time
     import urllib.request
-    from core.paths import resolve_model_path
+    from core.paths import resolve_model_cache_path
 
-    # 使用 paths.py 统一解析模型路径
-    dest = Path(resolve_model_path(cfg["local_path"]))
+    # 使用 paths.py 统一解析模型缓存路径（下载/加载/检查均使用同一函数）
+    dest = resolve_model_cache_path(cfg)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     url = cfg["download_url"]
@@ -746,6 +768,8 @@ def _download_direct(cfg: dict, progress_cb=None) -> None:
 
             with open(dest, "wb") as f:
                 while True:
+                    # 检查取消（每个 chunk 读取前）
+                    _check_cancel()
                     chunk = resp.read(256 * 1024)  # 256KB chunks
                     if not chunk:
                         break
@@ -774,6 +798,15 @@ def _download_direct(cfg: dict, progress_cb=None) -> None:
             f" ({_fmt_size(downloaded)}, 耗时 {elapsed_total:.1f}s, 均速 {_fmt_speed(avg_speed)})"
         )
 
+    except InterruptedError:
+        # 取消请求，删除残缺文件并重新抛出
+        if dest.exists():
+            try:
+                dest.unlink()
+                logger.info(f"[直接下载] 已取消，删除残缺文件: {dest}")
+            except OSError:
+                pass
+        raise
     except Exception as e:
         # 删除残缺文件
         if dest.exists():
@@ -1110,7 +1143,7 @@ async def delete_model_files(model_id: str):
     - IOPaint cli 内置模型 → 无文件可删，直接返回提示
     """
     from core.model_registry import MODEL_BY_ID
-    from core.paths import PROJECT_ROOT as _PR, MODELS_DIR as _MD, U2NET_HOME as _U2NET, HF_HOME as _HF, resolve_model_path as _resolve
+    from core.paths import PROJECT_ROOT as _PR, MODELS_DIR as _MD, U2NET_HOME as _U2NET, HF_HOME as _HF, resolve_model_cache_path, CACHE_ROOT
     import shutil
 
     cfg = MODEL_BY_ID.get(model_id)
@@ -1146,12 +1179,16 @@ async def delete_model_files(model_id: str):
 
     # ── 本地路径文件（realesrgan/facexlib 等）──────────────────────────────
     if cfg.get("local_path"):
-        local = _resolve(cfg["local_path"], _PR)
-        # 安全检查：只允许删 models/ 目录下的文件
+        # 使用 paths.py 统一解析路径
+        local = Path(resolve_model_cache_path(cfg))
+        # 安全检查：只允许删 CACHE_ROOT 或 PROJECT_ROOT/models 目录下的文件
         try:
-            local.resolve().relative_to(Path(_PR).resolve() / "models")
+            local.resolve().relative_to(Path(CACHE_ROOT).resolve())
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"路径安全检查失败，拒绝删除: {local}")
+            try:
+                local.resolve().relative_to(Path(_PR).resolve() / "models")
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"路径安全检查失败，拒绝删除: {local}")
 
         if local.exists():
             local.unlink()

@@ -245,10 +245,12 @@ class ModelChecker:
     def _check_local_path(self, cfg: dict) -> ModelCheckResult:
         """
         直接路径模型（GFPGAN、Real-ESRGAN 等）：
-        使用 paths.py 中的 resolve_model_path() 统一解析路径。
+        使用 paths.py 中的 resolve_model_cache_path() 统一解析路径。
+        所有模型路径逻辑集中在 paths.py，避免路径不一致导致的 Bug。
         """
-        from core.paths import resolve_model_path
-        path = resolve_model_path(cfg["local_path"], self.project_root)
+        from core.paths import resolve_model_cache_path
+
+        path = resolve_model_cache_path(cfg)
         return self._check_file(cfg, path)
 
     def _check_hf_multi(self, cfg: dict) -> ModelCheckResult:

@@ -18,7 +18,7 @@ PostMethod = Literal["poisson", "gfpgan", "lama_refine", "none"]
 
 # GFPGAN 权重存放目录：使用 paths.py 中的定义
 # 可通过环境变量 GFPGAN_HOME 自定义
-from core.paths import GFPGAN_HOME as _GFPGAN_HOME
+from core.paths import GFPGAN_HOME as _GFPGAN_HOME, resolve_model_cache_path
 
 _GFPGAN_WEIGHTS_DIR = str(_GFPGAN_HOME)
 _GFPGAN_WEIGHT_FILE = "GFPGANv1.4.pth"
@@ -178,8 +178,11 @@ def _gfpgan_enhance(
 
 def _ensure_gfpgan_weights() -> str:
     """确保 GFPGAN 权重文件存在，不存在则自动下载"""
-    os.makedirs(_GFPGAN_WEIGHTS_DIR, exist_ok=True)
-    weight_path = os.path.join(_GFPGAN_WEIGHTS_DIR, _GFPGAN_WEIGHT_FILE)
+    # 使用 paths.py 统一解析路径
+    cfg = {"provider": "gfpgan", "weight_filename": _GFPGAN_WEIGHT_FILE}
+    weight_path = str(resolve_model_cache_path(cfg))
+    weight_dir = os.path.dirname(weight_path)
+    os.makedirs(weight_dir, exist_ok=True)
 
     if os.path.exists(weight_path):
         return weight_path

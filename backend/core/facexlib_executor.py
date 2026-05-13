@@ -8,7 +8,7 @@ from typing import Dict, Any
 from .model_executor import BaseModelExecutor
 
 # 使用统一路径管理器
-from .paths import GFPGAN_HOME as _GFPGAN_HOME, resolve_model_path as _resolve
+from .paths import GFPGAN_HOME as _GFPGAN_HOME, resolve_model_cache_path
 
 
 class FacexlibExecutor(BaseModelExecutor):
@@ -88,13 +88,5 @@ class FacexlibExecutor(BaseModelExecutor):
         return False
 
     def _get_model_path(self) -> str:
-        """获取模型权重路径"""
-        import os
-        # 优先使用配置中的 local_path
-        local_path = self.model_config.get("local_path", "")
-        if local_path:
-            # 使用 paths.py 统一解析路径
-            return str(_resolve(local_path))
-        # 否则使用默认缓存路径
-        weight_file = "GFPGANv1.4.pth"
-        return os.path.join(str(_GFPGAN_HOME), weight_file)
+        """获取模型权重路径（使用 paths.py 统一解析）"""
+        return str(resolve_model_cache_path(self.model_config))

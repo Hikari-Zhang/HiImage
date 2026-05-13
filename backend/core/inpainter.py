@@ -407,9 +407,22 @@ class Inpainter:
         print(f"返回码: {returncode}")
 
         if returncode != 0:
-            raise Exception(
-                f"IOPaint执行失败 (返回码 {returncode}):\n{stdout_text}"
-            )
+            # 检查是否是内存不足导致的 SIGKILL（返回码 -9 或 137）
+            if returncode == -9 or returncode == 137:
+                error_msg = (
+                    f"IOPaint 执行失败：进程被系统终止（返回码 {returncode}）\n\n"
+                    f"可能原因：\n"
+                    f"  1. 内存不足（MAT 模型需要较大内存）\n"
+                    f"  2. 处理超时\n\n"
+                    f"建议：\n"
+                    f"  • 使用更轻量的模型（lama/zits）\n"
+                    f"  • 缩小图片尺寸后重试\n"
+                    f"  • 关闭其他占用内存的应用\n"
+                )
+            else:
+                error_msg = f"IOPaint 执行失败 (返回码 {returncode}):\n{stdout_text}"
+
+            raise Exception(error_msg)
 
         output_path = os.path.join(output_dir, 'image.png')
         if not os.path.exists(output_path):

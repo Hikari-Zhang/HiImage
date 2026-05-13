@@ -286,9 +286,16 @@ class _ModelServer:
             env['HF_ENDPOINT'] = hf_endpoint
         # 离线模式：仅当模型已在本地缓存中时才强制离线，
         # 否则允许 iopaint 首次使用时从 HuggingFace Hub 下载。
+        # 注意：必须显式设置 local_files_only=False，避免 huggingface_hub 默认启用离线模式。
         if self._is_model_cached(model_name):
             env['HF_HUB_OFFLINE'] = '1'
             env['TRANSFORMERS_OFFLINE'] = '1'
+        else:
+            # 显式禁用离线模式，允许从 HuggingFace Hub 下载
+            env['HF_HUB_OFFLINE'] = '0'
+            env['TRANSFORMERS_OFFLINE'] = '0'
+            # 确保 local_files_only 不会被设置为 True
+            env.pop('HF_HUB_LOCAL_FILES_ONLY', None)
 
         print(f"[ModelServer] 启动服务: {' '.join(cmd)}")
         self._log_lines = []   # 重置日志缓冲

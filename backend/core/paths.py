@@ -50,6 +50,10 @@ U2NET_HOME = Path(os.environ.get("U2NET_HOME", str(Path.home() / ".u2net")))
 # 项目 models/ 目录（向后兼容旧代码）
 MODELS_DIR = PROJECT_ROOT / "models"
 
+# 模型缓存目录（默认下载位置）：~/.cache/hiimage/models/
+# 可通过环境变量 HIIMAGE_CACHE 自定义（会自动附加 /models）
+MODELS_CACHE_DIR = CACHE_ROOT / "models"
+
 # ──────────────────────────────────────────────────────────────
 # 辅助函数
 # ──────────────────────────────────────────────────────────────
@@ -105,6 +109,45 @@ def resolve_hf_model_path(repo_id: str) -> str:
     if manual_dir.exists() and manual_dir.is_dir():
         return str(manual_dir)
     return repo_id
+
+
+def resolve_model_cache_path(cfg: dict) -> Path:
+    """
+    统一解析模型缓存路径（下载/加载/检查均使用此函数）。
+
+    根据 provider 类型，自动定位到正确的缓存子目录：
+      - realesrgan  → MODELS_CACHE_DIR / "realesrgan" / weight_filename
+      - restormer    → MODELS_CACHE_DIR / "restormer" / weight_filename
+      - gfpgan       → GFPGAN_HOME / weight_filename
+      - 其他         → resolve_model_path(local_path)  # 向后兼容
+
+    优先级：
+      1. cfg["weight_filename"]  # 文件名
+      2. cfg["local_path"] 的最后一段（basename）
+
+    用法：
+        from core.paths import resolve_model_cache_path
+        path = resolve_model_cache_path(cfg)
+    """
+    provider = cfg.get("provider", "")
+    weight_filename = cfg.get("weight_filename", "")
+
+    # 如果没有 weight_filename，尝试从 local_path 提取
+    if not weight_filename:
+        local_path = cfg.get("local_path", "")
+        weight_filename = os.path.basename(local_path)
+
+    # 根据 provider 定位到正确的缓存目录
+    if provider == "realesrgan":
+        return MODELS_CACHE_DIR / "realesrgan" / weight_filename
+    elif provider == "restormer":
+        return MODELS_CACHE_DIR / "restormer" / weight_filename
+    elif provider == "gfpgan":
+        return GFPGAN_HOME / weight_filename
+    else:
+        # 向后兼容：使用原有的 resolve_model_path
+        local_path = cfg.get("local_path", "")
+        return resolve_model_path(local_path)
 
 
 # ──────────────────────────────────────────────────────────────
