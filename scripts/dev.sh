@@ -1,6 +1,14 @@
 #!/bin/bash
-# HiImage 开发模式启动脚本
-# 同时启动 Backend (FastAPI) 和 Frontend (Electron + React)
+# ⚠️  LEGACY / 简化版启动脚本
+#
+# 此脚本为轻量级启动方式，功能不完整（不包含 GPU 检测、自动安装 PyTorch 等）。
+# 全新环境或需要 GPU 支持时，请使用 scripts/dev.js（功能完整，跨平台）。
+#
+# 功能对比：
+#   dev.js  : GPU 检测 → PyTorch 安装 → 依赖安装 → 启动后端 + 前端
+#   dev.sh  : 假设环境已就绪 → 直接启动后端 + 前端
+#
+# 如需完整功能，请使用：node scripts/dev.js
 
 set -e
 

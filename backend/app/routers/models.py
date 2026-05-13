@@ -213,16 +213,16 @@ async def _download_generator(request: Request):
 
         if provider == Provider.REMBG:
             logger.info(f"[一键下载] 使用 rembg 下载 ONNX 权重: {name}")
-            future = loop.run_in_executor(None, download_rembg, model_cfg, _put)
+            future = loop.run_in_executor(None, lambda: download_rembg(model_cfg, progress_cb=_put, cancel_check=None))
         elif model_cfg.get("local_path") and model_cfg.get("download_url") and not model_cfg.get("hf_model_id") and not model_cfg.get("hf_models"):
             logger.info(f"[一键下载] 直接下载权重文件: {name} → {model_cfg['local_path']}")
-            future = loop.run_in_executor(None, download_direct, model_cfg, _put)
+            future = loop.run_in_executor(None, lambda: download_direct(model_cfg, progress_cb=_put, cancel_check=None))
         elif model_cfg.get("hf_models"):
             logger.info(f"[一键下载] 从 HuggingFace 下载组合模型: {name} ({len(model_cfg['hf_models'])} 个子模型)")
-            future = loop.run_in_executor(None, download_hf_multi, model_cfg, _put)
+            future = loop.run_in_executor(None, lambda: download_hf_multi(model_cfg, progress_cb=_put, cancel_check=None))
         elif model_cfg.get("hf_model_id"):
             logger.info(f"[一键下载] 从 HuggingFace 下载: {name} (repo: {model_cfg['hf_model_id']})")
-            future = loop.run_in_executor(None, download_hf, model_cfg, _put)
+            future = loop.run_in_executor(None, lambda: download_hf(model_cfg, progress_cb=_put, cancel_check=None))
         else:
             logger.warning(f"[一键下载] 无下载来源，跳过: {name} (id={mid}, provider={provider})")
             yield _sse("model", {
@@ -532,19 +532,19 @@ async def _download_single_generator(request: Request, model_id: str):
 
     def _put(data: dict):
         loop.call_soon_threadsafe(progress_queue.put_nowait, data)
-        
+
     if provider == Provider.REMBG:
         logger.info(f"[单模型下载] 使用 rembg 下载 ONNX 权重: {name}")
-        future = loop.run_in_executor(None, download_rembg, cfg, _put)
+        future = loop.run_in_executor(None, lambda: download_rembg(cfg, progress_cb=_put, cancel_check=None))
     elif cfg.get("local_path") and cfg.get("download_url") and not cfg.get("hf_model_id") and not cfg.get("hf_models"):
         logger.info(f"[单模型下载] 直接下载权重文件: {name} → {cfg['local_path']}")
-        future = loop.run_in_executor(None, download_direct, cfg, _put)
+        future = loop.run_in_executor(None, lambda: download_direct(cfg, progress_cb=_put, cancel_check=None))
     elif cfg.get("hf_models"):
         logger.info(f"[单模型下载] 从 HuggingFace 下载组合模型: {name} ({len(cfg['hf_models'])} 个子模型)")
-        future = loop.run_in_executor(None, download_hf_multi, cfg, _put)
+        future = loop.run_in_executor(None, lambda: download_hf_multi(cfg, progress_cb=_put, cancel_check=None))
     elif cfg.get("hf_model_id"):
         logger.info(f"[单模型下载] 从 HuggingFace 下载: {name} (repo: {cfg['hf_model_id']})")
-        future = loop.run_in_executor(None, download_hf, cfg, _put)
+        future = loop.run_in_executor(None, lambda: download_hf(cfg, progress_cb=_put, cancel_check=None))
     else:
         logger.warning(f"[单模型下载] 无下载来源，跳过: {name} (id={model_id}, provider={provider})")
         yield _sse("model", {

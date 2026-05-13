@@ -18,14 +18,6 @@ from core.paths import resolve_model_cache_path, U2NET_HOME, HF_HOME as _HF_HOME
 
 # ── 取消检查辅助 ───────────────────────────────────────────────────────────────
 
-def _extract_cancel_check(cfg: dict):
-    """
-    从 cfg 中弹出 '_cancel_check' 函数并返回。
-    返回的函数在无取消请求时返回 False；调用方应定期检查并抛出 InterruptedError。
-    """
-    return cfg.pop("_cancel_check", None)
-
-
 def _check_cancel(cancel_check) -> None:
     """如果 cancel_check 返回 True，抛出 InterruptedError。"""
     if cancel_check and cancel_check():
@@ -34,7 +26,7 @@ def _check_cancel(cancel_check) -> None:
 
 # ── rembg ONNX 下载 ────────────────────────────────────────────────────────────
 
-def download_rembg(cfg: dict, progress_cb=None) -> None:
+def download_rembg(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     """
     下载 rembg ONNX 模型到 ~/.u2net/。
 
@@ -45,10 +37,11 @@ def download_rembg(cfg: dict, progress_cb=None) -> None:
       "network": { "github_mirror": "https://mirror.ghproxy.com" }
 
     下载后写入 ~/.u2net/<onnx_filename>，与 rembg 的 U2NET_HOME 保持一致。
-    """
-    from app.config import get as get_config
 
-    cancel_check = _extract_cancel_check(cfg)
+    :param cancel_check: 可选，无参函数，返回 True 时抛出 InterruptedError 终止下载。
+    """
+
+    from app.config import get as get_config
 
     def _on_cancel():
         _check_cancel(cancel_check)
@@ -146,15 +139,16 @@ def download_rembg(cfg: dict, progress_cb=None) -> None:
 
 # ── HuggingFace 单模型下载 ─────────────────────────────────────────────────────
 
-def download_hf(cfg: dict, progress_cb=None) -> None:
+def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     """
     通过 huggingface_hub 逐文件下载 HF 模型，支持实时速度回调。
 
     - 遵循 HF_ENDPOINT 环境变量（镜像站支持）
     - 遵循 HF_TOKEN 环境变量（门控模型授权）
     - 401/403 时抛出友好错误信息
+
+    :param cancel_check: 可选，无参函数，返回 True 时抛出 InterruptedError 终止下载。
     """
-    cancel_check = _extract_cancel_check(cfg)
 
     def _on_cancel():
         _check_cancel(cancel_check)
@@ -321,12 +315,14 @@ def download_hf(cfg: dict, progress_cb=None) -> None:
         pass  # 所有文件已存在
 
 
-def download_hf_multi(cfg: dict, progress_cb=None) -> None:
+def download_hf_multi(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     """
     组合多子模型下载（hf_models 列表）。
 
     逐个调用 download_hf 下载每个子模型，汇聚进度回调。
     progress_cb 收到的 message 前缀为 "[子模型名]"，方便前端区分。
+
+    :param cancel_check: 可选，无参函数，返回 True 时抛出 InterruptedError 终止下载。
     """
     hf_models: list[dict] = cfg.get("hf_models", [])
     total_repos = len(hf_models)
@@ -348,17 +344,17 @@ def download_hf_multi(cfg: dict, progress_cb=None) -> None:
                 data["message"] = f"[{_name}] ({_idx + 1}/{_total}) {orig_msg}"
                 progress_cb(data)
 
-        download_hf(sub_cfg, _wrapped_cb)
+        download_hf(sub_cfg, _wrapped_cb, cancel_check)
 
 
 # ── 直接 HTTP 下载 ────────────────────────────────────────────────────────────
 
-def download_direct(cfg: dict, progress_cb=None) -> None:
+def download_direct(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     """
     通过 urllib 直接下载单文件模型（如 Real-ESRGAN .pth 文件），支持速度回调。
-    - 支持通过 cfg['_cancel_check'] 检查取消请求。
+
+    :param cancel_check: 可选，无参函数，返回 True 时抛出 InterruptedError 终止下载。
     """
-    cancel_check = _extract_cancel_check(cfg)
 
     def _on_cancel():
         _check_cancel(cancel_check)

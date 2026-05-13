@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
@@ -28,6 +29,28 @@ from core.paths import (
     U2NET_HOME as _U2NET_HOME,
     resolve_hf_model_path as _resolve_hf,
 )
+
+# ── TTL 缓存配置 ────────────────────────────────────────────────────────────
+# 缓存有效期（秒）：平衡实时性与性能，5 秒足够覆盖一次 UI 刷新的周期
+MODEL_CHECK_CACHE_TTL = 5.0
+
+# 模块级缓存：{model_id: (ModelCheckResult, timestamp)}
+_model_check_cache: dict[str, tuple] = {}
+_last_cache_clear: float = 0.0
+
+
+def invalidate_model_cache(model_id: str | None = None) -> None:
+    """
+    主动失效模型检查缓存。
+
+    :param model_id: 指定模型 ID 则只失效该模型；None 时清空全部缓存。
+                    下载完成后应调用此方法刷新状态。
+    """
+    global _model_check_cache
+    if model_id is None:
+        _model_check_cache.clear()
+    else:
+        _model_check_cache.pop(model_id, None)
 
 
 def resolve_hf_model_path(repo_id: str) -> str:
@@ -167,26 +190,39 @@ class ModelChecker:
 
     # ── 公共 API ─────────────────────────────────────────────────────────────
 
-    def check_model(self, model_id: str) -> ModelCheckResult:
-        """检测单个模型，返回结果（不抛异常）。"""
+    def check_model(self, model_id: str, use_cache: bool = True) -> ModelCheckResult:
+        """
+        检测单个模型，返回结果（不抛异常）。
+
+        :param use_cache: 是否使用 TTL 缓存（默认 True）；传入 False 可强制刷新。
+        """
+        # ── TTL 缓存检查 ─────────────────────────────────────────────────
+        global _model_check_cache
+        now = time.monotonic()
+        if use_cache and model_id in _model_check_cache:
+            cached_result, cached_time = _model_check_cache[model_id]
+            if now - cached_time < MODEL_CHECK_CACHE_TTL:
+                return cached_result
+
         cfg = MODEL_BY_ID.get(model_id)
         if not cfg:
-            return ModelCheckResult(
+            result = ModelCheckResult(
                 model_id=model_id,
                 name=model_id,
                 provider=MS.UNKNOWN,
                 status=MS.UNKNOWN,
                 message=f"模型 ID '{model_id}' 不在注册表中",
             )
+            return result
 
         provider = cfg.get("provider", "")
 
         if provider == Provider.REMBG:
-            return self._check_rembg(cfg)
+            result = self._check_rembg(cfg)
         elif provider == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
             # IOPaint 内置的快速模型（lama/migan/zits 等）：随 iopaint 包一起安装，
             # 无独立权重文件，无需下载，直接标记为 ok/builtin
-            return ModelCheckResult(
+            result = ModelCheckResult(
                 model_id=model_id,
                 name=cfg.get("name", model_id),
                 provider=provider,
@@ -194,19 +230,23 @@ class ModelChecker:
                 message="内置模型（随 iopaint 包安装，无需单独下载）",
             )
         elif cfg.get("local_path"):
-            return self._check_local_path(cfg)
+            result = self._check_local_path(cfg)
         elif cfg.get("hf_models"):
-            return self._check_hf_multi(cfg)
+            result = self._check_hf_multi(cfg)
         elif cfg.get("hf_model_id"):
-            return self._check_hf_cache(cfg)
+            result = self._check_hf_cache(cfg)
         else:
-            return ModelCheckResult(
+            result = ModelCheckResult(
                 model_id=model_id,
                 name=cfg.get("name", model_id),
                 provider=provider,
                 status=MS.UNKNOWN,
                 message="无法确定模型存储路径（缺少 hf_model_id / hf_models 和 local_path）",
             )
+
+        # 写入缓存
+        _model_check_cache[model_id] = (result, now)
+        return result
 
     def check_all(self) -> list[ModelCheckResult]:
         """检测全部注册模型，按 models.yaml 中的顺序返回。"""

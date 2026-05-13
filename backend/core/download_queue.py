@@ -23,6 +23,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from core.constants import DownloadStatus as DS, Provider, ConfigKey
 from core.utils import fmt_speed, fmt_size
+from core.model_checker import invalidate_model_cache
 
 logger = logging.getLogger("download_queue")
 
@@ -293,8 +294,8 @@ class DownloadQueue:
             return
 
         cfg = dict(MODEL_BY_ID.get(model_id, {}))  # 浅拷贝，避免修改全局配置
-        # 添加取消检查函数，供下载函数周期性检查
-        cfg['_cancel_check'] = lambda: task._cancel_flag
+        # 构造取消检查函数，作为独立参数传递给下载函数（不污染 cfg 字典）
+        cancel_check = lambda: task._cancel_flag
         logger.info(f"[_run_download] cfg 字段: provider={cfg.get('provider')!r}, hf_model_id={cfg.get('hf_model_id')!r}, local_path={cfg.get('local_path')!r}, download_url={cfg.get('download_url')!r}")
 
         loop = asyncio.get_event_loop()
@@ -309,21 +310,31 @@ class DownloadQueue:
         try:
             from core.downloaders import download_rembg, download_hf, download_hf_multi, download_direct
 
+            # 构造下载函数闭包，将 cancel_check 作为独立参数传递
+            def _make_download_fn(fn, _cfg=cfg, _cb=_put, _cc=cancel_check):
+                return lambda: fn(_cfg, progress_cb=_cb, cancel_check=_cc)
+
             if provider == Provider.REMBG:
                 logger.info(f"[_run_download] 使用 rembg 下载: {task.model_name}")
-                future = loop.run_in_executor(None, download_rembg, cfg, _put)
+                download_fn = _make_download_fn(download_rembg)
             elif cfg.get("hf_models"):
                 logger.info(f"[_run_download] 使用 HF 组合模型下载: {task.model_name} ({len(cfg['hf_models'])} 个子模型)")
-                future = loop.run_in_executor(None, download_hf_multi, cfg, _put)
+                download_fn = _make_download_fn(download_hf_multi)
             elif cfg.get("hf_model_id"):
                 logger.info(f"[_run_download] 使用 HF 下载: {task.model_name} repo={cfg['hf_model_id']!r}")
-                future = loop.run_in_executor(None, download_hf, cfg, _put)
+                download_fn = _make_download_fn(download_hf)
             elif cfg.get("local_path") and cfg.get("download_url"):
                 logger.info(f"[_run_download] 使用直接下载: {task.model_name} url={cfg['download_url']!r}")
-                future = loop.run_in_executor(None, download_direct, cfg, _put)
+                download_fn = _make_download_fn(download_direct)
             else:
                 logger.error(f"[_run_download] 无下载来源: model_id={model_id!r} cfg={dict(cfg)}")
                 raise ValueError(f"无下载来源: {model_id}")
+
+            future = loop.run_in_executor(None, download_fn)
+
+        except Exception as e:
+            logger.error(f"[_run_download] 启动下载失败: {e}", exc_info=True)
+            raise
 
             task._future = future
             logger.info(f"[_run_download] future 已提交，开始等待完成: {task.model_name}")
@@ -392,6 +403,11 @@ class DownloadQueue:
             self._close_subscribers(model_id)
             # 触发下一轮调度
             self._get_slot_event().set()
+            # 失效该模型的检查缓存，确保下次 UI 刷新时获取最新状态
+            try:
+                invalidate_model_cache(model_id)
+            except Exception as _cache_err:
+                logger.warning(f"[_run_download] 缓存失效失败（非致命）: {_cache_err}")
 
     def _broadcast(self, model_id: str, event: dict) -> None:
         """向所有订阅指定 model_id 的客户端推送事件。"""

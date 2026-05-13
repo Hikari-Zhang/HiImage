@@ -135,7 +135,7 @@ async def subscribe(self, model_id):
 
 ---
 
-### 3.3 【中等】废弃 API 与新 API 并存，逻辑重复
+### 3.3 【中等】废弃 API 与新 API 并存，逻辑重复 [✅ 已修复于 2026-05-13]
 
 **问题描述：**  
 `models.py` 中存在两套下载 API：
@@ -144,7 +144,7 @@ async def subscribe(self, model_id):
 
 两套接口的下载逻辑并行存在，总代码量超过 600 行，且下载流程（provider 判断 → 选择下载函数 → 进度回调）在旧接口中重复实现了一遍。
 
-**建议：** 旧接口可保留路由定义（向后兼容），但将其内部实现重定向到新的 `DownloadQueue`，消除逻辑重复。如确认无外部调用者，直接删除旧实现。
+**修复方案：** 将下载函数（`download_rembg`、`download_hf`、`download_hf_multi`、`download_direct`）迁移至 `core/downloaders.py`，旧接口和新接口均从此模块导入，消除逻辑重复。旧接口SSE生成器保留（向后兼容），但内部调用统一的下载函数。
 
 ---
 
@@ -186,29 +186,16 @@ class BaseExecutor(ABC):
 
 ---
 
-### 3.6 【中等】`ModelChecker` 每次请求都实例化，缺乏缓存
+### 3.6 【中等】`ModelChecker` 每次请求都实例化，缺乏缓存 [✅ 已修复于 2026-05-13]
 
 **问题描述：**  
 `GET /api/models/health` 和 `GET /api/models/list` 都会 `ModelChecker()` 实例化并调用 `check_all()`，对磁盘进行全量扫描。在模型数量较多时（20+ 个模型），每次调用都会产生大量文件 I/O。
 
-```python
-# models.py 第 71、108 行
-checker = ModelChecker()
-results = checker.check_all()  # 每次请求都全量扫描磁盘
-```
-
-**建议：** 在 `download_queue.py` 完成下载后失效缓存，其他时间返回带 TTL 的缓存结果（如 30 秒）：
-
-```python
-_model_status_cache: dict = {}
-_cache_ts: float = 0.0
-CACHE_TTL = 30.0
-
-def get_cached_model_status():
-    if time.monotonic() - _cache_ts > CACHE_TTL:
-        # 重新扫描
-        ...
-```
+**修复方案：** 在 `model_checker.py` 中添加 TTL 缓存机制（默认 5 秒）：
+- 模块级缓存字典 `_model_check_cache: dict[str, tuple]`
+- `check_model()` 首先检查缓存，未命中或过期时执行检查并写入缓存
+- 提供 `invalidate_model_cache(model_id)` 供下载完成后主动失效缓存
+- `check_all()` 和 `check_mode()` 复用 `check_model()` 的缓存
 
 ---
 
@@ -227,7 +214,7 @@ FastAPI coroutine → run_in_executor → 线程池 → _ModelServer (threading.
 
 ---
 
-### 3.8 【轻微】`_cancel_check` 通过 `cfg` 字典传递，接口不规范
+### 3.8 【轻微】`_cancel_check` 通过 `cfg` 字典传递，接口不规范 [✅ 已修复于 2026-05-13]
 
 **问题描述：**  
 下载取消检查函数通过修改 `cfg` 字典传入：
@@ -238,11 +225,11 @@ cfg['_cancel_check'] = lambda: task._cancel_flag
 
 然后在 `_download_rembg`、`_download_hf`、`_download_direct` 内部通过 `cfg.pop('_cancel_check', None)` 取出。这种将控制信号混入数据字典的方式使接口不清晰，且 `pop` 会修改调用方传入的字典（虽然已通过浅拷贝规避）。
 
-**建议：** 将 `cancel_check` 作为独立参数传入下载函数：
-
-```python
-def _download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None: ...
-```
+**修复方案：** 将 `cancel_check` 作为独立参数传递给下载函数：
+- 修改 4 个下载函数签名：`download_rembg(cfg, progress_cb=None, cancel_check=None)` 等
+- `download_queue.py` 中构造 `cancel_check` 变量，通过 lambda 传递给下载函数
+- 删除 `_extract_cancel_check()` 辅助函数
+- 旧 SSE 接口传递 `cancel_check=None`（旧接口无取消机制）
 
 ---
 
@@ -279,14 +266,14 @@ def _download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None: ...
 | 1 | `_subscribe_continue` 无限递归 → 栈溢出 | 大模型下载时崩溃 | 小（改循环） |
 | 2 | `core` 层反向依赖 `app.routers` | 架构违规，测试困难 | 中（迁移代码） |
 
-### P1 · 建议尽快改进
+### P1 · 建议尽快改进 [全部已修复于 2026-05-13]
 
-| # | 问题 | 影响 | 改动量 |
-|---|------|------|--------|
-| 3 | `_fmt_speed`/`_fmt_size` 重复定义 | 代码冗余 | 小（提取到 utils） |
-| 4 | 废弃 API 内部实现重复 | 维护成本高 | 中（重定向实现） |
-| 5 | `ModelChecker` 无缓存全量扫描 | UI 响应变慢 | 小（加 TTL 缓存） |
-| 6 | `_cancel_check` 混入 cfg 字典 | 接口不清晰 | 小（改独立参数） |
+| # | 问题 | 影响 | 改动量 | 状态 |
+|---|------|------|--------|------|
+| 3 | `_fmt_speed`/`_fmt_size` 重复定义 | 代码冗余 | 小（提取到 utils） | ✅ 已修复 |
+| 4 | 废弃 API 内部实现重复 | 维护成本高 | 中（重定向实现） | ✅ 已修复 |
+| 5 | `ModelChecker` 无缓存全量扫描 | UI 响应变慢 | 小（加 TTL 缓存） | ✅ 已修复 |
+| 6 | `_cancel_check` 混入 cfg 字典 | 接口不清晰 | 小（改独立参数） | ✅ 已修复 |
 
 ### P2 · 长期优化
 
@@ -330,16 +317,18 @@ def _download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None: ...
 
 HiImage 的架构设计整体合理，核心设计理念（配置驱动、按需保活、队列调度）都经过了认真思考，代码质量在 AI 桌面应用领域属于中上水平。
 
-最值得优先处理的改进点是：
+**已修复问题（2026-05-13）：**
+- ✅ **P0-1**：`_subscribe_continue` 无限递归 → 改为单一 `while` 循环
+- ✅ **P0-2**：`core` 层反向依赖 `app.routers` → 下载函数迁移至 `core/downloaders.py`
+- ✅ **P1-3**：`_fmt_speed`/`_fmt_size` 重复定义 → 提取到 `core/utils.py`
+- ✅ **P1-4**：废弃 API 内部实现重复 → 统一调用 `core/downloaders.py`
+- ✅ **P1-5**：`ModelChecker` 无缓存全量扫描 → 添加 TTL 缓存（5 秒）
+- ✅ **P1-6**：`_cancel_check` 混入 cfg 字典 → 改为独立参数传递
 
-1. **消除 `core` ↔ `routers` 的循环依赖**：将下载函数迁移到 `core/model_download_helper.py`，这是维护性最关键的架构问题
-2. **修复 `_subscribe_continue` 无限递归**：这是潜在的运行时崩溃 bug，改动成本极低
-3. **清理废弃 API 的重复实现**：减少约 200 行冗余代码，降低后续维护成本
-
-其余问题可以在日常迭代中按 P1/P2 优先级逐步改进。
+其余 P2 问题可以在日常迭代中逐步改进。
 
 ---
 
-**文档版本：** 1.0  
-**分析日期：** 2026-05-13  
+**文档版本：** 1.1  
+**更新日期：** 2026-05-13  
 **分析范围：** `SYSTEM_ARCHITECTURE.md`、`SCRIPTS_REFERENCE.md`、`backend/core/download_queue.py`、`backend/core/model_server.py`、`backend/app/routers/models.py`
