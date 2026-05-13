@@ -22,28 +22,9 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from core.constants import DownloadStatus as DS, Provider, ConfigKey
+from core.utils import fmt_speed, fmt_size
 
 logger = logging.getLogger("download_queue")
-
-
-# ── 工具函数（与 models.py 保持一致） ──────────────────────────────────────
-
-def _fmt_speed(bytes_per_sec: float) -> str:
-    if bytes_per_sec >= 1024 * 1024:
-        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
-    elif bytes_per_sec >= 1024:
-        return f"{bytes_per_sec / 1024:.0f} KB/s"
-    return f"{bytes_per_sec:.0f} B/s"
-
-
-def _fmt_size(total_bytes: int) -> str:
-    if total_bytes >= 1024 * 1024 * 1024:
-        return f"{total_bytes / (1024**3):.1f} GB"
-    elif total_bytes >= 1024 * 1024:
-        return f"{total_bytes / (1024**2):.0f} MB"
-    elif total_bytes >= 1024:
-        return f"{total_bytes / 1024:.0f} KB"
-    return f"{total_bytes} B"
 
 
 # ── 数据结构 ──────────────────────────────────────────────────────────────────
@@ -228,6 +209,9 @@ class DownloadQueue:
         """
         SSE 订阅：持续推送指定 model_id 的状态变更事件。
 
+        使用单一 while 循环，每次超时只发送心跳后继续等待，
+        不递归调用其他方法，避免长时间运行后栈溢出。
+
         用法（在路由中）：
             async for event in queue.subscribe(model_id):
                 yield _sse("status", event)
@@ -249,35 +233,16 @@ class DownloadQueue:
 
         try:
             while True:
-                event = await asyncio.wait_for(q.get(), timeout=30)
-                if event is None:  # None 是终止信号
-                    logger.info(f"[subscribe] 收到终止信号，关闭: {model_id!r}")
-                    break
-                logger.debug(f"[subscribe] 推送事件: {model_id!r} status={event.get('status')!r}")
-                yield event
-        except asyncio.TimeoutError:
-            # 30s 无事件时发一次心跳，保持 SSE 连接
-            yield {"heartbeat": True}
-            # 递归继续
-            async for ev in self._subscribe_continue(model_id, q):
-                yield ev
-        finally:
-            subs = self._subscribers.get(model_id, [])
-            if q in subs:
-                subs.remove(q)
-
-    async def _subscribe_continue(self, model_id: str, q: asyncio.Queue) -> AsyncIterator[dict]:
-        """subscribe 内部：心跳后继续等待。"""
-        try:
-            while True:
-                event = await asyncio.wait_for(q.get(), timeout=30)
-                if event is None:
-                    break
-                yield event
-        except asyncio.TimeoutError:
-            yield {"heartbeat": True}
-            async for ev in self._subscribe_continue(model_id, q):
-                yield ev
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30)
+                    if event is None:  # None 是终止信号
+                        logger.info(f"[subscribe] 收到终止信号，关闭: {model_id!r}")
+                        break
+                    logger.debug(f"[subscribe] 推送事件: {model_id!r} status={event.get('status')!r}")
+                    yield event
+                except asyncio.TimeoutError:
+                    # 心跳：只发送心跳，继续循环，不递归
+                    yield {"heartbeat": True}
         finally:
             subs = self._subscribers.get(model_id, [])
             if q in subs:
@@ -339,28 +304,23 @@ class DownloadQueue:
             if not task._cancel_flag:
                 loop.call_soon_threadsafe(progress_queue.put_nowait, data)
 
-        # 选择下载方式（延迟导入避免循环依赖）
+        # 选择下载方式
         provider = cfg.get("provider", "")
         try:
-            import importlib
-            _models_mod = importlib.import_module("app.routers.models")
-            _download_rembg = getattr(_models_mod, "_download_rembg")
-            _download_hf = getattr(_models_mod, "_download_hf")
-            _download_hf_multi = getattr(_models_mod, "_download_hf_multi")
-            _download_direct = getattr(_models_mod, "_download_direct")
+            from core.downloaders import download_rembg, download_hf, download_hf_multi, download_direct
 
             if provider == Provider.REMBG:
                 logger.info(f"[_run_download] 使用 rembg 下载: {task.model_name}")
-                future = loop.run_in_executor(None, _download_rembg, cfg, _put)
+                future = loop.run_in_executor(None, download_rembg, cfg, _put)
             elif cfg.get("hf_models"):
                 logger.info(f"[_run_download] 使用 HF 组合模型下载: {task.model_name} ({len(cfg['hf_models'])} 个子模型)")
-                future = loop.run_in_executor(None, _download_hf_multi, cfg, _put)
+                future = loop.run_in_executor(None, download_hf_multi, cfg, _put)
             elif cfg.get("hf_model_id"):
                 logger.info(f"[_run_download] 使用 HF 下载: {task.model_name} repo={cfg['hf_model_id']!r}")
-                future = loop.run_in_executor(None, _download_hf, cfg, _put)
+                future = loop.run_in_executor(None, download_hf, cfg, _put)
             elif cfg.get("local_path") and cfg.get("download_url"):
                 logger.info(f"[_run_download] 使用直接下载: {task.model_name} url={cfg['download_url']!r}")
-                future = loop.run_in_executor(None, _download_direct, cfg, _put)
+                future = loop.run_in_executor(None, download_direct, cfg, _put)
             else:
                 logger.error(f"[_run_download] 无下载来源: model_id={model_id!r} cfg={dict(cfg)}")
                 raise ValueError(f"无下载来源: {model_id}")

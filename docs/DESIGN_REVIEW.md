@@ -72,7 +72,7 @@ HiImage 整体架构选型合理，**Electron + FastAPI** 的桌面 AI 应用方
 
 ## 3. 已识别的设计问题
 
-### 3.1 【严重】下载逻辑大量重复
+### 3.1 【严重】下载逻辑大量重复 [✅ 已修复于 2026-05-13]
 
 **问题描述：**  
 `_download_rembg`、`_download_hf`、`_download_direct`、`_download_hf_multi` 四个下载函数全部位于 `backend/app/routers/models.py`（路由层），同时 `backend/core/download_queue.py` 在 `_run_download` 中通过 `importlib` 动态导入这些函数：
@@ -94,7 +94,7 @@ _download_rembg = getattr(_models_mod, "_download_rembg")
 
 ---
 
-### 3.2 【严重】`_subscribe_continue` 递归调用导致栈溢出风险
+### 3.2 【严重】`_subscribe_continue` 递归调用导致栈溢出风险 [✅ 已修复于 2026-05-13]
 
 **问题描述：**  
 `DownloadQueue.subscribe()` 在 30 秒超时后调用 `_subscribe_continue()`，而 `_subscribe_continue()` 同样在超时后递归调用自身：
