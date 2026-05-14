@@ -17,6 +17,7 @@ interface SettingsState {
   // Upscale
   upscaleModel: string
   upscaleEnabled: boolean
+  upscaleTile: number  // 0 = 自动计算；>0 = 固定 tile 大小
 
   // Server
   serverPort: number
@@ -43,6 +44,7 @@ interface SettingsState {
   setDevice: (device: string) => void
   setInpaintModel: (model: string) => void
   setUpscaleModel: (model: string) => void
+  setUpscaleTile: (tile: number) => void
   setDilation: (dilation: number) => void
   setSensitivity: (sensitivity: number) => void
   setDisableNsfw: (v: boolean) => void
@@ -65,6 +67,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   postprocessEnabled: false,
   upscaleModel: 'RealESRGAN_x4plus',
   upscaleEnabled: false,
+  upscaleTile: 0,  // 0 = 自动计算
   serverPort: 51821,
   keepaliveSeconds: 300,
   startupTimeout: 1800,
@@ -81,6 +84,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setDevice: (device) => set({ device }),
   setInpaintModel: (model) => set({ inpaintModel: model }),
   setUpscaleModel: (model) => set({ upscaleModel: model }),
+  setUpscaleTile: (tile) => set({ upscaleTile: tile }),
   setDilation: (dilation) => set({ defaultDilation: dilation }),
   setSensitivity: (sensitivity) => set({ sensitivity }),
   setDisableNsfw: (v) => set({ disableNsfw: v }),
@@ -109,6 +113,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         cpuOffload: data.cpu_offload ?? false,
         cpuTextencoder: data.cpu_textencoder ?? false,
         downloadMaxConcurrent: data.download_max_concurrent ?? 3,
+        upscaleTile: data.upscale_tile ?? 0,  // 0 = 自动计算
       })
     } catch (err) {
       console.error('Failed to load settings:', err)
@@ -137,6 +142,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           cpu_offload: state.cpuOffload,
           cpu_textencoder: state.cpuTextencoder,
           download_max_concurrent: state.downloadMaxConcurrent,
+          upscale_tile: state.upscaleTile,
         }),
       })
     } catch (err) {

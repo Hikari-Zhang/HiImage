@@ -64,6 +64,7 @@ class UpscaleRequest(BaseModel):
     model: str = "RealESRGAN_x4plus"
     device: str = "mps"
     outscale: int | None = None  # 前端覆盖倍率；None 则使用模型默认值
+    tile: int | None = None     # 分块大小；0 = 自动计算；None = 使用默认值
 
 
 @router.post("/upscale")
@@ -81,7 +82,13 @@ async def upscale_image(req: UpscaleRequest):
     await progress_manager.send_progress(10, "正在加载超分辨率模型...")
 
     def _process():
-        upscaler = Upscaler(model_name=req.model, device=req.device, outscale=req.outscale)
+        # tile: None = 使用默认配置；0 = 自动计算；>0 = 固定 tile 大小
+        upscaler = Upscaler(
+            model_name=req.model,
+            device=req.device,
+            outscale=req.outscale,
+            tile=req.tile if req.tile is not None else 0,
+        )
         return upscaler.upscale(image)
 
     loop = asyncio.get_event_loop()

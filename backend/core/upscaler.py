@@ -148,7 +148,12 @@ class Upscaler:
         result_rgb = upscaler.upscale(image_rgb)
     """
 
-    def __init__(self, model_name: str = 'RealESRGAN_x4plus', device: str = 'cpu', outscale: int | None = None):
+    # 默认 tile 大小（像素），0 表示不分块（整图处理）
+    DEFAULT_TILE = 512
+    # tile 重叠区域（像素），避免拼接缝
+    DEFAULT_TILE_PAD = 10
+
+    def __init__(self, model_name: str = 'RealESRGAN_x4plus', device: str = 'cpu', outscale: int | None = None, tile: int = 0):
         if model_name not in AVAILABLE_UPSCALE_MODELS:
             raise ValueError(f"不支持的模型: {model_name}，可选: {AVAILABLE_UPSCALE_MODELS}")
         self.model_name = model_name
@@ -160,6 +165,52 @@ class Upscaler:
         else:
             self.outscale = _MODEL_OUTSCALE[model_name]
         self._upsampler = None  # 懒加载
+        self._current_tile = 0    # 当前 tile 值（在 upscale 中计算）
+        # tile: 0 = 自动计算；>0 = 固定 tile 大小
+        self._tile = tile
+
+    @staticmethod
+    def _auto_tile(image: np.ndarray, scale: int, device: str) -> int:
+        """
+        根据图像大小和推理设备，自动计算合适的 tile 大小。
+
+        显存占用估算（近似）：
+          - 输入特征图:  H × W × C × num_layers × element_size
+          - RRDBNet 约 23+ 层，每像素约数十 KB 激活值
+          - 经验值：CUDA 上 tile=512 约需 2-4GB；tile=256 约需 0.5-1GB
+          - MPS / CPU 模式强制分块（整图容易导致内存爆炸或超时）
+
+        返回：tile 大小（像素），0 表示不分块
+        """
+        h, w = image.shape[:2]
+        output_h, output_w = h * scale, w * scale
+
+        # 小图（输出 < 1M pixels）直接整图处理，避免分块拼接瑕疵
+        if output_h * output_w < 1024 * 1024:
+            print(f"[Upscaler] 图像较小 ({output_w}x{output_h})，使用整图推理")
+            return 0
+
+        # 根据设备选择默认 tile
+        if device == 'cuda':
+            # CUDA: 根据输入尺寸自适应
+            # 输入 > 800×800 时分块，否则整图
+            if h > 800 or w > 800:
+                tile = Upscaler.DEFAULT_TILE  # 512
+                print(f"[Upscaler] CUDA 模式，输入 {w}x{h} → 使用 tile={tile}")
+                return tile
+            return 0
+        elif device == 'mps':
+            # MPS: 统一内存架构，大图容易 OOM，强制分块
+            tile = 384
+            print(f"[Upscaler] MPS 模式，使用 tile={tile}（统一内存保护）")
+            return tile
+        else:
+            # CPU: 内存充足但容易超时，大图分块
+            if h > 1024 or w > 1024:
+                tile = 256
+                print(f"[Upscaler] CPU 模式，输入 {w}x{h} → 使用 tile={tile}")
+                return tile
+            return 0
 
     # ------------------------------------------------------------------
     # 公开接口
@@ -175,6 +226,12 @@ class Upscaler:
         if image is None or image.size == 0:
             raise ValueError("输入图像为空")
 
+        # 自动计算 tile（如果未手动指定）
+        if self._tile == 0:
+            self._current_tile = self._auto_tile(image, self.scale, self.device)
+        else:
+            self._current_tile = self._tile
+
         self._ensure_model_loaded()
 
         # Real-ESRGAN 内部使用 BGR
@@ -183,7 +240,18 @@ class Upscaler:
         try:
             output_bgr, _ = self._upsampler.enhance(img_bgr, outscale=self.outscale)
         except RuntimeError as e:
-            raise RuntimeError(f"超分辨率处理失败: {e}") from e
+            # 如果分块后仍 OOM，尝试更小的 tile
+            if "CUDA" in str(e) or "MPS" in str(e) or "alloc" in str(e).lower():
+                if self._current_tile > 256:
+                    print(f"[Upscaler] OOM，尝试减小 tile: {self._current_tile} → 256")
+                    self._current_tile = 256
+                    self._upsampler = None  # 重新构建
+                    self._ensure_model_loaded()
+                    output_bgr, _ = self._upsampler.enhance(img_bgr, outscale=self.outscale)
+                else:
+                    raise RuntimeError(f"超分辨率处理失败（显存不足）: {e}") from e
+            else:
+                raise RuntimeError(f"超分辨率处理失败: {e}") from e
 
         return cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)
 
@@ -204,9 +272,13 @@ class Upscaler:
                 f"请先在「模型管理」中下载模型"
             )
 
-        self._upsampler = self._build_upsampler(weight_path)
+        # 确保已计算 tile
+        if not hasattr(self, '_current_tile'):
+            self._current_tile = 0  # 默认不分块（向后兼容）
 
-    def _build_upsampler(self, weight_path: str):
+        self._upsampler = self._build_upsampler(weight_path, self._current_tile)
+
+    def _build_upsampler(self, weight_path: str, tile: int):
         """
         构建 RealESRGANer 实例。
 
@@ -260,17 +332,20 @@ class Upscaler:
         else:
             gpu_id = None  # cpu
 
+        tile_pad = Upscaler.DEFAULT_TILE_PAD if tile > 0 else 10
+
         upsampler = RealESRGANer(
             scale=self.scale,
             model_path=weight_path,
             model=model,
-            tile=0,         # tile=0 表示不分块（整图处理）；超大图可改为 512
-            tile_pad=10,
+            tile=tile,      # 0 = 不分块；>0 = 分块大小
+            tile_pad=tile_pad,
             pre_pad=0,
             half=half,
             gpu_id=gpu_id,
         )
         outscale_info = f", outscale={self.outscale}x" if self.outscale != self.scale else ""
-        print(f"[Upscaler] 模型加载完成: {self.model_name} (device={self.device}, scale={self.scale}x{outscale_info})")
+        tile_info = f", tile={tile}" if tile > 0 else ""
+        print(f"[Upscaler] 模型加载完成: {self.model_name} (device={self.device}, scale={self.scale}x{outscale_info}{tile_info})")
         return upsampler
 

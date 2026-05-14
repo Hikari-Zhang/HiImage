@@ -22,7 +22,7 @@ export default function SuperResolution() {
   } = useImageStore()
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { upscale } = useBackendAPI()
-  const { device, upscaleModel, setDevice, setUpscaleModel } = useSettingsStore()
+  const { device, upscaleModel, upscaleTile, setDevice, setUpscaleModel } = useSettingsStore()
   const { upscaleGroups, upscaleModelMeta } = useModelStore()
   const { options: deviceOptions } = useDeviceOptions()
   const downloadTasks = useDownloadStore((s) => s.tasks)
@@ -32,6 +32,8 @@ export default function SuperResolution() {
   const [outputSize, setOutputSize] = useState({ w: 0, h: 0 })
   // outscale: null 表示跟随模型默认值，用户可手动覆盖
   const [outscale, setOutscale] = useState<number | null>(null)
+  // tile: null 表示使用默认配置，用户可手动覆盖
+  const [tile, setTile] = useState<number | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -136,7 +138,13 @@ export default function SuperResolution() {
 
     try {
       startProcess(upscaleModel)
-      const result = await upscale({ image: sourceImage, model: upscaleModel, device, outscale: currentScale })
+      const result = await upscale({
+        image: sourceImage,
+        model: upscaleModel,
+        device,
+        outscale: currentScale,
+        tile: tile ?? (upscaleTile || 0),
+      })
       setResultImage(`data:image/png;base64,${result.image}`)
       setOutputSize({ w: result.width, h: result.height })
       finishProcess('超分辨率处理完成')
@@ -279,6 +287,26 @@ export default function SuperResolution() {
               </div>
             </div>
           )}
+
+          {/* Tile 设置 */}
+          <div>
+            <label className="block text-xs font-medium text-fg-secondary mb-1">
+              分块大小 (Tile)
+              <span className="ml-1 text-[10px] text-fg-tertiary">（0 = 自动）</span>
+            </label>
+            <input
+              type="number"
+              min={0}
+              max={2048}
+              step={64}
+              value={tile ?? upscaleTile ?? 0}
+              onChange={(e) => setTile(e.target.value ? Number(e.target.value) : null)}
+              className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+            />
+            <p className="text-[11px] text-fg-tertiary mt-1">
+              分块处理大小：0 = 自动计算；建议值：256 / 512 / 1024。降低此值可节省显存。
+            </p>
+          </div>
 
           {/* Image info */}
           <section>

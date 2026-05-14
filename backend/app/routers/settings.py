@@ -26,6 +26,8 @@ class SettingsUpdate(BaseModel):
     cpu_textencoder: Optional[bool] = None
     # 下载配置
     download_max_concurrent: Optional[int] = None
+    # 超分辨率 tile 设置（0 = 自动计算）
+    upscale_tile: Optional[int] = None
 
 
 @router.get("/settings")
@@ -46,6 +48,8 @@ async def get_settings():
         "cpu_offload": all_settings.get("server.cpu_offload", False),
         "cpu_textencoder": all_settings.get("server.cpu_textencoder", False),
         "download_max_concurrent": all_settings.get("download.max_concurrent", 3),
+        # 超分辨率 tile 设置（0 = 自动计算）
+        "upscale_tile": all_settings.get("upscale.tile", 0),
     }
 
 
@@ -80,6 +84,9 @@ async def update_settings(data: SettingsUpdate):
         current["server.cpu_textencoder"] = data.cpu_textencoder
     if data.download_max_concurrent is not None:
         current["download.max_concurrent"] = max(1, min(10, data.download_max_concurrent))
+    # 超分辨率 tile 设置（0 = 自动计算；>0 = 固定 tile 大小）
+    if data.upscale_tile is not None:
+        current["upscale.tile"] = max(0, data.upscale_tile)
 
     save(current)
     return {"status": "ok", "message": "设置已保存"}

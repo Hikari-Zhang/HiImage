@@ -26,6 +26,7 @@ const DEFAULTS = {
   cpuOffload: false,
   cpuTextencoder: false,
   downloadMaxConcurrent: 3,
+  upscaleTile: 0,  // 0 = 自动计算
 }
 
 export default function Settings() {
@@ -56,6 +57,7 @@ export default function Settings() {
   const [cpuOffload, setCpuOffload] = useState(store.cpuOffload)
   const [cpuTextencoder, setCpuTextencoder] = useState(store.cpuTextencoder)
   const [downloadMaxConcurrent, setDownloadMaxConcurrent] = useState(String(store.downloadMaxConcurrent))
+  const [upscaleTile, setUpscaleTile] = useState(String(store.upscaleTile))
   const [isSaving, setIsSaving] = useState(false)
 
   // 设备可用性（从后端检测）
@@ -186,6 +188,7 @@ export default function Settings() {
         cpuOffload,
         cpuTextencoder,
         downloadMaxConcurrent: Math.max(1, Math.min(10, Number(downloadMaxConcurrent) || 3)),
+        upscaleTile: Number(upscaleTile) || 0,
       })
       // 再持久化到后端
       await useSettingsStore.getState().saveSettings(backendURL)
@@ -211,6 +214,7 @@ export default function Settings() {
     setCpuOffload(DEFAULTS.cpuOffload)
     setCpuTextencoder(DEFAULTS.cpuTextencoder)
     setDownloadMaxConcurrent(String(DEFAULTS.downloadMaxConcurrent))
+    setUpscaleTile(String(DEFAULTS.upscaleTile))
     showToast('success', '已恢复默认值，点击保存生效')
   }
 
@@ -476,6 +480,31 @@ export default function Settings() {
                 onChange={(e) => setDownloadMaxConcurrent(e.target.value)}
                 className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
               />
+            </div>
+          </div>
+        </section>
+
+        {/* Upscale Settings */}
+        <section className="bg-bg-tertiary rounded-lg p-4">
+          <h3 className="text-sm font-medium mb-3">超分辨率设置</h3>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-fg-secondary mb-1 block">
+                默认 Tile 大小
+                <span className="ml-1 text-[10px] text-fg-tertiary">（0 = 自动计算）</span>
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={2048}
+                step={64}
+                value={upscaleTile}
+                onChange={(e) => setUpscaleTile(e.target.value)}
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+              <p className="text-[11px] text-fg-tertiary mt-1">
+                分块大小：0 = 自动计算；建议值：256 / 512 / 1024。大图处理时降低此值可节省显存。
+              </p>
             </div>
           </div>
         </section>
