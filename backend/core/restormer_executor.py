@@ -63,6 +63,15 @@ class RestormerExecutor(BaseModelExecutor):
 
         # 转换输入格式
         input_tensor = self._numpy_to_tensor(image)
+        
+        # 将输入张量移动到模型所在设备
+        if self.device == "mps" and torch.backends.mps.is_available():
+            input_tensor = input_tensor.to("mps")
+        elif self.device == "cuda" and torch.cuda.is_available():
+            input_tensor = input_tensor.to("cuda")
+
+        if self._pipeline is None:
+            raise RuntimeError("模型未加载，请先调用 load_model()")
 
         with torch.no_grad():
             output_tensor = self._pipeline(input_tensor)

@@ -1105,41 +1105,42 @@ models:
     features: [upscale]
 
   # ── 图像复原（image_restoration）────────────────────────────────────
-  - id: restormer_denoise
-    name: Restormer（去噪）
-    provider: restormer
-    tags: [image_restoration]
-    description: Transformer-based 图像去噪，保留细节效果最佳
-    recommended_for: 图像复原（去噪）
-    requires_reference: false
-    size_mb: 105
-    badge: 推荐
-    local_path: models/restormer/denoise/gaussian_color_denoising_blind.pth
-    download_url: https://github.com/swz30/Restormer/releases/download/v1.0/gaussian_color_denoising_blind.pth
-    supported_params:
-      task_type:
-        type: str
-        default: denoise
-        desc: 任务类型（denoise/deblur/derain/dehaze）
-    features: [image_restoration]
+  # 2026-05-14: 暂时禁用 Restormer，待修复架构通道不匹配问题后重新启用
+  # - id: restormer_denoise
+  #   name: Restormer（去噪）
+  #   provider: restormer
+  #   tags: [image_restoration]
+  #   description: Transformer-based 图像去噪，保留细节效果最佳
+  #   recommended_for: 图像复原（去噪）
+  #   requires_reference: false
+  #   size_mb: 105
+  #   badge: 推荐
+  #   local_path: models/restormer/denoise/gaussian_color_denoising_blind.pth
+  #   download_url: https://github.com/swz30/Restormer/releases/download/v1.0/gaussian_color_denoising_blind.pth
+  #   supported_params:
+  #     task_type:
+  #       type: str
+  #       default: denoise
+  #       desc: 任务类型（denoise/deblur/derain/dehaze）
+  #   features: [image_restoration]
 
-  - id: restormer_deblur
-    name: Restormer（去模糊）
-    provider: restormer
-    tags: [image_restoration]
-    description: 图像去模糊，适合失焦/运动模糊场景
-    recommended_for: 图像复原（去模糊）
-    requires_reference: false
-    size_mb: 105
-    badge: ""
-    local_path: models/restormer/deblur/dual_pixel_defocus_deblurring.pth
-    download_url: https://github.com/swz30/Restormer/releases/download/v1.0/dual_pixel_defocus_deblurring.pth
-    supported_params:
-      task_type:
-        type: str
-        default: deblur
-        desc: 任务类型
-    features: [image_restoration]
+  # - id: restormer_deblur
+  #   name: Restormer（去模糊）
+  #   provider: restormer
+  #   tags: [image_restoration]
+  #   description: 图像去模糊，适合失焦/运动模糊场景
+  #   recommended_for: 图像复原（去模糊）
+  #   requires_reference: false
+  #   size_mb: 105
+  #   badge: ""
+  #   local_path: models/restormer/deblur/dual_pixel_defocus_deblurring.pth
+  #   download_url: https://github.com/swz30/Restormer/releases/download/v1.0/dual_pixel_defocus_deblurring.pth
+  #   supported_params:
+  #     task_type:
+  #       type: str
+  #       default: deblur
+  #       desc: 任务类型
+  #   features: [image_restoration]
 
 
 # ==============================================================================
@@ -1253,12 +1254,13 @@ mode_groups:
     needs_roi: false
     needs_prompt: false
 
-  - id: image_restoration
-    name: 图像复原
-    icon: droplet
-    icon_name: Droplet
-    description: 使用 AI 模型修复图像质量（去噪/去模糊/去雨/去雾）
-    default_model: restormer_denoise
-    needs_reference: false
-    needs_roi: false
-    needs_prompt: false
+  # 2026-05-14: 暂时禁用图像复原模式，待 Restormer 架构修复后重新启用
+  # - id: image_restoration
+  #   name: 图像复原
+  #   icon: droplet
+  #   icon_name: Droplet
+  #   description: 使用 AI 模型修复图像质量（去噪/去模糊/去雨/去雾）
+  #   default_model: restormer_denoise
+  #   needs_reference: false
+  #   needs_roi: false
+  #   needs_prompt: false

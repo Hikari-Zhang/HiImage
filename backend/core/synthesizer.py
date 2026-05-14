@@ -9,9 +9,13 @@
   - prompt_inpaint:       精准替换（手动框选 ROI + 文字描述 → SD Inpainting）
   - auto_segment_edit:    智能定位（中文指令 → 自动识别服装部位 → HSV 换色 / SD 换风格）
   - instruction_edit:     自由编辑（自然语言指令 → InstructPix2Pix 全图语义编辑）
+  - watermark_removal:    去水印（AI 智能填充去除图片水印）
+  - upscale:              超分辨率（Real-ESRGAN 智能放大图像）
 
 模型配置（名称/描述/下载链接/支持参数/功能）统一由 core/model_registry.py 维护。
 新增或修改模型时只需编辑 model_registry.py，本文件无需改动。
+
+2026-05-14: 临时禁用 image_restoration 模式（Restormer 架构通道不匹配问题待修复）
 """
 from __future__ import annotations
 
@@ -119,6 +123,9 @@ class Synthesizer:
         elif self.mode == "instruction_edit":
             self._source_image = source_rgb
             return self._run_instruction_edit()
+        # 2026-05-14: 临时禁用 image_restoration 模式（Restormer 架构问题）
+        # elif self.mode == "image_restoration":
+        #     return self._image_restoration(source_rgb)
         else:
             raise ValueError(f"未知的合成模式: {self.mode}")
 
@@ -456,3 +463,27 @@ class Synthesizer:
             return editor.edit(self._source_image, self.prompt)
         finally:
             editor.offload()
+
+    # ------------------------------------------------------------------
+    # 图像复原（image_restoration）
+    # 2026-05-14: 临时禁用，待 Restormer 架构修复后重新启用
+    # ------------------------------------------------------------------
+
+    # def _image_restoration(self, source_rgb: np.ndarray) -> np.ndarray:
+    #     """
+    #     图像复原：使用 Restormer 等模型修复图像质量（去噪/去模糊/去雨/去雾）
+    #     
+    #     :param source_rgb: 输入图像（RGB, uint8）
+    #     :return: 复原后的图像（RGB, uint8）
+    #     """
+    #     from core.model_registry import get_model
+    #     from core.model_executor import ModelExecutorFactory
+    #     
+    #     model_config = get_model(self.model_id)
+    #     executor = ModelExecutorFactory.create_executor(model_config, self.device)
+    #     
+    #     try:
+    #         result = executor.execute(source_rgb)
+    #         return result
+    #     finally:
+    #         executor.unload_model()

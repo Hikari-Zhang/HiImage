@@ -126,10 +126,12 @@ class TransformerBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b, c, h, w = x.shape
         # MDTA
-        x_norm = self.norm1(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        x_norm = self.norm1(x.permute(0, 2, 3, 1))
+        x_norm = x_norm.permute(0, 3, 1, 2)
         x = x + self.attn(x_norm)
         # GDFN
-        x_norm = self.norm2(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        x_norm = self.norm2(x.permute(0, 2, 3, 1))
+        x_norm = x_norm.permute(0, 3, 1, 2)
         x = x + self.ffn(x_norm)
         return x
 
@@ -250,29 +252,36 @@ class RestormerPipeline(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """前向传播"""
         inp = x
-        x = self.patch_embed(x)
-
+        
+        # Patch Embedding
+        x = self.patch_embed(x)  # [B, dim, H, W]
+        
         # Encoder
         enc_outs = []
         for i, level in enumerate(self.encoder_levels):
             if i > 0:
-                x = self.down_levels[i - 1](x)
-            x = self.skip_convs[i](x) + x  # Skip connection (simplified)
-            x = level(x)
+                x = self.down_levels[i - 1](x)  # Downsample
+            x = level(x)  # Transformer blocks
             enc_outs.append(x)
-
-        # Decoder (simplified - full U-Net skip connections need more work)
+        
+        # Decoder
         for i, level in enumerate(self.decoder_levels):
             if i > 0:
-                x = self.up_levels[i - 1](x)
-            x = x + enc_outs[len(self.encoder_levels) - 1 - i]  # Skip connection
+                x = self.up_levels[i - 1](x)  # Upsample
+            # Skip connection: 从对应的 encoder 输出相加
+            x = x + enc_outs[len(self.encoder_levels) - 1 - i]
             x = level(x)
-
+        
         # Refinement
-        x = self.refinement(x)
-
-        # Output
+        x = self.refinement(x)  # 输出通道数 = dim
+        
+        # Output projection: [B, dim, H, W] -> [B, out_channels, H, W]
         x = self.output(x)
+        
+        # 残差连接：将原始输入调整到与输出相同的空间尺寸
+        if x.shape[2:] != inp.shape[2:]:
+            inp = F.interpolate(inp, size=x.shape[2:], mode='bilinear', align_corners=False)
+        
         return x + inp  # Residual connection
 
     @classmethod

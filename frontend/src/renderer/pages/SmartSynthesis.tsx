@@ -152,7 +152,9 @@ export default function SmartSynthesis() {
           getSynthesisModels(),
         ])
         if (cancelled) return
-        const parsedModes: ModeGroup[] = (modesResp.modes ?? []).map(parseModeGroup)
+        const parsedModes: ModeGroup[] = (modesResp.modes ?? [])
+          .map(parseModeGroup)
+          .filter(mode => mode.id !== 'upscale' && mode.id !== 'watermark_removal')  // 超分辨率和去水印有专门页签，从智能合成中移除
         const parsedModels: SynthesisModel[] = modelsResp.models ?? []
         setModeGroups(parsedModes)
         setAllModels(parsedModels)
