@@ -39,6 +39,8 @@ export default function SuperResolution() {
   const defaultOutscale = upscaleModelMeta[upscaleModel]?.defaultOutscale ?? 4
   // 实际使用的倍率（用户覆盖优先）
   const currentScale = outscale ?? defaultOutscale
+  // 当前模型是否支持自定义输出倍率
+  const supportsCustomOutscale = upscaleModelMeta[upscaleModel]?.supportsCustomOutscale ?? false
 
   // 加载原图（写入共享 useImageStore）
   const loadSource = (dataUrl: string, filePath?: string) => {
@@ -246,25 +248,37 @@ export default function SuperResolution() {
             options={deviceOptions}
           />
 
-          {/* Output scale */}
-          <Select
-            label="输出倍率"
-            value={String(currentScale)}
-            onChange={(e) => {
-              const val = Number(e.target.value)
-              setOutscale(val)
-              if (imageWidth > 0) {
-                setOutputSize({ w: imageWidth * val, h: imageHeight * val })
-              }
-            }}
-            size="sm"
-            options={[
-              { value: '1', label: '1x（清晰化，不放大）' },
-              { value: '2', label: '2x' },
-              { value: '4', label: '4x' },
-              { value: '8', label: '8x' },
-            ]}
-          />
+          {/* Output scale - 仅支持自定义倍率的模型显示 */}
+          {supportsCustomOutscale && (
+            <Select
+              label="输出倍率"
+              value={String(currentScale)}
+              onChange={(e) => {
+                const val = Number(e.target.value)
+                setOutscale(val)
+                if (imageWidth > 0) {
+                  setOutputSize({ w: imageWidth * val, h: imageHeight * val })
+                }
+              }}
+              size="sm"
+              options={[
+                { value: '1', label: '1x（清晰化，不放大）' },
+                { value: '2', label: '2x' },
+                { value: '4', label: '4x' },
+                { value: '8', label: '8x' },
+              ]}
+            />
+          )}
+
+          {/* 固定倍率模型的倍率展示（不可修改） */}
+          {!supportsCustomOutscale && (
+            <div>
+              <label className="block text-xs font-medium text-fg-secondary mb-1">输出倍率</label>
+              <div className="px-3 py-1.5 bg-bg-primary rounded border border-border-subtle text-sm text-fg-primary">
+                {defaultOutscale}x（固定）
+              </div>
+            </div>
+          )}
 
           {/* Image info */}
           <section>

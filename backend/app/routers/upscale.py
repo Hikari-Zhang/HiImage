@@ -48,6 +48,8 @@ async def get_upscale_models():
             "scale":       m.get("scale", 4),
             "outscale":    m.get("outscale", m.get("scale", 4)),
             "badge":       m.get("badge", ""),
+            # 是否支持自定义输出倍率（前端据此显示/隐藏倍率选项）
+            "supports_custom_outscale": m.get("supports_custom_outscale", False),
         })
 
     return {

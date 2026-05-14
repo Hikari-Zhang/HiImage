@@ -111,16 +111,29 @@ async def list_inpaint_models():
 @router.get("/models/upscale")
 async def list_upscale_models():
     """获取超分辨率模型列表（分组）"""
-    groups = []
-    for group_label, models in UPSCALE_MODEL_GROUPS:
-        items = [
-            {
-                "id": model_name,
-                "name": display_name,
-                "description": desc,
-                "scale": _MODEL_SCALE.get(model_name, 4),
-            }
-            for model_name, display_name, desc in models
+    from core.model_registry import get_models_for_mode
+
+    # 从注册表读取 upscale 模式下的所有模型（与 upscale.py 保持一致）
+    models = get_models_for_mode("upscale")
+
+    # 按 display_group 顺序分组（保留 YAML 中的顺序）
+    groups_dict: dict[str, list] = {}
+    for m in models:
+        label = m.get("display_group", "其他")
+        if label not in groups_dict:
+            groups_dict[label] = []
+        groups_dict[label].append({
+            "id": m["id"],
+            "name": m.get("name", m["id"]),
+            "description": m.get("description", ""),
+            "scale": m.get("scale", 4),
+            "outscale": m.get("outscale", m.get("scale", 4)),
+            "supports_custom_outscale": m.get("supports_custom_outscale", False),
+        })
+
+    return {
+        "groups": [
+            {"label": label, "models": model_list}
+            for label, model_list in groups_dict.items()
         ]
-        groups.append({"label": group_label, "models": items})
-    return {"groups": groups}
+    }

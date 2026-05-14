@@ -57,6 +57,8 @@
 # num_block       RRDBNet 专用：dense block 数（23 = 标准；6 = anime 小模型）
 # num_conv        SRVGGNetCompact 专用：conv 层数（32 = general-x4v3；16 = animevideo）
 # outscale        实际输出倍率（可选）：不设则等于 scale；设为 1 表示同分辨率清晰化增强
+# supports_custom_outscale  是否支持自定义输出倍率（可选）：true = 前端显示倍率选项；false = 隐藏（默认 false）
+#                          说明：大多数 RealESRGAN 模型有固定倍率，仅少数模型（如清晰化增强）支持自定义
 #
 # supported_params 推理参数说明（key → type/default/range?/desc）
 # features        能力标签列表：
@@ -995,6 +997,7 @@ models:
     display_group: 精细化增强（去噪/去模糊）        # 前端分组标签
     download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth
     supported_params: {}
+    supports_custom_outscale: true               # 支持自定义输出倍率
     features: [upscale]
 
   - id: RealESRNet_x4plus
@@ -1077,6 +1080,7 @@ models:
     display_group: 清晰化增强（不放大）
     download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth
     supported_params: {}
+    supports_custom_outscale: true               # 支持自定义输出倍率（用户可选择放大）
     features: [upscale]
 
   - id: clarity-anime
@@ -1097,6 +1101,7 @@ models:
     display_group: 清晰化增强（不放大）
     download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
     supported_params: {}
+    supports_custom_outscale: true               # 支持自定义输出倍率（用户可选择放大）
     features: [upscale]
 
   # ── 图像复原（image_restoration）────────────────────────────────────

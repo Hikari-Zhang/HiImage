@@ -74,8 +74,12 @@ interface ModelStoreState {
   inpaintGroups: ModelGroup[]
   /** 超分辨率模型分组列表 */
   upscaleGroups: ModelGroup[]
-  /** 每个超分辨率模型的默认 outscale（model_id → outscale） */
-  upscaleModelMeta: Record<string, { defaultOutscale: number }>
+  /**
+   * 每个超分辨率模型的元数据（model_id → meta）
+   *   defaultOutscale:         默认输出倍率
+   *   supportsCustomOutscale:  是否支持自定义输出倍率（隐藏倍率选项用）
+   */
+  upscaleModelMeta: Record<string, { defaultOutscale: number; supportsCustomOutscale: boolean }>
   /** 是否已加载完成 */
   isLoaded: boolean
   /** 加载中 */
@@ -124,12 +128,15 @@ export const useModelStore = create<ModelStoreState>((set) => ({
         })
       )
 
-      const upscaleModelMeta: Record<string, { defaultOutscale: number }> = {}
+      const upscaleModelMeta: Record<string, { defaultOutscale: number; supportsCustomOutscale: boolean }> = {}
       const upscaleGroups: ModelGroup[] = upscaleData.groups.map(
-        (g: { label: string; models: Array<{ id: string; name: string; description: string; scale: number; outscale: number }> }) => ({
+        (g: { label: string; models: Array<{ id: string; name: string; description: string; scale: number; outscale: number; supports_custom_outscale: boolean }> }) => ({
           label: stripDecorators(g.label),
           options: g.models.map((m) => {
-            upscaleModelMeta[m.id] = { defaultOutscale: m.outscale ?? m.scale ?? 4 }
+            upscaleModelMeta[m.id] = {
+              defaultOutscale: m.outscale ?? m.scale ?? 4,
+              supportsCustomOutscale: m.supports_custom_outscale ?? false,
+            }
             return {
               value: m.id,
               label: m.name,
