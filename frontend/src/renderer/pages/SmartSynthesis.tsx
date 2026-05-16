@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import {
-  Upload, Download, Square, Move, Trash2, RotateCcw,
+  Upload, Download, Square, Move, Trash2, RotateCcw, PenTool,
   Image, Shirt, User, Sparkles, Info, ChevronDown, ChevronRight,
   Crosshair, Wand2, MessageSquare, Loader2, Clock, XCircle, CheckCircle2,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import ImageCanvas from '../components/ImageCanvas'
+import MaskCanvas from '../components/MaskCanvas'
+import MaskToolbar from '../components/MaskToolbar'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
 import { Button, Select, Progress, showToast } from '../components/ui'
@@ -17,9 +19,9 @@ import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
+import { useMaskExport } from '../hooks/useMaskExport'
 import { DownloadStatus, ModelStatus } from '../constants'
 import type { SynthesisTagValue } from '../constants'
-import type { ROI } from '../stores/useImageStore'
 
 type CanvasTool = 'draw' | 'pan'
 
@@ -110,8 +112,10 @@ function defaultModel(models: SynthesisModel[], modeGroup: ModeGroup | undefined
 export default function SmartSynthesis() {
   const {
     sourceImage, resultImage, rois, selectedROIs, imageWidth, imageHeight,
+    maskStrokes, brushSettings, canvasTool,
     setSourceImage, setImageDimensions, setResultImage,
     addROI, removeROI, clearROIs, selectROI,
+    addMaskStroke, undoMaskStroke, clearMaskStrokes, setBrushSettings, setCanvasTool,
   } = useImageStore()
 
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
@@ -120,6 +124,7 @@ export default function SmartSynthesis() {
   const { options: deviceOptions } = useDeviceOptions()
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
+  const { exportCombinedMask } = useMaskExport()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
@@ -154,7 +159,7 @@ export default function SmartSynthesis() {
         if (cancelled) return
         const parsedModes: ModeGroup[] = (modesResp.modes ?? [])
           .map(parseModeGroup)
-          .filter(mode => mode.id !== 'upscale' && mode.id !== 'watermark_removal')  // 超分辨率和去水印有专门页签，从智能合成中移除
+          .filter((mode: ModeGroup) => mode.id !== 'upscale' && mode.id !== 'watermark_removal')  // 超分辨率和去水印有专门页签，从智能合成中移除
         const parsedModels: SynthesisModel[] = modelsResp.models ?? []
         setModeGroups(parsedModes)
         setAllModels(parsedModels)
@@ -329,17 +334,31 @@ export default function SmartSynthesis() {
     try {
       startProcess(selectedModel)
 
-      const roiList = rois.length > 0 ? rois.map((r) => [r.x1, r.y1, r.x2, r.y2]) : undefined
-
-      const result = await runSynthesis({
-        source_image: sourceImage,
-        reference_image: referenceImage ?? undefined,
-        rois: roiList,
-        mode: activeMode,
-        model_id: selectedModel,
-        device,
-        prompt,
-      })
+      // 使用合并遮罩模式（支持画笔遮罩 + ROI 矩形）
+      let result
+      if (maskStrokes.length > 0 || rois.length > 0) {
+        // 导出合并遮罩为 base64（画笔遮罩 + ROI 矩形）
+        const maskDataURL = await exportCombinedMask(maskStrokes, rois, imageWidth, imageHeight)
+        result = await runSynthesis({
+          source_image: sourceImage,
+          reference_image: referenceImage ?? undefined,
+          mask: maskDataURL,
+          mode: activeMode,
+          model_id: selectedModel,
+          device,
+          prompt,
+        })
+      } else {
+        // 无遮罩模式
+        result = await runSynthesis({
+          source_image: sourceImage,
+          reference_image: referenceImage ?? undefined,
+          mode: activeMode,
+          model_id: selectedModel,
+          device,
+          prompt,
+        })
+      }
 
       setResultImage(`data:image/png;base64,${result.image}`)
       setShowResult(true)
@@ -349,6 +368,47 @@ export default function SmartSynthesis() {
       setError(err.message)
       showToast('error', err.message)
     }
+  }
+
+  // 将遮罩笔划导出为 base64 PNG（主线程，简化版）
+  const exportMaskToDataURL = (strokes: any[], width: number, height: number): string => {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')!
+
+    // 黑色背景（遮罩区域为白色）
+    ctx.fillStyle = 'black'
+    ctx.fillRect(0, 0, width, height)
+
+    // 绘制所有笔划（白色表示遮罩区域）
+    strokes.forEach((stroke) => {
+      const isEraser = stroke.tool === 'eraser'
+      
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.lineWidth = stroke.size
+      ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over'
+      
+      if (!isEraser) {
+        ctx.strokeStyle = 'white'
+      }
+
+      ctx.beginPath()
+      const points = stroke.points
+      for (let i = 0; i < points.length; i += 2) {
+        const x = points[i]
+        const y = points[i + 1]
+        if (i === 0) {
+          ctx.moveTo(x, y)
+        } else {
+          ctx.lineTo(x, y)
+        }
+      }
+      ctx.stroke()
+    })
+
+    return canvas.toDataURL('image/png')
   }
 
   // ── 保存 ─────────────────────────────────────────────────────────────────
@@ -411,47 +471,80 @@ export default function SmartSynthesis() {
             />
           ) : (
             <>
-              <ImageCanvas
-                imageSrc={sourceImage}
-                rois={rois}
-                selectedROIs={selectedROIs}
-                tool={tool}
-                onROIDrawn={handleROIDrawn}
-                onROISelect={handleROISelect}
-                onImageLoad={handleImageLoad}
-              />
-              {/* 悬浮工具栏 */}
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1 bg-bg-secondary rounded-lg p-1 border border-border-subtle shadow-lg">
-                <button
-                  onClick={() => setTool('draw')}
-                  className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'draw' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
-                  title="绘制处理区域 (ROI)"
-                >
-                  <Square size={16} />
-                </button>
-                <button
-                  onClick={() => setTool('pan')}
-                  className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'pan' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
-                  title="平移"
-                >
-                  <Move size={16} />
-                </button>
-                <div className="w-px bg-border-subtle mx-0.5" />
-                <button
-                  onClick={handleOpenSource}
-                  className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
-                  title="更换主图"
-                >
-                  <Upload size={16} />
-                </button>
-                {showResult && (
-                  <button
-                    onClick={() => setShowResult(false)}
-                    className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
-                    title="返回编辑"
-                  >
-                    <RotateCcw size={16} />
-                  </button>
+              {/* 根据 canvasTool 切换画布 */}
+              {canvasTool === 'rectangle' ? (
+                <ImageCanvas
+                  imageSrc={sourceImage}
+                  rois={rois}
+                  selectedROIs={selectedROIs}
+                  tool={tool}
+                  onROIDrawn={handleROIDrawn}
+                  onROISelect={handleROISelect}
+                  onImageLoad={handleImageLoad}
+                />
+              ) : (
+                <MaskCanvas
+                  imageSrc={sourceImage}
+                  strokes={maskStrokes}
+                  brushSettings={brushSettings}
+                  canvasTool={canvasTool}
+                  onStrokeComplete={addMaskStroke}
+                  onUndo={undoMaskStroke}
+                />
+              )}
+
+              {/* 工具栏 */}
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
+                {canvasTool === 'rectangle' ? (
+                  <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 border border-border-subtle shadow-lg">
+                    <button
+                      onClick={() => setTool('draw')}
+                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'draw' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
+                      title="绘制处理区域 (ROI)"
+                    >
+                      <Square size={16} />
+                    </button>
+                    <button
+                      onClick={() => setTool('pan')}
+                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'pan' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
+                      title="平移"
+                    >
+                      <Move size={16} />
+                    </button>
+                    <button
+                      onClick={() => setCanvasTool('brush')}
+                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', canvasTool === 'brush' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
+                      title="画笔模式 (B)"
+                    >
+                      <PenTool size={16} />
+                    </button>
+                    <div className="w-px bg-border-subtle mx-0.5" />
+                    <button
+                      onClick={handleOpenSource}
+                      className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
+                      title="更换主图"
+                    >
+                      <Upload size={16} />
+                    </button>
+                    {showResult && (
+                      <button
+                        onClick={() => setShowResult(false)}
+                        className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
+                        title="返回编辑"
+                      >
+                        <RotateCcw size={16} />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <MaskToolbar
+                    brushSettings={brushSettings}
+                    canvasTool={canvasTool}
+                    canUndo={maskStrokes.length > 0}
+                    onBrushSettingsChange={setBrushSettings}
+                    onCanvasToolChange={setCanvasTool}
+                    onUndo={undoMaskStroke}
+                  />
                 )}
               </div>
             </>

@@ -61,6 +61,37 @@ export function useBackendAPI() {
   }
 
   /**
+   * 去水印（遮罩模式）
+   */
+  const inpaintWithMask = async (params: {
+    image: string
+    mask: string
+    model: string
+    device: string
+    dilation: number
+    disable_nsfw: boolean
+  }) => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/inpaint/with-mask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      try {
+        const data = await res.json()
+        throw new Error(data.message || data.detail || `遮罩去水印失败 (${res.status})`)
+      } catch (jsonErr) {
+        if (jsonErr instanceof SyntaxError) {
+          throw new Error(`遮罩去水印失败: ${await res.text()}`)
+        }
+        throw jsonErr
+      }
+    }
+    return res.json() as Promise<{ image: string }>
+  }
+
+  /**
    * 超分辨率
    */
   const upscale = async (params: { image: string; model: string; device: string; outscale?: number; tile?: number }) => {
@@ -162,6 +193,7 @@ export function useBackendAPI() {
     source_image: string
     reference_image?: string
     rois?: number[][]
+    mask?: string
     mode: string
     model_id: string
     device: string
@@ -200,7 +232,7 @@ export function useBackendAPI() {
   }
 
   return {
-    detectWatermark, inpaint, upscale, runPipeline,
+    detectWatermark, inpaint, inpaintWithMask, upscale, runPipeline,
     getPostprocessMethods, getInpaintModels, getUpscaleModels,
     getSynthesisModes, getSynthesisModels, runSynthesis, getDevices,
   }

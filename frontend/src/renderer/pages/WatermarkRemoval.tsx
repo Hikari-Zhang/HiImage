@@ -1,7 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { Upload, Wand2, Trash2, Download, Move, Square, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
+import { Upload, Wand2, Trash2, Download, Move, Square, PenTool, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import ImageCanvas from '../components/ImageCanvas'
+import MaskCanvas from '../components/MaskCanvas'
+import MaskToolbar from '../components/MaskToolbar'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
 import { Button, Select, Slider, Progress, showToast } from '../components/ui'
@@ -14,8 +16,9 @@ import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
+import { useMaskExport } from '../hooks/useMaskExport'
 import { PostprocessMethod, DownloadStatus, ModelStatus } from '../constants'
-import type { ROI } from '../stores/useImageStore'
+import type { MaskTool } from '../types/mask'
 
 type CanvasTool = 'draw' | 'pan'
 
@@ -30,12 +33,14 @@ const POSTPROCESS_OPTIONS = [
 export default function WatermarkRemoval() {
   const {
     sourceImage, resultImage, rois, selectedROIs, imageWidth, imageHeight,
+    maskStrokes, brushSettings, canvasTool,
     setSourceImage, setImageDimensions, setResultImage,
     addROI, removeROI, clearROIs, selectROI,
+    addMaskStroke, undoMaskStroke, clearMaskStrokes, setCanvasTool, setBrushSettings,
   } = useImageStore()
 
   const { isProcessing, progress, statusMessage, startProcess, updateProgress, finishProcess, setError, reset } = useProcessStore()
-  const { detectWatermark, inpaint, runPipeline } = useBackendAPI()
+  const { detectWatermark, inpaint, inpaintWithMask, runPipeline } = useBackendAPI()
   const {
     device, inpaintModel, defaultDilation, sensitivity, disableNsfw,
     postprocessMethod, postprocessEnabled,
@@ -47,6 +52,7 @@ export default function WatermarkRemoval() {
   const { options: deviceOptions } = useDeviceOptions()
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
+  const { exportMask, exportCombinedMask } = useMaskExport()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
@@ -201,7 +207,9 @@ export default function WatermarkRemoval() {
 
   // Process
   const handleProcess = async () => {
-    if (!sourceImage || rois.length === 0) return
+    if (!sourceImage) return
+    // 优先使用遮罩模式，否则使用 ROI 模式
+    if (maskStrokes.length === 0 && rois.length === 0) return
 
     // 检查当前模型的下载状态
     const task = downloadTasks[inpaintModel]
@@ -217,38 +225,45 @@ export default function WatermarkRemoval() {
 
     try {
       startProcess(inpaintModel)
-      const roiList = rois.map((r) => [r.x1, r.y1, r.x2, r.y2])
 
       const usePipeline = postprocessEnabled || upscaleEnabled
-
       let resultBase64: string
 
-      if (usePipeline) {
-        // 走完整 Pipeline
-        const result = await runPipeline({
-          image: sourceImage,
-          rois: roiList,
-          inpaint_model: inpaintModel,
-          device,
-          dilation: defaultDilation,
-          disable_nsfw: disableNsfw,
-          postprocess_method: postprocessMethod,
-          postprocess_enabled: postprocessEnabled,
-          upscale_enabled: upscaleEnabled,
-          upscale_model: upscaleModel,
-        })
-        resultBase64 = result.image
+      // 使用合并遮罩模式（支持画笔遮罩 + ROI 矩形）
+      if (maskStrokes.length > 0 || rois.length > 0) {
+        // 导出合并遮罩为 base64（画笔遮罩 + ROI 矩形）
+        const maskDataURL = await exportCombinedMask(maskStrokes, rois, imageWidth, imageHeight)
+
+        if (usePipeline) {
+          // 走完整 Pipeline（带遮罩）
+          const result = await runPipeline({
+            image: sourceImage,
+            mask: maskDataURL,
+            inpaint_model: inpaintModel,
+            device,
+            dilation: defaultDilation,
+            disable_nsfw: disableNsfw,
+            postprocess_method: postprocessMethod,
+            postprocess_enabled: postprocessEnabled,
+            upscale_enabled: upscaleEnabled,
+            upscale_model: upscaleModel,
+          })
+          resultBase64 = result.image
+        } else {
+          // 仅去水印（遮罩模式）
+          const result = await inpaintWithMask({
+            image: sourceImage,
+            mask: maskDataURL,
+            model: inpaintModel,
+            device,
+            dilation: defaultDilation,
+            disable_nsfw: disableNsfw,
+          })
+          resultBase64 = result.image
+        }
       } else {
-        // 仅去水印
-        const result = await inpaint({
-          image: sourceImage,
-          rois: roiList,
-          model: inpaintModel,
-          device,
-          dilation: defaultDilation,
-          disable_nsfw: disableNsfw,
-        })
-        resultBase64 = result.image
+        showToast('error', '请先绘制遮罩区域或框选 ROI 区域')
+        return
       }
 
       setResultImage(`data:image/png;base64,${resultBase64}`)
@@ -259,6 +274,47 @@ export default function WatermarkRemoval() {
       setError(err.message)
       showToast('error', err.message)
     }
+  }
+
+  // 将遮罩笔划导出为 base64 PNG（主线程，简化版）
+  const exportMaskToDataURL = (strokes: any[], width: number, height: number): string => {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')!
+
+    // 黑色背景（遮罩区域为白色）
+    ctx.fillStyle = 'black'
+    ctx.fillRect(0, 0, width, height)
+
+    // 绘制所有笔划（白色表示遮罩区域）
+    strokes.forEach((stroke) => {
+      const isEraser = stroke.tool === 'eraser'
+      
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      ctx.lineWidth = stroke.size
+      ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over'
+      
+      if (!isEraser) {
+        ctx.strokeStyle = 'white'
+      }
+
+      ctx.beginPath()
+      const points = stroke.points
+      for (let i = 0; i < points.length; i += 2) {
+        const x = points[i]
+        const y = points[i + 1]
+        if (i === 0) {
+          ctx.moveTo(x, y)
+        } else {
+          ctx.lineTo(x, y)
+        }
+      }
+      ctx.stroke()
+    })
+
+    return canvas.toDataURL('image/png')
   }
 
   // Save
@@ -305,6 +361,57 @@ export default function WatermarkRemoval() {
     selectedROIs.forEach((id) => removeROI(id))
   }
 
+  // Keyboard shortcuts (必须在 handleDeleteSelected 之后定义)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 忽略输入框中的按键
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return
+      }
+
+      switch (e.code) {
+        case 'KeyB':
+          if (!e.ctrlKey && !e.metaKey) {
+            setCanvasTool('brush')
+            setBrushSettings({ tool: 'brush' })
+          }
+          break
+        case 'KeyE':
+          if (!e.ctrlKey && !e.metaKey) {
+            setCanvasTool('brush')
+            setBrushSettings({ tool: 'eraser' })
+          }
+          break
+        case 'KeyW':
+          if (!e.ctrlKey && !e.metaKey) {
+            setBrushSettings({ tool: 'magicWand' })
+          }
+          break
+        case 'BracketLeft': // [
+          if (!e.ctrlKey && !e.metaKey) {
+            setBrushSettings({ size: Math.max(1, brushSettings.size - 5) })
+          }
+          break
+        case 'BracketRight': // ]
+          if (!e.ctrlKey && !e.metaKey) {
+            setBrushSettings({ size: Math.min(100, brushSettings.size + 5) })
+          }
+          break
+        case 'Delete':
+        case 'Backspace':
+          if (canvasTool === 'brush') {
+            undoMaskStroke()
+          } else {
+            handleDeleteSelected()
+          }
+          break
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [canvasTool, brushSettings.size, setCanvasTool, setBrushSettings, undoMaskStroke, handleDeleteSelected])
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <PageHeader
@@ -332,47 +439,72 @@ export default function WatermarkRemoval() {
             <ImageCompare beforeSrc={sourceImage} afterSrc={resultImage} beforeLabel="原图" afterLabel="处理后" />
           ) : (
             <>
-              <ImageCanvas
+              {/* 始终显示 MaskCanvas，同时支持 ROI 和画笔遮罩 */}
+              <MaskCanvas
                 imageSrc={sourceImage}
+                strokes={maskStrokes}
+                brushSettings={brushSettings}
+                canvasTool={canvasTool}
                 rois={rois}
                 selectedROIs={selectedROIs}
-                tool={tool}
-                onROIDrawn={handleROIDrawn}
                 onROISelect={handleROISelect}
-                onImageLoad={handleImageLoad}
+                onROIDrawn={handleROIDrawn}
+                onStrokeComplete={addMaskStroke}
+                onUndo={undoMaskStroke}
               />
-              {/* Toolbar */}
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1 bg-bg-secondary rounded-lg p-1 border border-border-subtle shadow-lg">
-                <button
-                  onClick={() => setTool('draw')}
-                  className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'draw' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
-                  title="绘制 ROI (R)"
-                >
-                  <Square size={16} />
-                </button>
-                <button
-                  onClick={() => setTool('pan')}
-                  className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'pan' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
-                  title="平移 (Space)"
-                >
-                  <Move size={16} />
-                </button>
-                <div className="w-px bg-border-subtle mx-0.5" />
-                <button
-                  onClick={handleOpenFile}
-                  className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
-                  title="打开图片"
-                >
-                  <Upload size={16} />
-                </button>
-                {showResult && (
-                  <button
-                    onClick={() => setShowResult(false)}
-                    className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
-                    title="返回编辑"
-                  >
-                    <RotateCcw size={16} />
-                  </button>
+
+              {/* 工具栏 */}
+              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
+                {canvasTool === 'rectangle' ? (
+                  <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 border border-border-subtle shadow-lg">
+                    <button
+                      onClick={() => setTool('draw')}
+                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'draw' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
+                      title="绘制 ROI (R)"
+                    >
+                      <Square size={16} />
+                    </button>
+                    <button
+                      onClick={() => setTool('pan')}
+                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'pan' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
+                      title="平移 (Space)"
+                    >
+                      <Move size={16} />
+                    </button>
+                    <button
+                      onClick={() => setCanvasTool('brush')}
+                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', canvasTool === 'brush' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
+                      title="画笔模式 (B)"
+                    >
+                      <PenTool size={16} />
+                    </button>
+                    <div className="w-px bg-border-subtle mx-0.5" />
+                    <button
+                      onClick={handleOpenFile}
+                      className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
+                      title="打开图片"
+                    >
+                      <Upload size={16} />
+                    </button>
+                    {showResult && (
+                      <button
+                        onClick={() => setShowResult(false)}
+                        className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
+                        title="返回编辑"
+                      >
+                        <RotateCcw size={16} />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <MaskToolbar
+                    brushSettings={brushSettings}
+                    canvasTool={canvasTool}
+                    canUndo={maskStrokes.length > 0}
+                    onBrushSettingsChange={setBrushSettings}
+                    onCanvasToolChange={setCanvasTool}
+                    onUndo={undoMaskStroke}
+                  />
                 )}
               </div>
             </>
@@ -386,7 +518,19 @@ export default function WatermarkRemoval() {
           <section>
             <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">水印区域</h3>
             <div className="bg-bg-primary rounded border border-border-subtle p-1 min-h-[60px] max-h-[140px] overflow-y-auto">
-              {rois.length === 0 ? (
+              {/* 画笔遮罩模式 */}
+              {maskStrokes.length > 0 ? (
+                <div className="p-2">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-fg-primary">画笔遮罩</span>
+                    <span className="text-xs text-fg-accent">{maskStrokes.length} 笔</span>
+                  </div>
+                  <div className="text-xs text-fg-secondary">
+                    已绘制 {maskStrokes.filter(s => s.tool === 'brush').length} 笔画笔，
+                    {maskStrokes.filter(s => s.tool === 'eraser').length} 笔橡皮擦
+                  </div>
+                </div>
+              ) : rois.length === 0 ? (
                 <p className="text-xs text-fg-secondary p-2 text-center">在画布上拖拽绘制区域</p>
               ) : (
                 rois.map((roi, i) => (
@@ -410,17 +554,25 @@ export default function WatermarkRemoval() {
               )}
             </div>
             <div className="flex gap-1 mt-2">
-              <Button size="sm" variant="primary" onClick={handleAutoDetect} icon={<Wand2 size={12} />} className="flex-1">
-                自动检测
-              </Button>
-              {selectedROIs.length > 0 ? (
-                <Button size="sm" variant="danger" onClick={handleDeleteSelected} className="flex-1">
-                  删除选中 ({selectedROIs.length})
+              {maskStrokes.length > 0 ? (
+                <Button size="sm" variant="danger" onClick={clearMaskStrokes} className="flex-1">
+                  清除遮罩
                 </Button>
               ) : (
-                <Button size="sm" variant="ghost" onClick={clearROIs} className="flex-1" disabled={rois.length === 0}>
-                  清除全部
-                </Button>
+                <>
+                  <Button size="sm" variant="primary" onClick={handleAutoDetect} icon={<Wand2 size={12} />} className="flex-1">
+                    自动检测
+                  </Button>
+                  {selectedROIs.length > 0 ? (
+                    <Button size="sm" variant="danger" onClick={handleDeleteSelected} className="flex-1">
+                      删除选中 ({selectedROIs.length})
+                    </Button>
+                  ) : (
+                    <Button size="sm" variant="ghost" onClick={clearROIs} className="flex-1" disabled={rois.length === 0}>
+                      清除全部
+                    </Button>
+                  )}
+                </>
               )}
             </div>
           </section>
@@ -529,10 +681,11 @@ export default function WatermarkRemoval() {
               const task = downloadTasks[inpaintModel]
               const isModelBusy = task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED
               const isModelMissing = task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR
+              const canProcess = sourceImage && (maskStrokes.length > 0 || rois.length > 0) && !isModelBusy
               return (
                 <Button
                   onClick={handleProcess}
-                  disabled={isProcessing || rois.length === 0 || !sourceImage || isModelBusy}
+                  disabled={isProcessing || !canProcess}
                   loading={isProcessing}
                   className="w-full"
                   size="lg"

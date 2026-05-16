@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import type { MaskStroke, BrushSettings, MaskTool } from '../types/mask'
+import { DEFAULT_BRUSH_SETTINGS, MAX_UNDO_STEPS } from '../types/mask'
 
 export interface ROI {
   id: string
@@ -17,6 +19,12 @@ interface ImageState {
   rois: ROI[]
   selectedROIs: string[]
 
+  // 遮罩绘制相关状态
+  maskStrokes: MaskStroke[]
+  brushSettings: BrushSettings
+  maskDataURL: string | null
+  canvasTool: MaskTool
+
   setSourceImage: (image: string | null, filePath?: string | null) => void
   setImageDimensions: (width: number, height: number) => void
   setResultImage: (image: string | null) => void
@@ -27,6 +35,14 @@ interface ImageState {
   deselectROI: (id: string) => void
   setROIs: (rois: ROI[]) => void
   reset: () => void
+
+  // 遮罩绘制相关方法
+  setBrushSettings: (settings: Partial<BrushSettings>) => void
+  addMaskStroke: (stroke: MaskStroke) => void
+  undoMaskStroke: () => void
+  clearMaskStrokes: () => void
+  setMaskDataURL: (url: string | null) => void
+  setCanvasTool: (tool: MaskTool) => void
 }
 
 let roiCounter = 0
@@ -40,6 +56,12 @@ export const useImageStore = create<ImageState>((set) => ({
   rois: [],
   selectedROIs: [],
 
+  // 遮罩相关状态初始值
+  maskStrokes: [],
+  brushSettings: DEFAULT_BRUSH_SETTINGS,
+  maskDataURL: null,
+  canvasTool: 'rectangle',
+
   setSourceImage: (image, filePath) =>
     set({
       sourceImage: image,
@@ -47,6 +69,8 @@ export const useImageStore = create<ImageState>((set) => ({
       resultImage: null,
       rois: [],
       selectedROIs: [],
+      maskStrokes: [],
+      maskDataURL: null,
     }),
 
   setImageDimensions: (width, height) => set({ imageWidth: width, imageHeight: height }),
@@ -80,6 +104,33 @@ export const useImageStore = create<ImageState>((set) => ({
 
   setROIs: (rois) => set({ rois }),
 
+  // 遮罩相关方法实现
+  setBrushSettings: (settings) =>
+    set((state) => ({
+      brushSettings: { ...state.brushSettings, ...settings },
+    })),
+
+  addMaskStroke: (stroke) =>
+    set((state) => {
+      const newStrokes = [...state.maskStrokes, stroke]
+      // 限制撤销栈大小
+      if (newStrokes.length > MAX_UNDO_STEPS) {
+        newStrokes.shift()
+      }
+      return { maskStrokes: newStrokes }
+    }),
+
+  undoMaskStroke: () =>
+    set((state) => ({
+      maskStrokes: state.maskStrokes.slice(0, -1),
+    })),
+
+  clearMaskStrokes: () => set({ maskStrokes: [], maskDataURL: null }),
+
+  setMaskDataURL: (url) => set({ maskDataURL: url }),
+
+  setCanvasTool: (tool) => set({ canvasTool: tool }),
+
   reset: () =>
     set({
       sourceImage: null,
@@ -89,5 +140,9 @@ export const useImageStore = create<ImageState>((set) => ({
       imageHeight: 0,
       rois: [],
       selectedROIs: [],
+      maskStrokes: [],
+      maskDataURL: null,
+      brushSettings: DEFAULT_BRUSH_SETTINGS,
+      canvasTool: 'rectangle',
     }),
 }))
