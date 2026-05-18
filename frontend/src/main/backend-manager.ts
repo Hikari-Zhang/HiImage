@@ -344,9 +344,15 @@ export class BackendManager {
 
   private getStartCommand(): { command: string; args: string[] } {
     if (app.isPackaged) {
-      const backendPath = path.join(process.resourcesPath, 'backend', 'hiimage-backend')
-      return { command: backendPath, args: ['--port', String(this.localPort)] }
+      // 打包模式：使用 bundled venv Python + backend 脚本
+      const resourcesPath = process.resourcesPath!
+      const venvPython = process.platform === 'win32'
+        ? path.join(resourcesPath, 'venv', 'Scripts', 'python.exe')
+        : path.join(resourcesPath, 'venv', 'bin', 'python')
+      const runScript = path.join(resourcesPath, 'backend', 'run.py')
+      return { command: venvPython, args: [runScript, '--port', String(this.localPort)] }
     } else {
+      // 开发模式：使用本地 venv
       const projectRoot = path.join(__dirname, '..', '..', '..')
       const venvPython = process.platform === 'win32'
         ? path.join(projectRoot, 'venv', 'Scripts', 'python.exe')

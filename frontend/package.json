@@ -47,9 +47,6 @@
       "target": [
         "dmg"
       ],
-      "arch": [
-        "arm64"
-      ],
       "category": "public.app-category.graphics-design",
       "icon": "../assets/icons/icon.icns"
     },
@@ -61,18 +58,23 @@
     },
     "extraResources": [
       {
-        "from": "../assets/icons",
-        "to": "icons"
-      },
-      {
-        "from": "../backend/dist/hiimage-backend",
-        "to": "backend"
-      },
-      {
-        "from": "../models",
-        "to": "models",
+        "from": "../venv-packed",
+        "to": "venv",
         "filter": [
+          "!**/__pycache__",
+          "!**/*.pyc",
           "!**/.DS_Store"
+        ]
+      },
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "!**/__pycache__",
+          "!**/*.pyc",
+          "!**/.DS_Store",
+          "!**/*.pyd",
+          "!**/dist/"
         ]
       },
       {
