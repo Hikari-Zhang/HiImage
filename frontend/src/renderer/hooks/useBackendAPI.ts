@@ -109,6 +109,35 @@ export function useBackendAPI() {
   }
 
   /**
+   * 超分辨率 - 批量处理
+   * 支持 Electron 模式（传文件路径）和 Web 模式（传 base64）
+   */
+  const upscaleBatch = async (params: {
+    images: string[]  // base64 数组或文件路径数组
+    model: string
+    device: string
+    outscale?: number
+    tile?: number
+    output_dir?: string  // Electron 模式：直接保存到此目录
+    is_file_path?: boolean  // true = images 是文件路径数组
+  }) => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/upscale/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`批量超分辨率失败: ${err}`)
+    }
+    return res.json() as Promise<{
+      results: { index: number; status: 'success' | 'error'; image?: string; outputPath?: string; width?: number; height?: number; error?: string; fileName?: string }[]
+      summary: { total: number; success: number; failed: number }
+    }>
+  }
+
+  /**
    * 获取模型列表
    */
   const getInpaintModels = async () => {
@@ -232,7 +261,7 @@ export function useBackendAPI() {
   }
 
   return {
-    detectWatermark, inpaint, inpaintWithMask, upscale, runPipeline,
+    detectWatermark, inpaint, inpaintWithMask, upscale, upscaleBatch, runPipeline,
     getPostprocessMethods, getInpaintModels, getUpscaleModels,
     getSynthesisModes, getSynthesisModels, runSynthesis, getDevices,
   }

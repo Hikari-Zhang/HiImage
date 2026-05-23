@@ -1,10 +1,12 @@
 import { useState, useRef } from 'react'
-import { Upload, Download } from 'lucide-react'
+import { Upload, Download, Images, List, CheckCircle2 } from 'lucide-react'
 import { Button, Select, Progress, showToast } from '../components/ui'
 import ImageCanvas from '../components/ImageCanvas'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
 import ModelSelect from '../components/ModelSelect/ModelSelect'
+import BatchImageQueue, { type ImageQueueItem } from '../components/BatchImageQueue'
+import BatchProgress from '../components/BatchProgress'
 import { useImageStore } from '../stores/useImageStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
@@ -28,6 +30,15 @@ export default function SuperResolution() {
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
 
+  // 模式：'single' | 'batch'
+  const [mode, setMode] = useState<'single' | 'batch'>('single')
+
+  // 批量模式状态
+  const [batchItems, setBatchItems] = useState<ImageQueueItem[]>([])
+  const [batchCurrentIndex, setBatchCurrentIndex] = useState<number | null>(null)
+  const [batchResultDir, setBatchResultDir] = useState<string | null>(null)
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false)
+
   const [resultImage, setResultImage] = useState<string | null>(null)
   const [outputSize, setOutputSize] = useState({ w: 0, h: 0 })
   // outscale: null 表示跟随模型默认值，用户可手动覆盖
@@ -46,6 +57,24 @@ export default function SuperResolution() {
 
   // 加载原图（写入共享 useImageStore）
   const loadSource = (dataUrl: string, filePath?: string) => {
+    if (mode === 'batch') {
+      // 批量模式：添加到队列
+      const img = new Image()
+      img.onload = () => {
+        const newItem: ImageQueueItem = {
+          id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
+          fileName: filePath ? filePath.split(/[\\/]/).pop() || 'unknown.png' : `image_${batchItems.length + 1}.png`,
+          filePath: filePath,
+          dataUrl: dataUrl,
+          status: 'pending',
+        }
+        setBatchItems(prev => [...prev, newItem])
+        showToast('success', `已添加到队列: ${newItem.fileName}`)
+      }
+      img.src = dataUrl
+      return
+    }
+    // 单图模式：原有逻辑
     setResultImage(null)
     reset()
     setSourceImage(dataUrl, filePath)
@@ -60,13 +89,17 @@ export default function SuperResolution() {
   // Open file
   const handleOpenFile = async () => {
     if (window.electronAPI) {
-      const filePath = await window.electronAPI.openFile()
-      if (filePath) {
-        try {
-          const dataUrl = await window.electronAPI.readImageFile(filePath)
-          loadSource(dataUrl, filePath)
-        } catch (err: any) {
-          showToast('error', `读取图片失败: ${err.message}`)
+      const handler = mode === 'batch' ? window.electronAPI.openFiles?.() : window.electronAPI.openFile()
+      const result = await handler
+      if (result) {
+        const paths = Array.isArray(result) ? result : [result]
+        for (const filePath of paths) {
+          try {
+            const dataUrl = await window.electronAPI.readImageFile(filePath)
+            loadSource(dataUrl, filePath)
+          } catch (err: any) {
+            showToast('error', `读取图片失败: ${err.message}`)
+          }
         }
       }
     } else {
@@ -75,18 +108,30 @@ export default function SuperResolution() {
   }
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const electronFile = file as File & { path?: string }
-    if (window.electronAPI && electronFile.path) {
-      window.electronAPI.readImageFile(electronFile.path)
-        .then((dataUrl) => loadSource(dataUrl, electronFile.path))
-        .catch((err: any) => showToast('error', `读取图片失败: ${err.message}`))
-      return
+    const files = e.target.files
+    if (!files || files.length === 0) return
+
+    if (mode === 'batch') {
+      // 批量模式：处理所有文件
+      Array.from(files).forEach(file => {
+        const reader = new FileReader()
+        reader.onload = () => loadSource(reader.result as string, file.name)
+        reader.readAsDataURL(file)
+      })
+    } else {
+      // 单图模式：只处理第一个文件
+      const file = files[0]
+      const electronFile = file as File & { path?: string }
+      if (window.electronAPI && electronFile.path) {
+        window.electronAPI.readImageFile(electronFile.path)
+          .then((dataUrl) => loadSource(dataUrl, electronFile.path))
+          .catch((err: any) => showToast('error', `读取图片失败: ${err.message}`))
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => loadSource(reader.result as string)
+      reader.readAsDataURL(file)
     }
-    const reader = new FileReader()
-    reader.onload = () => loadSource(reader.result as string)
-    reader.readAsDataURL(file)
   }
 
   // Update output size when model changes
@@ -102,18 +147,32 @@ export default function SuperResolution() {
   // Drag & drop
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
-    const file = e.dataTransfer.files[0]
-    if (!file || !file.type.startsWith('image/')) return
-    const electronFile = file as File & { path?: string }
-    if (window.electronAPI && electronFile.path) {
-      window.electronAPI.readImageFile(electronFile.path)
-        .then((dataUrl) => loadSource(dataUrl, electronFile.path))
-        .catch((err: any) => showToast('error', `读取图片失败: ${err.message}`))
-      return
+    const files = e.dataTransfer.files
+    if (!files || files.length === 0) return
+
+    if (mode === 'batch') {
+      // 批量模式：处理所有图片文件
+      Array.from(files).forEach(file => {
+        if (!file.type.startsWith('image/')) return
+        const reader = new FileReader()
+        reader.onload = () => loadSource(reader.result as string, file.name)
+        reader.readAsDataURL(file)
+      })
+    } else {
+      // 单图模式：只处理第一个
+      const file = files[0]
+      if (!file || !file.type.startsWith('image/')) return
+      const electronFile = file as File & { path?: string }
+      if (window.electronAPI && electronFile.path) {
+        window.electronAPI.readImageFile(electronFile.path)
+          .then((dataUrl) => loadSource(dataUrl, electronFile.path))
+          .catch((err: any) => showToast('error', `读取图片失败: ${err.message}`))
+        return
+      }
+      const reader = new FileReader()
+      reader.onload = () => loadSource(reader.result as string)
+      reader.readAsDataURL(file)
     }
-    const reader = new FileReader()
-    reader.onload = () => loadSource(reader.result as string)
-    reader.readAsDataURL(file)
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -121,7 +180,115 @@ export default function SuperResolution() {
     e.dataTransfer.dropEffect = 'copy'
   }
 
-  // Process
+  // Process - Batch mode
+  const handleBatchUpscale = async () => {
+    if (batchItems.length === 0) return
+
+    // 检查模型状态
+    const task = downloadTasks[upscaleModel]
+    if (task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED) {
+      showToast('info', '模型下载中，请稍候...')
+      return
+    }
+    if (task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR) {
+      showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
+      startDownload(upscaleModel)
+      return
+    }
+
+    setIsBatchProcessing(true)
+    setBatchCurrentIndex(0)
+
+    try {
+      // 准备文件路径列表（Electron 模式）或 base64 列表（Web 模式）
+      const isElectron = !!window.electronAPI
+      let images: string[] = []
+      let isFilePath = false
+
+      if (isElectron) {
+        // Electron 模式：直接传文件路径
+        images = batchItems.map(item => item.filePath || '')
+        isFilePath = true
+      } else {
+        // Web 模式：传 base64
+        images = batchItems.map(item => item.dataUrl || '')
+      }
+
+      // 选择输出目录（Electron 模式）
+      let outputDir: string | undefined = undefined
+      if (isElectron) {
+        const dir = await window.electronAPI.openDirectory?.()
+        if (!dir) {
+          setIsBatchProcessing(false)
+          return
+        }
+        outputDir = dir
+      }
+
+      showToast('info', `开始批量处理 ${batchItems.length} 张图片...`)
+
+      // 调用后端批量接口
+      const baseUrl = await window.electronAPI?.getBackendURL() || 'http://localhost:8000'
+      const result = await fetch(`${baseUrl}/api/upscale/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          images,
+          model: upscaleModel,
+          device,
+          outscale: currentScale,
+          tile: tile ?? (upscaleTile || 0),
+          output_dir: outputDir,
+          is_file_path: isFilePath,
+        }),
+      })
+
+      if (!result.ok) {
+        throw new Error(`批量处理失败: ${result.statusText}`)
+      }
+
+      const data = await result.json()
+
+      // 更新队列状态
+      const newItems = [...batchItems]
+      data.results.forEach((r: any) => {
+        if (newItems[r.index]) {
+          if (r.status === 'success') {
+            newItems[r.index] = {
+              ...newItems[r.index],
+              status: 'success',
+              resultPath: r.outputPath,
+              resultDataUrl: r.image ? `data:image/png;base64,${r.image}` : undefined,
+            }
+          } else {
+            newItems[r.index] = {
+              ...newItems[r.index],
+              status: 'error',
+              error: r.error,
+            }
+          }
+        }
+      })
+
+      setBatchItems(newItems)
+      setBatchCurrentIndex(null)
+
+      const successCount = data.summary.success
+      const failedCount = data.summary.failed
+      showToast(
+        'success',
+        `批量处理完成: ${successCount} 成功${failedCount > 0 ? `, ${failedCount} 失败` : ''}`
+      )
+
+    } catch (err: any) {
+      showToast('error', err.message)
+      setBatchCurrentIndex(null)
+    } finally {
+      setIsBatchProcessing(false)
+    }
+  }
+
+  // Process - Single mode
   const handleUpscale = async () => {
     if (!sourceImage) return
 
@@ -155,7 +322,7 @@ export default function SuperResolution() {
     }
   }
 
-  // Save
+  // Save single image
   const handleSave = async () => {
     if (!resultImage) return
     const { sourceFilePath } = useImageStore.getState()
@@ -190,12 +357,73 @@ export default function SuperResolution() {
     showToast('success', '已将处理结果设为原图')
   }
 
+  // 批量模式：移除单张图片
+  const handleRemoveBatchItem = (id: string) => {
+    setBatchItems(prev => prev.filter(item => item.id !== id))
+  }
+
+  // 批量模式：清空队列
+  const handleClearBatch = () => {
+    setBatchItems([])
+    setBatchCurrentIndex(null)
+  }
+
+  // 批量模式：添加图片到队列
+  const handleAddToBatch = (files: FileList | string[]) => {
+    if (Array.isArray(files)) {
+      // 文件路径数组（Electron 模式）
+      files.forEach(filePath => {
+        if (window.electronAPI) {
+          window.electronAPI.readImageFile(filePath)
+            .then((dataUrl) => loadSource(dataUrl, filePath))
+            .catch((err: any) => showToast('error', `读取图片失败: ${err.message}`))
+        }
+      })
+    } else {
+      // FileList（Web 模式）
+      Array.from(files).forEach(file => {
+        const reader = new FileReader()
+        reader.onload = () => loadSource(reader.result as string, file.name)
+        reader.readAsDataURL(file)
+      })
+    }
+  }
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <PageHeader
         title="超分辨率"
-        subtitle={imageWidth > 0 ? `${imageWidth}x${imageHeight} → ${outputSize.w}x${outputSize.h}` : undefined}
-        right={<span className="text-xs text-fg-secondary">{upscaleModel.replace('RealESRGAN_', '')} | {device}</span>}
+        subtitle={
+          mode === 'batch'
+            ? `${batchItems.length} 张图片 | 输出: ${currentScale}x | ${upscaleModel.replace('RealESRGAN_', '')}`
+            : imageWidth > 0 ? `${imageWidth}x${imageHeight} → ${outputSize.w}x${outputSize.h}` : undefined
+        }
+        right={
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setMode('single')}
+              className={`px-2 py-1 rounded text-xs ${
+                mode === 'single'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-bg-primary text-fg-secondary hover:text-fg-primary'
+              }`}
+            >
+              <Upload size={12} className="inline mr-1" />
+              单图
+            </button>
+            <button
+              onClick={() => setMode('batch')}
+              className={`px-2 py-1 rounded text-xs ${
+                mode === 'batch'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-bg-primary text-fg-secondary hover:text-fg-primary'
+              }`}
+            >
+              <Images size={12} className="inline mr-1" />
+              批量
+            </button>
+          </div>
+        }
       />
 
       {/* Content */}
@@ -206,7 +434,19 @@ export default function SuperResolution() {
           onDrop={handleDrop}
           onDragOver={handleDragOver}
         >
-          {!sourceImage ? (
+          {mode === 'batch' ? (
+            /* 批量模式：显示图片队列 */
+            <div className="w-full h-full p-4">
+              <BatchImageQueue
+                items={batchItems}
+                currentIndex={batchCurrentIndex}
+                onRemove={handleRemoveBatchItem}
+                onClear={handleClearBatch}
+                onAdd={handleAddToBatch}
+                disabled={isBatchProcessing}
+              />
+            </div>
+          ) : !sourceImage ? (
             <div className="flex flex-col items-center gap-4 text-fg-secondary">
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽图片到此处，或点击打开文件</p>
@@ -233,7 +473,7 @@ export default function SuperResolution() {
               onImageLoad={(w, h) => setImageDimensions(w, h)}
             />
           )}
-          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileInput} />
+          <input ref={fileInputRef} type="file" accept="image/*" multiple={mode === 'batch'} className="hidden" onChange={handleFileInput} />
         </div>
 
         {/* Control panel */}
@@ -308,94 +548,154 @@ export default function SuperResolution() {
             </p>
           </div>
 
-          {/* Image info */}
-          <section>
-            <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">图像信息</h3>
-            <div className="bg-bg-primary rounded border border-border-subtle p-2.5 space-y-1.5">
-              <div className="flex justify-between text-xs">
-                <span className="text-fg-secondary">输入尺寸</span>
-                <span className="text-fg-primary">{imageWidth > 0 ? `${imageWidth} x ${imageHeight}` : '-'}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-fg-secondary">输出尺寸</span>
-                <span className="text-status-success">{outputSize.w > 0 ? `${outputSize.w} x ${outputSize.h}` : '-'}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-fg-secondary">放大倍率</span>
-                <span className="text-fg-accent">{currentScale}x</span>
-              </div>
-              {imageWidth > 0 && (
+          {/* Image info - Single mode only */}
+          {mode === 'single' && (
+            <section>
+              <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">图像信息</h3>
+              <div className="bg-bg-primary rounded border border-border-subtle p-2.5 space-y-1.5">
                 <div className="flex justify-between text-xs">
-                  <span className="text-fg-secondary">预计大小</span>
-                  <span className="text-fg-primary">~{Math.round(outputSize.w * outputSize.h * 3 / 1024 / 1024)} MB</span>
+                  <span className="text-fg-secondary">输入尺寸</span>
+                  <span className="text-fg-primary">{imageWidth > 0 ? `${imageWidth} x ${imageHeight}` : '-'}</span>
                 </div>
-              )}
-            </div>
-          </section>
+                <div className="flex justify-between text-xs">
+                  <span className="text-fg-secondary">输出尺寸</span>
+                  <span className="text-status-success">{outputSize.w > 0 ? `${outputSize.w} x ${outputSize.h}` : '-'}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-fg-secondary">放大倍率</span>
+                  <span className="text-fg-accent">{currentScale}x</span>
+                </div>
+                {imageWidth > 0 && (
+                  <div className="flex justify-between text-xs">
+                    <span className="text-fg-secondary">预计大小</span>
+                    <span className="text-fg-primary">~{Math.round(outputSize.w * outputSize.h * 3 / 1024 / 1024)} MB</span>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {/* Batch Progress */}
+          {mode === 'batch' && isBatchProcessing && (
+            <BatchProgress
+              current={batchCurrentIndex || 0}
+              total={batchItems.length}
+            />
+          )}
 
           {/* Action */}
           <div className="mt-auto pt-2 space-y-2">
-            {(() => {
-              const task = downloadTasks[upscaleModel]
-              const isModelBusy = task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED
-              return (
+            {mode === 'batch' ? (
+              <>
                 <Button
-                  onClick={handleUpscale}
-                  disabled={!sourceImage || isProcessing || isModelBusy}
-                  loading={isProcessing}
+                  onClick={handleBatchUpscale}
+                  disabled={batchItems.length === 0 || isBatchProcessing}
+                  loading={isBatchProcessing}
                   className="w-full"
                   size="lg"
                 >
-                  {isProcessing
-                    ? statusMessage
-                    : (() => {
-                        const t = downloadTasks[upscaleModel]
-                        if (t?.status === DownloadStatus.DOWNLOADING) return '等待下载...'
-                        if (t?.status === DownloadStatus.QUEUED) return `排队中 #${t.position}`
-                        if (t?.status === ModelStatus.MISSING || t?.status === DownloadStatus.ERROR) return '点击下载并处理'
-                        return '开始超分'
-                      })()}
+                  {isBatchProcessing ? '处理中...' : `开始批量处理 (${batchItems.length} 张)`}
                 </Button>
-              )
-            })()}
 
-            {isProcessing && (
-              <Progress value={progress} label={`${statusMessage} ${progress > 0 ? progress + '%' : ''}`} />
+                {batchItems.some(i => i.status === 'success') && (
+                  <Button
+                    variant="ghost"
+                    onClick={async () => {
+                      if (window.electronAPI) {
+                        const dir = await window.electronAPI.openDirectory?.()
+                        if (dir) {
+                          showToast('success', `结果已保存至: ${dir}`)
+                        }
+                      } else {
+                        showToast('info', 'Web 模式下结果已在队列中显示')
+                      }
+                    }}
+                    className="w-full"
+                    size="sm"
+                  >
+                    保存全部结果
+                  </Button>
+                )}
+              </>
+            ) : (
+              <>
+                {(() => {
+                  const task = downloadTasks[upscaleModel]
+                  const isModelBusy = task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED
+                  return (
+                    <Button
+                      onClick={handleUpscale}
+                      disabled={!sourceImage || isProcessing || isModelBusy}
+                      loading={isProcessing}
+                      className="w-full"
+                      size="lg"
+                    >
+                      {isProcessing
+                        ? statusMessage
+                        : (() => {
+                            const t = downloadTasks[upscaleModel]
+                            if (t?.status === DownloadStatus.DOWNLOADING) return '等待下载...'
+                            if (t?.status === DownloadStatus.QUEUED) return `排队中 #${t.position}`
+                            if (t?.status === ModelStatus.MISSING || t?.status === DownloadStatus.ERROR) return '点击下载并处理'
+                            return '开始超分'
+                          })()}
+                    </Button>
+                  )
+                })()}
+
+                {isProcessing && (
+                  <Progress value={progress} label={`${statusMessage} ${progress > 0 ? progress + '%' : ''}`} />
+                )}
+
+                {resultImage && (
+                  <Button
+                    variant="ghost"
+                    onClick={handleSave}
+                    icon={<Download size={14} />}
+                    className="w-full"
+                    size="sm"
+                  >
+                    保存结果
+                  </Button>
+                )}
+
+                {resultImage && (
+                  <Button
+                    variant="ghost"
+                    onClick={handleUseResultAsSource}
+                    icon={<Upload size={14} />}
+                    className="w-full"
+                    size="sm"
+                  >
+                    将结果设为原图
+                  </Button>
+                )}
+
+                {sourceImage && !resultImage && (
+                  <Button
+                    variant="ghost"
+                    onClick={handleOpenFile}
+                    icon={<Upload size={14} />}
+                    className="w-full"
+                    size="sm"
+                  >
+                    更换图片
+                  </Button>
+                )}
+              </>
             )}
 
-            {resultImage && (
-              <Button
-                variant="ghost"
-                onClick={handleSave}
-                icon={<Download size={14} />}
-                className="w-full"
-                size="sm"
-              >
-                保存结果
-              </Button>
-            )}
-
-            {resultImage && (
-              <Button
-                variant="ghost"
-                onClick={handleUseResultAsSource}
-                icon={<Upload size={14} />}
-                className="w-full"
-                size="sm"
-              >
-                将结果设为原图
-              </Button>
-            )}
-
-            {sourceImage && !resultImage && (
+            {/* 选择图片按钮（批量模式） */}
+            {mode === 'batch' && (
               <Button
                 variant="ghost"
                 onClick={handleOpenFile}
-                icon={<Upload size={14} />}
+                disabled={isBatchProcessing}
+                icon={<Images size={14} />}
                 className="w-full"
                 size="sm"
               >
-                更换图片
+                选择图片
               </Button>
             )}
           </div>

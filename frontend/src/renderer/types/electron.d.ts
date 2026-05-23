@@ -6,6 +6,8 @@ export interface BackendConfig {
 
 export interface ElectronAPI {
   openFile: () => Promise<string | null>
+  openFiles: () => Promise<string[] | null>
+  openDirectory: () => Promise<string | null>
   saveFile: (defaultPath?: string) => Promise<string | null>
   saveImageFile: (filePath: string, base64Data: string) => Promise<{ success: boolean; path?: string; error?: string }>
   readImageFile: (filePath: string) => Promise<string>

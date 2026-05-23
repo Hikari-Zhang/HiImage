@@ -66,13 +66,32 @@ function createWindow(): void {
 
 // IPC Handlers
 function setupIPC(): void {
-  // File dialog: open
+  // File dialog: open single file
   ipcMain.handle('dialog:openFile', async () => {
     await ensureOutputDir()
     const result = await dialog.showOpenDialog({
       defaultPath: getOutputDir(),
       properties: ['openFile'],
       filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp', 'tiff'] }],
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
+
+  // File dialog: open multiple files
+  ipcMain.handle('dialog:openFiles', async () => {
+    await ensureOutputDir()
+    const result = await dialog.showOpenDialog({
+      defaultPath: getOutputDir(),
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp', 'tiff'] }],
+    })
+    return result.canceled ? null : result.filePaths
+  })
+
+  // File dialog: open directory
+  ipcMain.handle('dialog:openDirectory', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
     })
     return result.canceled ? null : result.filePaths[0]
   })

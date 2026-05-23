@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // File dialogs
   openFile: (): Promise<string | null> => ipcRenderer.invoke('dialog:openFile'),
+  openFiles: (): Promise<string[] | null> => ipcRenderer.invoke('dialog:openFiles'),
+  openDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:openDirectory'),
   saveFile: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:saveFile', defaultPath),
   saveImageFile: (filePath: string, base64Data: string): Promise<{ success: boolean; path?: string; error?: string }> =>

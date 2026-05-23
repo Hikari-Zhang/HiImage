@@ -2,6 +2,10 @@
 超分辨率路由
 """
 import asyncio
+import os
+
+import cv2
+import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter
@@ -67,9 +71,147 @@ class UpscaleRequest(BaseModel):
     tile: int | None = None     # 分块大小；0 = 自动计算；None = 使用默认值
 
 
+class BatchUpscaleRequest(BaseModel):
+    """批量超分辨率请求"""
+    images: list[str]  # Base64 编码图片列表，或文件路径列表（当 is_file_path=True 时）
+    model: str = "RealESRGAN_x4plus"
+    device: str = "mps"
+    outscale: int | None = None
+    tile: int | None = None
+    output_dir: str | None = None  # 非空时直接保存文件，返回文件路径而非 base64
+    is_file_path: bool = False  # True 时 images 为文件路径列表
+
+
+@router.post("/upscale/batch")
+async def upscale_image_batch(req: BatchUpscaleRequest):
+    """
+    批量超分辨率处理
+
+    - images: 图片列表（Base64 或文件路径）
+    - output_dir: 若指定，结果直接保存到该目录，返回文件路径；否则返回 Base64
+    - is_file_path: True 时 images 为文件路径列表（Electron 模式优化）
+    """
+    from core.upscaler import Upscaler
+
+    total = len(req.images)
+    if total == 0:
+        return {"results": [], "summary": {"total": 0, "success": 0, "failed": 0}}
+
+    log_manager.info(
+        f"开始批量超分辨率: 共 {total} 张, model={req.model}, device={req.device}",
+        source="upscale_batch",
+    )
+
+    # 输出目录模式：提前创建目录
+    if req.output_dir:
+        os.makedirs(req.output_dir, exist_ok=True)
+
+    results = []
+    success_count = 0
+    failed_count = 0
+
+    for idx, img_data in enumerate(req.images):
+        current = idx + 1
+        file_name = f"image_{current}.png"  # 默认值
+        # 读取图片
+        try:
+            if req.is_file_path:
+                # Electron 模式：直接读取文件
+                file_path = img_data
+                file_name = os.path.basename(file_path)
+                import cv2
+                img_bgr = cv2.imread(file_path)
+                if img_bgr is None:
+                    raise ValueError(f"无法读取图片: {file_path}")
+                image = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            else:
+                # Web 模式：Base64 解码
+                image = decode_image(img_data)
+        except Exception as e:
+            failed_count += 1
+            results.append({
+                "index": idx,
+                "status": "error",
+                "error": f"读取图片失败: {str(e)}",
+                "fileName": file_name,
+            })
+            continue
+
+        h_in, w_in = image.shape[:2]
+        msg = f"正在处理第 {current}/{total} 张: {file_name} ({w_in}x{h_in})"
+        progress = int((idx / total) * 100)
+        await progress_manager.send_progress(progress, msg)
+        log_manager.info(msg, source="upscale_batch")
+
+        # 处理
+        def _process():
+            tile = req.tile if req.tile is not None else 0
+            upscaler = Upscaler(
+                model_name=req.model,
+                device=req.device,
+                outscale=req.outscale,
+                tile=tile,
+            )
+            return upscaler.upscale(image)
+
+        loop = asyncio.get_event_loop()
+        try:
+            result_rgb = await loop.run_in_executor(executor, _process)
+            h_out, w_out = result_rgb.shape[:2]
+
+            # 保存或编码结果
+            if req.output_dir:
+                os.makedirs(req.output_dir, exist_ok=True)
+                base_name = os.path.splitext(file_name)[0]
+                out_path = os.path.join(req.output_dir, f"{base_name}_upscaled.png")
+                result_bgr = cv2.cvtColor(result_rgb, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(out_path, result_bgr)
+                results.append({
+                    "index": idx,
+                    "status": "success",
+                    "outputPath": out_path,
+                    "width": w_out,
+                    "height": h_out,
+                    "fileName": file_name,
+                })
+            else:
+                results.append({
+                    "index": idx,
+                    "status": "success",
+                    "image": encode_image(result_rgb),
+                    "width": w_out,
+                    "height": h_out,
+                    "fileName": file_name,
+                })
+            success_count += 1
+        except Exception as e:
+            failed_count += 1
+            results.append({
+                "index": idx,
+                "status": "error",
+                "error": str(e),
+                "fileName": file_name,
+            })
+            log_manager.error(f"批量超分辨率失败（第 {current}/{total} 张）: {str(e)}", source="upscale_batch")
+
+    # 完成
+    await progress_manager.send_progress(100, f"批量处理完成：成功 {success_count} 张，失败 {failed_count} 张")
+    log_manager.info(f"批量超分辨率完成: 成功 {success_count}/{total}", source="upscale_batch")
+    await progress_manager.send_complete(f"批量处理完成：{success_count} 成功，{failed_count} 失败")
+
+    return {
+        "results": results,
+        "summary": {
+            "total": total,
+            "success": success_count,
+            "failed": failed_count,
+        },
+    }
+
+
 @router.post("/upscale")
 async def upscale_image(req: UpscaleRequest):
-    """超分辨率处理"""
+    """超分辨率处理（单张）"""
     from core.upscaler import Upscaler
 
     image = decode_image(req.image)
