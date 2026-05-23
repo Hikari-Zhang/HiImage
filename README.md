@@ -1,26 +1,15 @@
 # HiImage
 
-AI 驱动的图像处理桌面工具，基于 Electron + FastAPI 构建。所有模型配置统一在 `backend/core/models.yaml` 维护，无需修改代码即可新增模型。
+AI 驱动的图像处理桌面工具，基于 Electron + React + FastAPI 构建。
 
-- **去水印** — 快速模型（LaMa 等，无需下载）+ 扩散模型（AnyText / SD / PowerPaint 等，首次自动下载）
-- **超分辨率** — Real-ESRGAN 2x / 4x 放大，通用照片、精细化增强、动漫专属三类模型
-- **智能合成** — 7 种合成模式：换背景 / 换装 / 换脸 / 虚拟试穿 / 精准替换 / 智能定位 / 自由编辑
-- **内存优化** — 低内存模式、CPU 显存卸载、Text Encoder CPU 运行，可在设置页配置
+## 功能一览
 
----
-
-## 技术架构
-
-| 层级 | 技术栈 |
-|------|----------|
-| 前端 | Electron 28 + React 18 + TypeScript + Vite |
-| 状态管理 | Zustand |
-| UI | Tailwind CSS（暗色主题）+ Lucide React 图标 |
-| 画布 | Konva.js（ROI 区域绘制） |
-| 后端 | FastAPI + Uvicorn |
-| AI 推理 | IOPaint（15+ 模型）/ Real-ESRGAN / rembg / GFPGAN |
-| 进程管理 | 本地后端作为子进程管理，退出时自动清理 |
-| 部署 | 本地启动 / 远程连接 / Docker Compose |
+| 功能 | 说明 |
+|------|------|
+| **去水印** | 框选水印区域，AI 修复，支持 30+ 模型（快速模型无需下载，扩散模型首次自动下载） |
+| **超分辨率** | Real-ESRGAN 2x/4x 放大，支持通用/精细化/动漫三类模型，**支持批量处理** |
+| **智能合成** | 7 种模式：换背景 / 换装 / 换脸 / 虚拟试穿 / 精准替换 / 智能定位 / 自由编辑 |
+| **批量处理** | 一次性导入多张图片，逐张处理，实时显示进度，支持 Electron 直接读取本地文件 |
 
 ---
 
@@ -41,7 +30,7 @@ cd HiImage
 
 # 后端依赖
 cd backend
-pip install -r requirements-locked.txt   #  reproducable，含所有锁定版本
+pip install -r requirements-locked.txt
 
 # 前端依赖
 cd ../frontend
@@ -51,33 +40,22 @@ npm install
 ### 开发模式
 
 ```bash
-# 同时启动前端 + 后端（推荐）
 cd frontend
 npm run dev
 # → Vite dev server @ http://localhost:5173
-# → FastAPI backend @ http://localhost:8787
-# → 自动管理后端子进程生命周期
-
-# 分别启动
-cd backend && python run.py --reload   # 终端 1
-cd frontend && npm run dev:renderer        # 终端 2
+# → FastAPI backend 自动管理生命周期
 ```
 
 ### 生产构建
 
 ```bash
 cd frontend
-npm run build    # 输出 frontend/dist/
-npm run package  # 打包 Electron 应用（.dmg / .exe）
+npm run build     # 输出 frontend/dist/
+npm run package   # 打包 Electron 应用（.dmg / .exe）
 ```
 
-### Docker 部署
-
-```bash
-docker compose up -d      # 启动后端服务
-docker compose logs -f   # 查看日志
-docker compose down       # 停止服务
-```
+> **注**：macOS 打包需要 Apple Developer Program 证书（$99/年），否则无法分发给他人的。
+> 开发模式下无需签名，直接 `npm run dev` 即可使用全部功能。
 
 ---
 
@@ -91,30 +69,40 @@ docker compose down       # 停止服务
 4. 点击「开始处理」，实时查看进度
 5. 对比原图与结果，保存为 PNG/JPG
 
-**快速模型（本地推理，无需下载）**：LaMa（推荐通用）、MiGAN（规则纹理）、ZITS（边缘清晰）、FCF（背景简单）、MAT（精细场景）、LDM（均衡）、Manga（漫画/线稿）、CV2（极速无GPU）
-**扩散模型（首次使用自动下载，常驻内存保活）**：AnyText（文字水印专用）、PowerPaint V1（通用最强）、SD 1.5 Inpainting（复杂渐变背景）、Realistic Vision（写实照片）、DreamShaper（艺术插画）、Anything V4（动漫/CG）、SDXL Inpainting（2K+高分辨率）
+**快速模型（无需下载）**：LaMa（推荐通用）/ MiGAN / ZITS / FCF / MAT / LDM / Manga / CV2
+
+**扩散模型（首次自动下载）**：AnyText / PowerPaint V1 / SD 1.5 Inpainting / Realistic Vision / DreamShaper / Anything V4 / SDXL Inpainting
 
 ### 超分辨率
 
+#### 单张处理
+
 1. 打开图片
-2. 选择放大倍率（2x / 4x）和 Real-ESRGAN 模型
+2. 选择放大倍率（2x / 4x）和模型
 3. 点击「开始处理」
 4. 预览对比结果并保存
+
+#### 批量处理
+
+1. 切换到「批量模式」
+2. 点击「添加」或拖拽文件夹，一次性导入多张图片
+3. 选择输出目录
+4. 点击「开始批量处理」
+5. 实时查看每张图片的处理进度，完成后结果保存在输出目录
+
+> 批量模式支持虚拟滚动，导入 10,000+ 张图片也不会卡死。
 
 **模型选择建议：**
 
 | 类别 | 推荐模型 | 适用场景 |
 |------|----------|----------|
-| 通用超分辨率 | RealESRGAN_x4plus | 通用照片（推荐） |
-| 通用超分辨率 | RealESRGAN_x2plus | 2倍放大，速度更快 |
-| 精细化增强 | realesr-general-x4v3（推荐） | 去噪+去模糊+放大，体积小(17MB) |
-| 精细化增强 | RealESRNet_x4plus | 无GAN锐化，色彩还原自然 |
-| 动漫/插画 | RealESRGAN_x4plus_anime_6B（推荐） | 线条锐利，体积小(18MB) |
-| 动漫/插画 | realesr-animevideo | 视频帧专用，闪烁少(8MB) |
+| 通用 | RealESRGAN_x4plus | 通用照片 |
+| 精细化增强 | realesr-general-x4v3 | 去噪+去模糊+放大（仅 17MB） |
+| 动漫/插画 | RealESRGAN_x4plus_anime_6B | 线条锐利（仅 18MB） |
 
 ### 智能合成
 
-支持 7 种模式，覆盖创意合成和虚拟试穿场景：
+支持 7 种模式：
 
 | 模式 | 说明 |
 |------|------|
@@ -131,115 +119,80 @@ docker compose down       # 停止服务
 - **连接方式**：本地启动（自动管理后端进程）/ 远程连接（输入 IP + 端口）
 - **计算设备**：CPU / MPS（Apple Silicon）/ CUDA（NVIDIA）
 - **内存优化**：低内存模式（推荐开启）、CPU 显存卸载、Text Encoder CPU 运行
-- **服务器配置**：IOPaint 端口、保活时间、启动超时
-- **网络**：HuggingFace Endpoint（国内可填 `https://hf-mirror.com` 加速下载）、HF Token
-- **修复参数**：默认遮罩扩张像素数、NSFW 安全检查开关
+- **网络**：HuggingFace Endpoint（国内填 `https://hf-mirror.com` 加速）、HF Token
 
 ---
 
-## 项目结构
+## 技术架构
 
 ```
 HiImage/
-├── backend/
+├── backend/                  # Python FastAPI 后端
 │   ├── app/
-│   │   ├── main.py              # FastAPI 应用入口、生命周期管理
-│   │   ├── config.py           # 配置加载（config/settings.json）
-│   │   ├── logging_manager.py   # 日志管理 + WebSocket 推送
-│   │   ├── routers/            # API 路由
-│   │   │   ├── inpaint.py     # 去水印接口
-│   │   │   ├── upscale.py     # 超分辨率接口
-│   │   │   ├── synthesis.py   # 智能合成接口
-│   │   │   ├── settings.py    # 配置管理接口
-│   │   │   ├── logs.py        # 日志查询接口
-│   │   │   └── system.py      # 系统状态接口
-│   │   └── websocket/
-│   │       └── progress.py     # 进度推送 WebSocket
-│   ├── core/                   # 核心 AI 处理逻辑
-│   │   ├── inpainter.py      # IOPaint 调用封装（CLI + HTTP Server 双模式）
-│   │   ├── model_server.py    # IOPaint HTTP Server 进程管理（单例）
-│   │   ├── upscaler.py       # Real-ESRGAN 超分辨率
-│   │   ├── synthesizer.py    # 智能合成核心
-│   │   ├── model_registry.py  # 模型注册表（models.yaml 驱动）
-│   │   └── watermark_detector.py  # 自动水印检测
-│   ├── requirements.txt        # 依赖声明（松散版本）
-│   ├── requirements-locked.txt # 锁定版本（pip freeze，可复现）
-│   ├── Dockerfile
-│   └── run.py                # 后端启动脚本
-├── frontend/
+│   │   ├── main.py          # FastAPI 入口
+│   │   ├── routers/         # API 路由（inpaint / upscale / synthesis / settings / logs / system）
+│   │   └── websocket/      # 进度推送 WebSocket
+│   └── core/               # AI 推理核心
+│       ├── inpainter.py     # IOPaint 调用封装
+│       ├── upscaler.py      # Real-ESRGAN 超分辨率
+│       ├── synthesizer.py    # 智能合成核心
+│       └── model_registry.py # 模型注册表（models.yaml 驱动）
+├── frontend/                # Electron + React 前端
 │   ├── src/
-│   │   ├── main/               # Electron 主进程
-│   │   │   ├── index.ts              # 主进程入口
-│   │   │   └── backend-manager.ts   # 后端进程管理（启动/停止/清理）
-│   │   ├── preload/            # 预加载脚本（IPC 桥接）
-│   │   └── renderer/          # React 渲染进程
-│   │       ├── App.tsx                 # 应用根组件
-│   │       ├── pages/                 # 页面组件
-│   │       ├── components/            # 复用组件（ImageCanvas / ImageCompare / layout / ui）
-│   │       ├── stores/                # Zustand 状态管理
-│   │       ├── hooks/                 # 自定义 React Hooks
-│   │       └── types/                # TypeScript 类型定义
-│   ├── package.json
+│   │   ├── main/           # Electron 主进程（后端进程管理）
+│   │   ├── preload/        # IPC 桥接
+│   │   └── renderer/       # React 渲染进程
+│   │       ├── pages/       # 页面组件
+│   │       ├── components/  # 复用组件
+│   │       ├── stores/      # Zustand 状态管理
+│   │       └── hooks/       # 自定义 Hooks
 │   └── electron.vite.config.ts
-├── config/
-│   └── settings.json            # 用户配置文件（不在 git 中）
-├── models/                     # AI 模型文件（自动下载，.gitignore）
-├── output/                     # 处理结果输出目录
-├── docker-compose.yml
-├── docs/
-│   └── PRD.md                 # 产品需求文档
-└── README.md
+├── config/settings.json     # 用户配置（不在 git 中）
+├── models/                 # AI 模型文件（自动下载，.gitignore）
+├── output/                 # 处理结果输出目录
+└── docs/PRD.md            # 产品需求文档
 ```
+
+| 层级 | 技术栈 |
+|------|----------|
+| 前端 | Electron + React 18 + TypeScript + Vite |
+| 状态管理 | Zustand |
+| UI | Tailwind CSS（暗色主题）+ Lucide React 图标 |
+| 画布 | Konva.js（ROI 区域绘制） |
+| 后端 | FastAPI + Uvicorn |
+| AI 推理 | IOPaint / Real-ESRGAN / rembg / GFPGAN |
+| 打包 | electron-builder |
 
 ---
 
-## 注意事项
-
-### 模型下载
-
-- 首次使用某模型时，IOPaint 会自动下载模型权重（存放于 `models/` 目录），需保持网络畅通
-- 扩散模型（SD 等）体积较大（3-7GB），下载时间较长
-- 国内用户可在设置页将 HuggingFace Endpoint 改为 `https://hf-mirror.com` 加速下载
-
-### 硬件要求
+## 硬件要求
 
 | 场景 | 最低配置 | 推荐配置 |
 |------|----------|----------|
 | 快速模型（LaMa 等） | 2GB 内存 | 4GB 内存 |
-| 扩散模型（SD / AnyText） | 8GB 内存 | 16GB 内存（开启低内存模式可减半） |
+| 扩散模型（SD 等） | 8GB 内存 | 16GB 内存（开启低内存模式可减半） |
 | Real-ESRGAN 4x | 4GB 内存 | 8GB 内存 |
 
 ### Apple Silicon Mac 优化
 
 - 选择 MPS 设备可获得显著加速
-- 某些模型可能不完全支持 MPS，会自动回退到 CPU
 - 开启「低内存模式」可大幅降低统一内存占用
-
-### 进程管理
-
-- 本地模式下，前端退出时会自动终止后端进程，**不会**留下残留进程
-- 支持进程组级别的清理（macOS/Linux），避免孤儿进程累积显存
-- 端口冲突时自动清理残留进程
 
 ---
 
 ## 常见问题
 
-**Q：后端启动失败，提示 "Address already in use"？**
-
-A：端口 8787 被占用。在设置页修改 IOPaint 端口，或手动清理占用进程。
-
-**Q：处理时出现 "Out of Memory" 错误？**
-
-A：开启设置页的「低内存模式」，或进一步开启「CPU 显存卸载」。也可以切换设备到 CPU（速度慢但内存占用小）。
-
 **Q：模型下载速度慢？**
 
 A：在设置页将 `network.hf_endpoint` 修改为 `https://hf-mirror.com`。
 
-**Q：Electron 应用打包失败？**
+**Q：处理时出现 "Out of Memory" 错误？**
 
-A：确保 `backend/` 下依赖已安装，`models/` 目录已存在（可以是空的）。
+A：开启设置页的「低内存模式」，或进一步开启「CPU 显存卸载」。
+
+**Q：后端启动失败，提示 "Address already in use"？**
+
+A：端口 8787 被占用。在设置页修改 IOPaint 端口，或手动清理占用进程。
 
 ---
 

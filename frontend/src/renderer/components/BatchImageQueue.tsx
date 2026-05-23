@@ -26,7 +26,7 @@ interface BatchImageQueueProps {
 
 // ─── 常量 ───────────────────────────────────────────────
 const GRID_COLS = 3
-const ROW_HEIGHT = 152 // 卡片高度（含文件名）+ gap
+const ROW_HEIGHT = 250 // 正方形缩略图 + 文件名 + 错误行
 const BUFFER_ROWS = 4
 
 // ─── 单个卡片（memo 化，避免整列表 re-render）────────────────────────────
@@ -55,13 +55,13 @@ const QueueCard = memo(function QueueCard({
         cardRef(el)
         if (el) onVisible(el)
       }}
-      className={`relative group rounded border transition-all ${
+      className={`relative group rounded border transition-all flex flex-col h-full ${
         isCurrent
           ? 'border-blue-400 shadow-lg shadow-blue-400/20'
           : 'border-border-subtle hover:border-border-focus'
       }`}
     >
-      {/* 缩略图 */}
+      {/* 缩略图：正方形 */}
       <div className="aspect-square flex items-center justify-center bg-bg-primary rounded-t overflow-hidden">
         {item.dataUrl ? (
           <img
@@ -116,6 +116,7 @@ export default function BatchImageQueue({
   onRemove,
   onClear,
   onAdd,
+  onLoadThumbnail,
   disabled = false,
 }: BatchImageQueueProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -288,14 +289,10 @@ export default function BatchImageQueue({
                           index={idx}
                           isCurrent={currentIndex === idx}
                           statusIcon={
-                            currentIndex === idx && item.status === 'pending'
-                              ? <Loader2 size={16} className="animate-spin text-blue-400" />
-                              : item.status === 'success'
+                            item.status === 'success'
                               ? <CheckCircle size={16} className="text-green-400" />
                               : item.status === 'error'
                               ? <AlertCircle size={16} className="text-red-400" />
-                              : item.status === 'processing'
-                              ? <Loader2 size={16} className="animate-spin text-blue-400" />
                               : null
                           }
                           onRemove={() => onRemove(item.id)}

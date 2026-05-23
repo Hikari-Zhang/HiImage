@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { Upload, Download, Images, List, CheckCircle2 } from 'lucide-react'
 import { Button, Select, Progress, showToast } from '../components/ui'
 import ImageCanvas from '../components/ImageCanvas'
@@ -202,6 +202,81 @@ export default function SuperResolution() {
     e.dataTransfer.dropEffect = 'copy'
   }
 
+  // 批量处理：递归逐张处理，每轮独立 task 确保 UI 及时刷新
+  const processBatchItem = async (
+    index: number,
+    items: ImageQueueItem[],
+    outputDir: string | undefined,
+    isElectron: boolean,
+    currentScale: number,
+  ) => {
+    if (index >= items.length) {
+      setIsBatchProcessing(false)
+      setBatchCurrentIndex(null)
+      const successCount = items.filter(i => i.status === 'success').length
+      const failedCount = items.filter(i => i.status === 'error').length
+      showToast('success', `批量处理完成: ${successCount} 成功${failedCount > 0 ? `, ${failedCount} 失败` : ''}`)
+      return
+    }
+
+    // 更新当前索引和状态，然后等下一个 task 再继续（让 React 刷新 UI）
+    setBatchCurrentIndex(index)
+    items[index] = { ...items[index], status: 'processing' }
+    setBatchItems([...items])
+
+    // 用 setTimeout 拆到下一个 task，React 会在 task 边界刷新 UI
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    try {
+      // 获取图片数据
+      let imageBase64: string
+      const item = items[index]
+      const { filePath, dataUrl, file } = item
+      if (isElectron && filePath) {
+        imageBase64 = await window.electronAPI.readImageFile(filePath)
+      } else if (dataUrl) {
+        imageBase64 = dataUrl
+      } else if (file) {
+        imageBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(file)
+        })
+      } else {
+        throw new Error('无图片数据')
+      }
+
+      const result = await upscale({
+        image: imageBase64,
+        model: upscaleModel,
+        device,
+        outscale: currentScale,
+        tile: tile ?? (upscaleTile || 0),
+      })
+
+      // 保存结果
+      if (isElectron && outputDir) {
+        const baseName = item.fileName.replace(/\.[^.]+$/, '')
+        const outPath = `${outputDir}/${baseName}_upscaled.png`
+        const saveResult = await window.electronAPI?.saveImageFile(outPath, result.image)
+        if (saveResult?.success) {
+          items[index] = { ...items[index], status: 'success', resultPath: saveResult.path || outPath }
+        } else {
+          throw new Error(saveResult?.error || '保存失败')
+        }
+      } else {
+        items[index] = { ...items[index], status: 'success', resultDataUrl: `data:image/png;base64,${result.image}` }
+      }
+    } catch (err: any) {
+      items[index] = { ...items[index], status: 'error', error: err.message }
+    }
+
+    setBatchItems([...items])
+    // 递归处理下一张（下一个 task）
+    await processBatchItem(index + 1, items, outputDir, isElectron, currentScale)
+  }
+
   // Process - Batch mode
   const handleBatchUpscale = async () => {
     if (batchItems.length === 0) return
@@ -219,94 +294,29 @@ export default function SuperResolution() {
     }
 
     setIsBatchProcessing(true)
-    setBatchCurrentIndex(0)
+    const isElectron = !!window.electronAPI
+    const newItems = batchItems.map(item => ({ ...item, status: 'pending' as ImageQueueItem['status'] })) as ImageQueueItem[]
+    setBatchItems(newItems)
+
+    // Electron 模式：选择输出目录（仅一次）
+    let outputDir: string | undefined = undefined
+    if (isElectron) {
+      const dir = await window.electronAPI.openDirectory?.()
+      if (!dir) {
+        setIsBatchProcessing(false)
+        return
+      }
+      outputDir = dir
+    }
+
+    const currentScale = outscale ?? 4
 
     try {
-      // 准备文件路径列表（Electron 模式）或 base64 列表（Web 模式）
-      const isElectron = !!window.electronAPI
-      let images: string[] = []
-      let isFilePath = false
-
-      if (isElectron) {
-        // Electron 模式：直接传文件路径
-        images = batchItems.map(item => item.filePath || '')
-        isFilePath = true
-      } else {
-        // Web 模式：传 base64
-        images = batchItems.map(item => item.dataUrl || '')
-      }
-
-      // 选择输出目录（Electron 模式）
-      let outputDir: string | undefined = undefined
-      if (isElectron) {
-        const dir = await window.electronAPI.openDirectory?.()
-        if (!dir) {
-          setIsBatchProcessing(false)
-          return
-        }
-        outputDir = dir
-      }
-
-      showToast('info', `开始批量处理 ${batchItems.length} 张图片...`)
-
-      // 调用后端批量接口
-      const baseUrl = await window.electronAPI?.getBackendURL() || 'http://localhost:8000'
-      const result = await fetch(`${baseUrl}/api/upscale/batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          images,
-          model: upscaleModel,
-          device,
-          outscale: currentScale,
-          tile: tile ?? (upscaleTile || 0),
-          output_dir: outputDir,
-          is_file_path: isFilePath,
-        }),
-      })
-
-      if (!result.ok) {
-        throw new Error(`批量处理失败: ${result.statusText}`)
-      }
-
-      const data = await result.json()
-
-      // 更新队列状态
-      const newItems = [...batchItems]
-      data.results.forEach((r: any) => {
-        if (newItems[r.index]) {
-          if (r.status === 'success') {
-            newItems[r.index] = {
-              ...newItems[r.index],
-              status: 'success',
-              resultPath: r.outputPath,
-              resultDataUrl: r.image ? `data:image/png;base64,${r.image}` : undefined,
-            }
-          } else {
-            newItems[r.index] = {
-              ...newItems[r.index],
-              status: 'error',
-              error: r.error,
-            }
-          }
-        }
-      })
-
-      setBatchItems(newItems)
-      setBatchCurrentIndex(null)
-
-      const successCount = data.summary.success
-      const failedCount = data.summary.failed
-      showToast(
-        'success',
-        `批量处理完成: ${successCount} 成功${failedCount > 0 ? `, ${failedCount} 失败` : ''}`
-      )
-
+      await processBatchItem(0, newItems, outputDir, isElectron, currentScale)
     } catch (err: any) {
       showToast('error', err.message)
-      setBatchCurrentIndex(null)
-    } finally {
       setIsBatchProcessing(false)
+      setBatchCurrentIndex(null)
     }
   }
 
