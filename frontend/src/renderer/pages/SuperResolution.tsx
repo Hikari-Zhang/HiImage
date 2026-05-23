@@ -92,8 +92,20 @@ export default function SuperResolution() {
       const handler = mode === 'batch' ? window.electronAPI.openFiles?.() : window.electronAPI.openFile()
       const result = await handler
       if (result) {
-        const paths = Array.isArray(result) ? result : [result]
-        for (const filePath of paths) {
+        if (mode === 'batch') {
+          // 批量模式：只存路径，不读文件（懒加载缩略图）
+          const paths = Array.isArray(result) ? result : [result]
+          const newItems: ImageQueueItem[] = paths.map(filePath => ({
+            id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
+            fileName: filePath.split(/[\\/]/).pop() || 'unknown.png',
+            filePath,
+            status: 'pending' as const,
+          }))
+          setBatchItems(prev => [...prev, ...newItems])
+          showToast('success', `已添加 ${newItems.length} 张图片到队列`)
+        } else {
+          // 单图模式：读文件
+          const filePath = Array.isArray(result) ? result[0] : result
           try {
             const dataUrl = await window.electronAPI.readImageFile(filePath)
             loadSource(dataUrl, filePath)
@@ -110,14 +122,18 @@ export default function SuperResolution() {
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
+    e.target.value = ''
 
     if (mode === 'batch') {
-      // 批量模式：处理所有文件
-      Array.from(files).forEach(file => {
-        const reader = new FileReader()
-        reader.onload = () => loadSource(reader.result as string, file.name)
-        reader.readAsDataURL(file)
-      })
+      // 批量模式：只存 File 引用，不读文件（懒加载缩略图）
+      const newItems: ImageQueueItem[] = Array.from(files).map(file => ({
+        id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
+        fileName: file.name,
+        file,
+        status: 'pending' as const,
+      }))
+      setBatchItems(prev => [...prev, ...newItems])
+      showToast('success', `已添加 ${newItems.length} 张图片到队列`)
     } else {
       // 单图模式：只处理第一个文件
       const file = files[0]
@@ -151,13 +167,19 @@ export default function SuperResolution() {
     if (!files || files.length === 0) return
 
     if (mode === 'batch') {
-      // 批量模式：处理所有图片文件
-      Array.from(files).forEach(file => {
-        if (!file.type.startsWith('image/')) return
-        const reader = new FileReader()
-        reader.onload = () => loadSource(reader.result as string, file.name)
-        reader.readAsDataURL(file)
-      })
+      // 批量模式：只存 File 引用，不读文件（懒加载缩略图）
+      const newItems: ImageQueueItem[] = Array.from(files)
+        .filter(file => file.type.startsWith('image/'))
+        .map(file => ({
+          id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
+          fileName: file.name,
+          file,
+          status: 'pending' as const,
+        }))
+      if (newItems.length > 0) {
+        setBatchItems(prev => [...prev, ...newItems])
+        showToast('success', `已添加 ${newItems.length} 张图片到队列`)
+      }
     } else {
       // 单图模式：只处理第一个
       const file = files[0]
@@ -368,26 +390,55 @@ export default function SuperResolution() {
     setBatchCurrentIndex(null)
   }
 
-  // 批量模式：添加图片到队列
+  // 批量模式：添加图片到队列（只存路径/引用，不读文件）
   const handleAddToBatch = (files: FileList | string[]) => {
     if (Array.isArray(files)) {
-      // 文件路径数组（Electron 模式）
-      files.forEach(filePath => {
-        if (window.electronAPI) {
-          window.electronAPI.readImageFile(filePath)
-            .then((dataUrl) => loadSource(dataUrl, filePath))
-            .catch((err: any) => showToast('error', `读取图片失败: ${err.message}`))
-        }
-      })
+      // 文件路径数组（Electron 模式）：只存路径，不读文件
+      const newItems: ImageQueueItem[] = (files as string[]).map(filePath => ({
+        id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
+        fileName: filePath.split(/[\\/]/).pop() || 'unknown.png',
+        filePath,
+        status: 'pending' as const,
+      }))
+      setBatchItems(prev => [...prev, ...newItems])
+      showToast('success', `已添加 ${newItems.length} 张图片到队列`)
     } else {
-      // FileList（Web 模式）
-      Array.from(files).forEach(file => {
-        const reader = new FileReader()
-        reader.onload = () => loadSource(reader.result as string, file.name)
-        reader.readAsDataURL(file)
-      })
+      // FileList（Web 模式）：只存 File 引用，不读文件
+      const newItems: ImageQueueItem[] = Array.from(files as FileList).map(file => ({
+        id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
+        fileName: file.name,
+        file,
+        status: 'pending' as const,
+      }))
+      setBatchItems(prev => [...prev, ...newItems])
+      showToast('success', `已添加 ${newItems.length} 张图片到队列`)
     }
   }
+
+  // 懒加载单张缩略图（进入视口时由 BatchImageQueue 触发）
+  const loadBatchThumbnail = useCallback(async (id: string) => {
+    const item = batchItems.find(i => i.id === id)
+    if (!item || item.dataUrl) return
+
+    try {
+      let dataUrl: string
+      if (item.filePath && window.electronAPI) {
+        dataUrl = await window.electronAPI.readImageFile(item.filePath)
+      } else if (item.file) {
+        dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(item.file!)
+        })
+      } else {
+        return
+      }
+      setBatchItems(prev => prev.map(i => i.id === id ? { ...i, dataUrl } : i))
+    } catch (err: any) {
+      console.error('缩略图加载失败:', err)
+    }
+  }, [batchItems, setBatchItems])
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -443,6 +494,7 @@ export default function SuperResolution() {
                 onRemove={handleRemoveBatchItem}
                 onClear={handleClearBatch}
                 onAdd={handleAddToBatch}
+                onLoadThumbnail={loadBatchThumbnail}
                 disabled={isBatchProcessing}
               />
             </div>

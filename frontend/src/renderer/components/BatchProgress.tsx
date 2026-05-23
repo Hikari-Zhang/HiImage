@@ -1,4 +1,4 @@
-import { Progress } from '../ui'
+import { Progress } from '../components/ui'
 
 interface BatchProgressProps {
   current: number

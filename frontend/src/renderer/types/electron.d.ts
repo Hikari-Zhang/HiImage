@@ -1,10 +1,14 @@
-export interface BackendConfig {
+// Electron API 类型定义
+// 此文件作为全局脚本加载，自动合并到全局 Window 接口
+
+interface BackendConfig {
   mode: 'local' | 'remote'
   remoteHost: string
   remotePort: number
 }
 
-export interface ElectronAPI {
+interface ElectronAPI {
+  platform: string
   openFile: () => Promise<string | null>
   openFiles: () => Promise<string[] | null>
   openDirectory: () => Promise<string | null>
@@ -18,8 +22,6 @@ export interface ElectronAPI {
   onBackendError: (callback: (error: string) => void) => void
 }
 
-declare global {
-  interface Window {
-    electronAPI: ElectronAPI
-  }
+interface Window {
+  electronAPI: ElectronAPI
 }
