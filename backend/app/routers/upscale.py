@@ -64,11 +64,13 @@ async def get_upscale_models():
     }
 
 class UpscaleRequest(BaseModel):
+    """单张超分辨率请求"""
     image: str  # Base64 encoded
     model: str = "RealESRGAN_x4plus"
     device: str = "mps"
     outscale: int | None = None  # 前端覆盖倍率；None 则使用模型默认值
     tile: int | None = None     # 分块大小；0 = 自动计算；None = 使用默认值
+    output_path: str | None = None  # 非空时直接保存文件，不返回 base64
 
 
 class BatchUpscaleRequest(BaseModel):
@@ -242,6 +244,19 @@ async def upscale_image(req: UpscaleRequest):
 
         h, w = result.shape[:2]
         log_manager.info(f"超分辨率完成: output={w}x{h}", source="upscale")
+
+        # output_path 非空时直接保存文件，不返回 base64
+        if req.output_path:
+            out_dir = os.path.dirname(req.output_path) or "."
+            os.makedirs(out_dir, exist_ok=True)
+            result_bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(req.output_path, result_bgr)
+            return {
+                "outputPath": req.output_path,
+                "width": w,
+                "height": h,
+            }
+
         return {
             "image": encode_image(result),
             "width": w,

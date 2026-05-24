@@ -93,19 +93,39 @@ export function useBackendAPI() {
 
   /**
    * 超分辨率
+   * @param output_path - Electron 模式下传输出文件路径，后端直接保存文件不返回 base64
    */
-  const upscale = async (params: { image: string; model: string; device: string; outscale?: number; tile?: number }) => {
+  const upscale = async (params: {
+    image: string
+    model: string
+    device: string
+    outscale?: number
+    tile?: number
+    output_path?: string
+  }) => {
     const url = await getURL()
     const res = await fetch(`${url}/api/upscale`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
+      body: JSON.stringify({
+        image: params.image,
+        model: params.model,
+        device: params.device,
+        outscale: params.outscale,
+        tile: params.tile,
+        output_path: params.output_path || undefined,
+      }),
     })
     if (!res.ok) {
       const err = await res.text()
       throw new Error(`超分辨率失败: ${err}`)
     }
-    return res.json() as Promise<{ image: string; width: number; height: number }>
+    return res.json() as Promise<{
+      image: string
+      width: number
+      height: number
+      outputPath?: string
+    }>
   }
 
   /**

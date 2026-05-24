@@ -247,26 +247,29 @@ export default function SuperResolution() {
         throw new Error('无图片数据')
       }
 
+      // Electron 模式下传 output_path，让后端直接保存文件不返回 base64
+      const outPath = (isElectron && outputDir)
+        ? `${outputDir}/${item.fileName.replace(/\.[^.]+$/, '')}_upscaled.png`
+        : undefined
+
       const result = await upscale({
         image: imageBase64,
         model: upscaleModel,
         device,
         outscale: currentScale,
         tile: tile ?? (upscaleTile || 0),
+        output_path: outPath,
       })
 
       // 保存结果
-      if (isElectron && outputDir) {
-        const baseName = item.fileName.replace(/\.[^.]+$/, '')
-        const outPath = `${outputDir}/${baseName}_upscaled.png`
-        const saveResult = await window.electronAPI?.saveImageFile(outPath, result.image)
-        if (saveResult?.success) {
-          items[index] = { ...items[index], status: 'success', resultPath: saveResult.path || outPath }
-        } else {
-          throw new Error(saveResult?.error || '保存失败')
-        }
-      } else {
+      if (result.outputPath) {
+        // Electron 模式：后端已直接保存，只返回文件路径
+        items[index] = { ...items[index], status: 'success', resultPath: result.outputPath }
+      } else if (result.image) {
+        // Web 模式：存 base64
         items[index] = { ...items[index], status: 'success', resultDataUrl: `data:image/png;base64,${result.image}` }
+      } else {
+        throw new Error('处理失败：无返回结果')
       }
     } catch (err: any) {
       items[index] = { ...items[index], status: 'error', error: err.message }
