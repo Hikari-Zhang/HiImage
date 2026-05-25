@@ -108,6 +108,21 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
     if req.output_dir:
         os.makedirs(req.output_dir, exist_ok=True)
 
+    # ★ 循环外创建 Upscaler 实例，批量复用，避免每张图重复加载模型到显存
+    tile = req.tile if req.tile is not None else 0
+    shared_upscaler = Upscaler(
+        model_name=req.model,
+        device=req.device,
+        outscale=req.outscale,
+        tile=tile,
+    )
+    # 预加载模型（循环前就加载好，避免每张图都触发加载）
+    try:
+        shared_upscaler._ensure_model_loaded()
+    except Exception as e:
+        log_manager.error(f"批量超分模型加载失败: {e}", source="upscale_batch")
+        raise RuntimeError(f"模型加载失败: {e}")
+
     results = []
     success_count = 0
     failed_count = 0
@@ -145,20 +160,14 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
         await progress_manager.send_progress(progress, msg)
         log_manager.info(msg, source="upscale_batch")
 
-        # 处理
-        def _process():
-            tile = req.tile if req.tile is not None else 0
-            upscaler = Upscaler(
-                model_name=req.model,
-                device=req.device,
-                outscale=req.outscale,
-                tile=tile,
-            )
-            return upscaler.upscale(image)
+        # 处理：复用 shared_upscaler，不再每张图新建实例
+        def _process(upscaler_instance, img):
+            return upscaler_instance.upscale(img)
 
         loop = asyncio.get_event_loop()
         try:
-            result_rgb = await loop.run_in_executor(executor, _process)
+            result_rgb = await loop.run_in_executor(executor, _process, shared_upscaler, image)
+
             h_out, w_out = result_rgb.shape[:2]
 
             # 保存或编码结果
@@ -200,6 +209,14 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
     await progress_manager.send_progress(100, f"批量处理完成：成功 {success_count} 张，失败 {failed_count} 张")
     log_manager.info(f"批量超分辨率完成: 成功 {success_count}/{total}", source="upscale_batch")
     await progress_manager.send_complete(f"批量处理完成：{success_count} 成功，{failed_count} 失败")
+
+    # 批量处理完成，释放模型和显存
+    del shared_upscaler
+    if req.device == 'cuda':
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    log_manager.info(f"批量超分完成，已释放模型显存", source="upscale_batch")
 
     return {
         "results": results,

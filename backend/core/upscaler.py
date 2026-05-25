@@ -238,7 +238,14 @@ class Upscaler:
         img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
         try:
-            output_bgr, _ = self._upsampler.enhance(img_bgr, outscale=self.outscale)
+            import torch
+            # inference_mode() 比 no_grad() 更彻底：不构建计算图，显存占用更低
+            with torch.inference_mode():
+                output_bgr, _ = self._upsampler.enhance(img_bgr, outscale=self.outscale)
+            # CUDA: 每次推理后清理未使用的显存，防止批量处理时显存累积
+            if self.device == 'cuda' and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            # MPS: PyTorch 目前没有 empty_cache 等效 API，依赖系统内存管理器
         except RuntimeError as e:
             # 如果分块后仍 OOM，尝试更小的 tile
             if "CUDA" in str(e) or "MPS" in str(e) or "alloc" in str(e).lower():

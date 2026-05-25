@@ -19,7 +19,7 @@ import { DownloadStatus, ModelStatus } from '../constants'
 
 export default function SuperResolution() {
   const {
-    sourceImage, imageWidth, imageHeight,
+    sourceImage, imageWidth, imageHeight, sourceFilePath,
     setSourceImage, setImageDimensions,
   } = useImageStore()
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
@@ -338,6 +338,12 @@ export default function SuperResolution() {
       return
     }
 
+    // Electron 模式下构造 output_path，让后端直接写文件，避免 base64 撑爆内存
+    let outputPath: string | undefined = undefined
+    if (window.electronAPI && sourceFilePath) {
+      outputPath = sourceFilePath.replace(/\.[^.]+$/, '') + '_upscaled.png'
+    }
+
     try {
       startProcess(upscaleModel)
       const result = await upscale({
@@ -346,8 +352,17 @@ export default function SuperResolution() {
         device,
         outscale: currentScale,
         tile: tile ?? (upscaleTile || 0),
+        output_path: outputPath,
       })
-      setResultImage(`data:image/png;base64,${result.image}`)
+
+      // 后端直接保存了文件（Electron 模式），读文件并显示
+      if (result.outputPath) {
+        const dataUrl = await window.electronAPI.readImageFile(result.outputPath)
+        setResultImage(dataUrl)
+      } else {
+        setResultImage(`data:image/png;base64,${result.image}`)
+      }
+
       setOutputSize({ w: result.width, h: result.height })
       finishProcess('超分辨率处理完成')
       showToast('success', `超分辨率完成: ${result.width}x${result.height}`)
