@@ -216,6 +216,11 @@ export default function SuperResolution() {
       const successCount = items.filter(i => i.status === 'success').length
       const failedCount = items.filter(i => i.status === 'error').length
       showToast('success', `批量处理完成: ${successCount} 成功${failedCount > 0 ? `, ${failedCount} 失败` : ''}`)
+      // ★ 内存清理：释放所有 base64 数据（结果路径已保存在 resultPath）
+      setBatchItems(prev => prev.map(i => {
+        const { dataUrl, resultDataUrl, ...rest } = i as any
+        return rest as ImageQueueItem
+      }))
       return
     }
 

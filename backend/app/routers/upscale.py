@@ -167,6 +167,8 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
         loop = asyncio.get_event_loop()
         try:
             result_rgb = await loop.run_in_executor(executor, _process, shared_upscaler, image)
+            # 释放输入图像（已处理完毕）
+            del image
 
             h_out, w_out = result_rgb.shape[:2]
 
@@ -177,6 +179,8 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
                 out_path = os.path.join(req.output_dir, f"{base_name}_upscaled.png")
                 result_bgr = cv2.cvtColor(result_rgb, cv2.COLOR_RGB2BGR)
                 cv2.imwrite(out_path, result_bgr)
+                # 释放 result
+                del result_rgb
                 results.append({
                     "index": idx,
                     "status": "success",
@@ -194,6 +198,8 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
                     "height": h_out,
                     "fileName": file_name,
                 })
+                # 释放 result
+                del result_rgb
             success_count += 1
         except Exception as e:
             failed_count += 1
@@ -203,6 +209,9 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
                 "error": str(e),
                 "fileName": file_name,
             })
+            # 异常时也释放 image
+            if 'image' in locals():
+                del image
             log_manager.error(f"批量超分辨率失败（第 {current}/{total} 张）: {str(e)}", source="upscale_batch")
 
     # 完成
@@ -242,21 +251,33 @@ async def upscale_image(req: UpscaleRequest):
 
     await progress_manager.send_progress(10, "正在加载超分辨率模型...")
 
-    def _process():
-        # tile: None = 使用默认配置；0 = 自动计算；>0 = 固定 tile 大小
+    tile = req.tile if req.tile is not None else 0
+
+    def _process(img):
         upscaler = Upscaler(
             model_name=req.model,
             device=req.device,
             outscale=req.outscale,
-            tile=req.tile if req.tile is not None else 0,
+            tile=tile,
         )
-        return upscaler.upscale(image)
+        r = upscaler.upscale(img)
+        # 释放 upscaler（释放模型显存）
+        del upscaler
+        if req.device == 'cuda':
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        return r
 
     loop = asyncio.get_event_loop()
     await progress_manager.send_progress(30, "正在处理超分辨率...")
 
+    result = None
     try:
-        result = await loop.run_in_executor(executor, _process)
+        result = await loop.run_in_executor(executor, _process, image)
+        # 释放输入图像（已在子线程中使用完毕）
+        del image
+
         await progress_manager.send_complete("超分辨率处理完成")
 
         h, w = result.shape[:2]
@@ -268,18 +289,41 @@ async def upscale_image(req: UpscaleRequest):
             os.makedirs(out_dir, exist_ok=True)
             result_bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
             cv2.imwrite(req.output_path, result_bgr)
+            # 释放 result
+            del result
+            if req.device == 'cuda':
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
             return {
                 "outputPath": req.output_path,
                 "width": w,
                 "height": h,
             }
 
+        # 编码并返回（Web 模式）
+        encoded = encode_image(result)
+        # 释放 result
+        del result
+        if req.device == 'cuda':
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         return {
-            "image": encode_image(result),
+            "image": encoded,
             "width": w,
             "height": h,
         }
     except Exception as e:
+        # 异常时也清理
+        if image is not None:
+            del image
+        if result is not None:
+            del result
+        if req.device == 'cuda':
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         await progress_manager.send_error(str(e))
         log_manager.error(f"超分辨率失败: {str(e)}", source="upscale")
         raise
