@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import WatermarkRemoval from '../../pages/WatermarkRemoval'
+import CutoutPage from '../../pages/CutoutPage'
 import SuperResolution from '../../pages/SuperResolution'
 import SmartSynthesis from '../../pages/SmartSynthesis'
 import Settings from '../../pages/Settings'
@@ -9,6 +10,7 @@ import Logs from '../../pages/Logs'
 // 所有页面常驻挂载，通过 CSS hidden 切换显隐，避免路由切换时卸载组件导致状态丢失
 const PAGES = [
   { path: '/watermark',  element: <WatermarkRemoval /> },
+  { path: '/cutout',     element: <CutoutPage /> },
   { path: '/upscale',    element: <SuperResolution /> },
   { path: '/synthesis',  element: <SmartSynthesis /> },
   { path: '/logs',       element: <Logs /> },

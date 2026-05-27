@@ -198,9 +198,9 @@ models:
   - id: birefnet
     name: BiRefNet-General
     provider: rembg
-    tags: [background_replace]
+    tags: [background_replace, cutout]
     description: 双向精化网络，2024 SOTA 抠图，边缘细节极佳，复杂场景首选
-    recommended_for: 换背景
+    recommended_for: 抠图 / 换背景
     requires_reference: false
     size_mb: 928   # 实测：BiRefNet-general-epoch_244.onnx ≈ 928 MB
     badge: 推荐
@@ -213,7 +213,7 @@ models:
   - id: rmbg
     name: RMBG 2.0
     provider: rembg
-    tags: [background_replace]
+    tags: [background_replace, cutout]
     description: BRIA RMBG 2.0 —— 商业级抠图精度，人像/产品均优秀
     recommended_for: 换背景
     requires_reference: false
@@ -228,7 +228,7 @@ models:
   - id: isnet
     name: IS-Net General
     provider: rembg
-    tags: [background_replace]
+    tags: [background_replace, cutout]
     description: ISNet 通用目标分割，产品图/商品摄影效果极佳，细节保留好
     recommended_for: 换背景（商品）
     requires_reference: false
@@ -243,7 +243,7 @@ models:
   - id: isnet_anime
     name: IS-Net Anime
     provider: rembg
-    tags: [background_replace]
+    tags: [background_replace, cutout]
     description: 针对动漫/插画优化的分割模型，发丝与细线条保留精准
     recommended_for: 换背景（动漫）
     requires_reference: false
@@ -258,7 +258,7 @@ models:
   - id: u2net
     name: U²-Net
     provider: rembg
-    tags: [background_replace]
+    tags: [background_replace, cutout]
     description: 通用显著目标检测经典模型，人像/商品/动物均兼顾
     recommended_for: 换背景（通用）
     requires_reference: false
@@ -273,7 +273,7 @@ models:
   - id: modnet
     name: U²-Net 人像分割（快速）
     provider: rembg
-    tags: [background_replace]
+    tags: [background_replace, cutout]
     description: 轻量人像抠图，速度极快，适合批量与预览（底层使用 u2net_human_seg，rembg 不内置真正的 MODNet）
     recommended_for: 换背景（快速）
     requires_reference: false
@@ -1243,6 +1243,16 @@ mode_groups:
     default_model: wm_lama
     needs_reference: false
     needs_roi: false      # ROI 由前端水印检测框选提供，模式本身不强制要求
+    needs_prompt: false
+
+  - id: cutout
+    name: 抠图
+    icon: scissors
+    icon_name: Scissors
+    description: AI 智能抠图，支持精细化边缘调整与画笔编辑
+    default_model: birefnet
+    needs_reference: false
+    needs_roi: false
     needs_prompt: false
 
   - id: upscale

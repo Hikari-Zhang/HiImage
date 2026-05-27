@@ -19,6 +19,9 @@ interface SettingsState {
   upscaleEnabled: boolean
   upscaleTile: number  // 0 = 自动计算；>0 = 固定 tile 大小
 
+  // Cutout
+  cutoutModel: string
+
   // Server
   serverPort: number
   keepaliveSeconds: number
@@ -45,6 +48,7 @@ interface SettingsState {
   setInpaintModel: (model: string) => void
   setUpscaleModel: (model: string) => void
   setUpscaleTile: (tile: number) => void
+  setCutoutModel: (model: string) => void
   setDilation: (dilation: number) => void
   setSensitivity: (sensitivity: number) => void
   setDisableNsfw: (v: boolean) => void
@@ -68,6 +72,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   upscaleModel: 'RealESRGAN_x4plus',
   upscaleEnabled: false,
   upscaleTile: 0,  // 0 = 自动计算
+  cutoutModel: 'birefnet',
   serverPort: 51821,
   keepaliveSeconds: 300,
   startupTimeout: 1800,
@@ -85,6 +90,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setInpaintModel: (model) => set({ inpaintModel: model }),
   setUpscaleModel: (model) => set({ upscaleModel: model }),
   setUpscaleTile: (tile) => set({ upscaleTile: tile }),
+  setCutoutModel: (model) => set({ cutoutModel: model }),
   setDilation: (dilation) => set({ defaultDilation: dilation }),
   setSensitivity: (sensitivity) => set({ sensitivity }),
   setDisableNsfw: (v) => set({ disableNsfw: v }),
@@ -157,6 +163,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const defaults = await res.json()
       set({
         inpaintModel: defaults.watermark_removal ?? 'wm_lama',
+        cutoutModel: defaults.cutout ?? 'birefnet',
         defaultsLoaded: true,
       })
     } catch (err) {

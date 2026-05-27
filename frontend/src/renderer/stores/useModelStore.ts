@@ -69,11 +69,42 @@ const DEFAULT_UPSCALE_GROUPS: ModelGroup[] = [
   },
 ]
 
+const DEFAULT_CUTOUT_GROUPS: ModelGroup[] = [
+  {
+    label: '推荐模型',
+    options: [
+      { value: 'birefnet', label: 'BiRefNet-General', description: '2024 SOTA 抠图，边缘细节极佳' },
+    ],
+  },
+  {
+    label: '其他模型',
+    options: [
+      { value: 'rmbg', label: 'RMBG 2.0', description: '商业级抠图精度，人像/产品均优秀' },
+      { value: 'isnet', label: 'IS-Net General', description: '产品图/商品摄影效果极佳' },
+      { value: 'u2net', label: 'U2-Net', description: '通用显著目标检测经典模型' },
+    ],
+  },
+  {
+    label: '动漫专用',
+    options: [
+      { value: 'isnet_anime', label: 'IS-Net Anime', description: '针对动漫/插画优化' },
+    ],
+  },
+  {
+    label: '快速模型',
+    options: [
+      { value: 'modnet', label: 'U2-Net 人像分割（快速）', description: '轻量人像抠图，速度极快' },
+    ],
+  },
+]
+
 interface ModelStoreState {
   /** 修复模型分组列表 */
   inpaintGroups: ModelGroup[]
   /** 超分辨率模型分组列表 */
   upscaleGroups: ModelGroup[]
+  /** 抠图模型分组列表 */
+  cutoutGroups: ModelGroup[]
   /**
    * 每个超分辨率模型的元数据（model_id → meta）
    *   defaultOutscale:         默认输出倍率
@@ -94,6 +125,7 @@ interface ModelStoreState {
 export const useModelStore = create<ModelStoreState>((set) => ({
   inpaintGroups: DEFAULT_INPAINT_GROUPS,
   upscaleGroups: DEFAULT_UPSCALE_GROUPS,
+  cutoutGroups: DEFAULT_CUTOUT_GROUPS,
   upscaleModelMeta: {},
   isLoaded: false,
   isLoading: false,
@@ -102,9 +134,10 @@ export const useModelStore = create<ModelStoreState>((set) => ({
   loadModels: async (backendURL: string) => {
     set({ isLoading: true, error: null })
     try {
-      const [inpaintRes, upscaleRes] = await Promise.all([
+      const [inpaintRes, upscaleRes, cutoutRes] = await Promise.all([
         fetch(`${backendURL}/api/models/inpaint`),
         fetch(`${backendURL}/api/models/upscale`),
+        fetch(`${backendURL}/api/cutout/models`),
       ])
 
       if (!inpaintRes.ok || !upscaleRes.ok) {
@@ -113,6 +146,7 @@ export const useModelStore = create<ModelStoreState>((set) => ({
 
       const inpaintData = await inpaintRes.json()
       const upscaleData = await upscaleRes.json()
+      const cutoutData = cutoutRes.ok ? await cutoutRes.json() : null
 
       // 转换后端数据为前端格式（统一去除 ── 装饰符）
       const stripDecorators = (s: string) => s.replace(/^──\s*|\s*──$/g, '').trim()
@@ -146,7 +180,22 @@ export const useModelStore = create<ModelStoreState>((set) => ({
         })
       )
 
-      set({ inpaintGroups, upscaleGroups, upscaleModelMeta, isLoaded: true, isLoading: false })
+      // 抠图模型
+      let cutoutGroups: ModelGroup[] = DEFAULT_CUTOUT_GROUPS
+      if (cutoutData?.groups) {
+        cutoutGroups = cutoutData.groups.map(
+          (g: { label: string; models: Array<{ id: string; name: string; description: string }> }) => ({
+            label: stripDecorators(g.label),
+            options: g.models.map((m) => ({
+              value: m.id,
+              label: m.name,
+              description: m.description,
+            })),
+          })
+        )
+      }
+
+      set({ inpaintGroups, upscaleGroups, cutoutGroups, upscaleModelMeta, isLoaded: true, isLoading: false })
     } catch (err: any) {
       console.warn('[ModelStore] 加载模型列表失败，使用默认配置:', err.message)
       // 失败时保留默认值

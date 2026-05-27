@@ -51,6 +51,7 @@ class RembgExecutor(BaseModelExecutor):
         _, img_bytes = cv2.imencode(".png", image_bgr)
 
         # 抠图
+        import rembg
         from io import BytesIO
         img_bytes_io = BytesIO(img_bytes.tobytes())
         result_bytes = rembg.remove(img_bytes_io.read(), session=self._session)

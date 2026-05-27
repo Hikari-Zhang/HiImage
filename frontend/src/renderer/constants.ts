@@ -134,4 +134,8 @@ export const ApiPath = {
   WS_PROGRESS:          '/api/ws/progress',
   SYNTHESIS_MODES:      '/api/synthesis/modes',
   SYNTHESIS_MODELS:     '/api/synthesis/models',
+  CUTOUT:               '/api/cutout',
+  CUTOUT_REFINE:        '/api/cutout/refine',
+  CUTOUT_COMPOSITE:     '/api/cutout/composite',
+  CUTOUT_MODELS:        '/api/cutout/models',
 } as const

@@ -22,7 +22,7 @@ export interface MaskStroke {
   /** 笔尖形状 */
   shape: 'circle' | 'square';
   /** 工具类型 */
-  tool: 'brush' | 'eraser';
+  tool: 'brush' | 'eraser' | 'add_fg' | 'remove_fg';
   /** 时间戳（用于撤销排序） */
   timestamp: number;
 }
@@ -36,7 +36,7 @@ export interface BrushSettings {
   /** 笔尖形状 */
   shape: 'circle' | 'square';
   /** 当前工具 */
-  tool: 'brush' | 'eraser' | 'magicWand';
+  tool: 'brush' | 'eraser' | 'magicWand' | 'add_fg' | 'remove_fg';
 }
 
 /** 遮罩导出选项 */

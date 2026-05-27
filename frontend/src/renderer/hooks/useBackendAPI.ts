@@ -280,9 +280,107 @@ export function useBackendAPI() {
     }>
   }
 
+  // ── 抠图 API ──────────────────────────────────────────────────────────────
+
+  /**
+   * 执行抠图（返回 RGBA 结果 + alpha mask）
+   */
+  const cutout = async (params: {
+    image: string
+    model: string
+    device: string
+  }) => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/cutout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      try {
+        const data = await res.json()
+        throw new Error(data.message || data.detail || `抠图失败 (${res.status})`)
+      } catch (jsonErr) {
+        if (jsonErr instanceof SyntaxError) {
+          throw new Error(`抠图失败: ${await res.text()}`)
+        }
+        throw jsonErr
+      }
+    }
+    return res.json() as Promise<{ image: string; mask: string; width: number; height: number }>
+  }
+
+  /**
+   * 遮罩精细化（羽化/膨胀/腐蚀/画笔编辑）
+   */
+  const cutoutRefine = async (params: {
+    mask: string
+    original_image: string
+    feather: number
+    dilate: number
+    brush_add?: string
+    brush_remove?: string
+  }) => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/cutout/refine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      try {
+        const data = await res.json()
+        throw new Error(data.message || data.detail || `精细化失败 (${res.status})`)
+      } catch (jsonErr) {
+        if (jsonErr instanceof SyntaxError) {
+          throw new Error(`精细化失败: ${await res.text()}`)
+        }
+        throw jsonErr
+      }
+    }
+    return res.json() as Promise<{ image: string; mask: string; width: number; height: number }>
+  }
+
+  /**
+   * 合成到自定义背景色
+   */
+  const cutoutComposite = async (params: {
+    image: string
+    background_color: string
+  }) => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/cutout/composite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      try {
+        const data = await res.json()
+        throw new Error(data.message || data.detail || `合成失败 (${res.status})`)
+      } catch (jsonErr) {
+        if (jsonErr instanceof SyntaxError) {
+          throw new Error(`合成失败: ${await res.text()}`)
+        }
+        throw jsonErr
+      }
+    }
+    return res.json() as Promise<{ image: string; width: number; height: number }>
+  }
+
+  /**
+   * 获取抠图模型列表
+   */
+  const getCutoutModels = async () => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/cutout/models`)
+    return res.json()
+  }
+
   return {
     detectWatermark, inpaint, inpaintWithMask, upscale, upscaleBatch, runPipeline,
     getPostprocessMethods, getInpaintModels, getUpscaleModels,
     getSynthesisModes, getSynthesisModels, runSynthesis, getDevices,
+    cutout, cutoutRefine, cutoutComposite, getCutoutModels,
   }
 }

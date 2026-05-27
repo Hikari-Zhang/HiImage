@@ -21,7 +21,7 @@ except NameError:
     from app.config import PROJECT_ROOT, MODELS_DIR
 
 from app.config import get
-from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, models as models_router_module
+from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, cutout, models as models_router_module
 from app.websocket.progress import router as ws_router
 from app.logging_manager import log_manager, setup_logging
 
@@ -98,5 +98,6 @@ app.include_router(settings.router, prefix="/api", tags=["settings"])
 app.include_router(logs.router, prefix="/api", tags=["logs"])
 app.include_router(postprocess.router, prefix="/api", tags=["postprocess"])
 app.include_router(synthesis.router, prefix="/api", tags=["synthesis"])
+app.include_router(cutout.router, prefix="/api", tags=["cutout"])
 app.include_router(models_router_module.router, prefix="/api", tags=["models"])
 app.include_router(ws_router, prefix="/api")  # → /api/ws/progress
