@@ -36,10 +36,10 @@ self.onmessage = function (e) {
   }
 
   try {
-    // 创建 OffscreenCanvas
+    // 创建 OffscreenCanvas（使用完整分辨率，不做人为截断）
     const canvas = new OffscreenCanvas(
-      Math.min(imageWidth * scale, 2048),
-      Math.min(imageHeight * scale, 2048)
+      imageWidth * scale,
+      imageHeight * scale
     )
     const ctx = canvas.getContext('2d')
 

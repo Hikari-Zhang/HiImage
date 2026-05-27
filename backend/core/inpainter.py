@@ -122,7 +122,8 @@ class Inpainter:
     def __init__(self, model_name='wm_lama', iopaint_path=None, device='mps', dilation=10, disable_nsfw=False,
                  prompt: str = '', negative_prompt: str = '',
                  sd_steps: int = 50, sd_guidance_scale: float = 7.5, sd_seed: int = 42,
-                 progress_callback=None):
+                 progress_callback=None,
+                 max_size: int = 2048):  # 新增：最大边长限制
         """
         初始化去除器
 
@@ -139,6 +140,7 @@ class Inpainter:
         :param sd_guidance_scale: CFG scale
         :param sd_seed: 随机种子
         :param progress_callback: 可选回调函数，签名为 progress_callback(percent: int, message: str)
+        :param max_size: 最大边长限制（像素），超过此尺寸的图像将自动缩放，默认 2048
         """
         # 保留原始 registry ID 供外部查询；内部使用 _iopaint_model_id 与 iopaint 交互
         self.model_name = model_name
@@ -170,6 +172,8 @@ class Inpainter:
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tmp'
         )
         self._cleanup_old_tmp()
+        # 新增：最大边长限制（超过此尺寸会自动缩放）
+        self.max_size = max_size
 
     def _get_effective_device(self, device: str) -> str:
         """
