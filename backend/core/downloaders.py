@@ -212,7 +212,7 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     from huggingface_hub import list_repo_files, hf_hub_download
     from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
-    hf_cache = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
+    hf_cache = str(_HF_HOME)
     token = os.environ.get("HF_TOKEN") or None
     repo_id = cfg["hf_model_id"]
     name = cfg.get("name", repo_id)

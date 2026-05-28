@@ -7,7 +7,6 @@
   POST /api/pipeline/run            一次性执行完整 inpaint→postprocess→upscale 流程
 """
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import numpy as np
@@ -15,14 +14,14 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.routers.inpaint import decode_image, decode_mask, encode_image
+from app.routers.inpaint import decode_image, decode_mask, encode_image, check_image_size
+from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.config import get
 from core.model_registry import get_default_model
 
 router = APIRouter()
-executor = ThreadPoolExecutor(max_workers=1)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -36,6 +35,7 @@ class PostprocessRequest(BaseModel):
     mask: str                   # 水印掩码 base64
     method: str = "poisson"     # poisson / gfpgan / lama_refine
     device: str = "mps"
+    task_id: str = ""           # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
 class PipelineRequest(BaseModel):
@@ -43,7 +43,7 @@ class PipelineRequest(BaseModel):
     image: str                        # 原始图像 base64
     rois: Optional[List[List[int]]] = None   # [[x1,y1,x2,y2],...]
     mask: Optional[str] = None        # 或直接传 mask base64
-    
+
     # Inpaint 参数
     inpaint_model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = "mps"
@@ -57,6 +57,8 @@ class PipelineRequest(BaseModel):
     # 超分参数
     upscale_enabled: bool = False
     upscale_model: str = "RealESRGAN_x4plus"
+
+    task_id: str = ""  # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
 # ──────────────────────────────────────────────────────────────
@@ -80,6 +82,10 @@ async def list_postprocess_methods():
 @router.post("/postprocess/fix")
 async def postprocess_fix(req: PostprocessRequest):
     """对已有 inpainting 结果做后处理修复"""
+    for img_b64 in (req.original_image, req.inpainted_image):
+        if (err := check_image_size(img_b64)):
+            return err
+
     original = decode_image(req.original_image)
     inpainted = decode_image(req.inpainted_image)
     mask = decode_mask(req.mask)
@@ -88,7 +94,7 @@ async def postprocess_fix(req: PostprocessRequest):
         f"开始后处理修复: method={req.method}, device={req.device}",
         source="postprocess",
     )
-    await progress_manager.send_progress(10, f"正在进行后处理（{req.method}）...")
+    await progress_manager.send_progress(10, f"正在进行后处理（{req.method}）...", task_id=req.task_id)
 
     def _process():
         from core.background_fixer import fix_background
@@ -103,12 +109,12 @@ async def postprocess_fix(req: PostprocessRequest):
     loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(executor, _process)
-        await progress_manager.send_complete("后处理完成")
+        await progress_manager.send_complete("后处理完成", task_id=req.task_id)
         log_manager.info("后处理修复完成", source="postprocess")
         return {"image": encode_image(result)}
     except Exception as e:
         err_str = str(e)
-        await progress_manager.send_error(err_str)
+        await progress_manager.send_error(err_str, task_id=req.task_id)
         log_manager.error(f"后处理修复失败: {err_str}", source="postprocess")
         first_line = err_str.split('\n')[0]
         return JSONResponse(status_code=422, content={"detail": err_str, "message": first_line})
@@ -117,6 +123,9 @@ async def postprocess_fix(req: PostprocessRequest):
 @router.post("/pipeline/run")
 async def run_pipeline(req: PipelineRequest):
     """完整处理 Pipeline：inpaint → postprocess → upscale"""
+    if (err := check_image_size(req.image)):
+        return err
+
     original = decode_image(req.image)
     mask_arr = decode_mask(req.mask) if req.mask else None
 
@@ -126,7 +135,7 @@ async def run_pipeline(req: PipelineRequest):
         f"upscale={'on' if req.upscale_enabled else 'off'}",
         source="pipeline",
     )
-    await progress_manager.send_progress(5, "正在初始化处理流程...")
+    await progress_manager.send_progress(5, "正在初始化处理流程...", task_id=req.task_id)
 
     def _process():
         from core.pipeline import Pipeline, PipelineConfig, InpaintStep, PostprocessStep, UpscaleStep
@@ -164,12 +173,12 @@ async def run_pipeline(req: PipelineRequest):
         )
 
     loop = asyncio.get_running_loop()
-    await progress_manager.send_progress(15, "正在处理...")
+    await progress_manager.send_progress(15, "正在处理...", task_id=req.task_id)
 
     try:
         result = await loop.run_in_executor(executor, _process)
         h, w = result.shape[:2]
-        await progress_manager.send_complete("Pipeline 处理完成")
+        await progress_manager.send_complete("Pipeline 处理完成", task_id=req.task_id)
         log_manager.info(f"Pipeline 完成: output={w}x{h}", source="pipeline")
         return {
             "image": encode_image(result),
@@ -178,7 +187,7 @@ async def run_pipeline(req: PipelineRequest):
         }
     except Exception as e:
         err_str = str(e)
-        await progress_manager.send_error(err_str)
+        await progress_manager.send_error(err_str, task_id=req.task_id)
         log_manager.error(f"Pipeline 失败: {err_str}", source="pipeline")
         first_line = err_str.split('\n')[0]
         return JSONResponse(status_code=422, content={"detail": err_str, "message": first_line})

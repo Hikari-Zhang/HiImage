@@ -4,7 +4,6 @@
 import asyncio
 import base64
 import io
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import cv2
@@ -14,48 +13,53 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import get
+from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from core.model_registry import get_default_model
+from core.utils import make_progress_callback
 
 router = APIRouter()
-executor = ThreadPoolExecutor(max_workers=1)
 
 
 # ============ 模型检查辅助函数 ============
 
-async def _ensure_model_ready_with_progress(model_id: str, operation_name: str) -> tuple[bool, str]:
+async def ensure_model_ready_with_progress(
+    model_id: str, operation_name: str, task_id: str = "", source: str = "inpaint"
+) -> tuple[bool, str]:
     """
     检查并确保模型已下载，支持进度推送。
-    
+
     :param model_id: 模型 ID
     :param operation_name: 操作名称（用于日志和进度消息）
+    :param task_id: 任务 ID，用于隔离 WebSocket 频道
+    :param source: 日志来源标识
     :return: (success, error_message)
     """
     from core.model_download_helper import ensure_model_ready
-    
+
     async def _progress_callback(percent: int, message: str):
-        """进度回调函数，通过 WebSocket 推送进度"""
         try:
             if percent >= 0:
                 await progress_manager.send_progress(
-                    max(5, min(percent, 30)),  # 限制在 5-30% 范围内
-                    f"{operation_name}：{message}"
+                    max(5, min(percent, 30)),
+                    f"{operation_name}：{message}",
+                    task_id=task_id,
                 )
             else:
-                await progress_manager.send_error(message)
+                await progress_manager.send_error(message, task_id=task_id)
         except Exception as e:
-            log_manager.error(f"进度推送失败: {e}", source="inpaint")
-    
-    log_manager.info(f"[{operation_name}] 检查模型就绪状态: {model_id}", source="inpaint")
+            log_manager.error(f"进度推送失败: {e}", source=source)
+
+    log_manager.info(f"[{operation_name}] 检查模型就绪状态: {model_id}", source=source)
     success, error_msg = await ensure_model_ready(
         model_id=model_id,
         progress_callback=_progress_callback,
     )
-    
+
     if not success:
-        log_manager.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}", source="inpaint")
-    
+        log_manager.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}", source=source)
+
     return success, error_msg
 
 
@@ -74,6 +78,7 @@ class InpaintRequest(BaseModel):
     device: str = "mps"
     dilation: int = 10
     disable_nsfw: bool = False
+    task_id: str = ""  # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
 class InpaintWithMaskRequest(BaseModel):
@@ -83,6 +88,7 @@ class InpaintWithMaskRequest(BaseModel):
     device: str = "mps"
     dilation: int = 10
     disable_nsfw: bool = False
+    task_id: str = ""  # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
 # ============ Helper Functions ============
@@ -118,6 +124,45 @@ def encode_image(image_rgb: np.ndarray) -> str:
     img_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
     _, buffer = cv2.imencode(".png", img_bgr)
     return base64.b64encode(buffer).decode("utf-8")
+
+
+# 单张图像最大允许解码大小（字节）。
+# Base64 字符数 × 3/4 ≈ 解码后字节数；30 MB 解码后约占 ~150 MB 峰值内存
+# （base64 字符串 + 解码字节 + RGB numpy 各一份），
+# 可通过 app/config.py 的 image.max_decode_mb 覆盖。
+_DEFAULT_IMAGE_MAX_MB = 30
+
+
+def check_image_size(
+    base64_str: str,
+    max_mb: Optional[int] = None,
+) -> Optional[JSONResponse]:
+    """
+    估算 Base64 图像的解码大小，超出阈值时返回 413 JSONResponse，否则返回 None。
+
+    在各路由入口调用，避免超大图像在解码后才发现内存不足（此时已无法优雅拒绝）。
+
+    :param base64_str: 原始 Base64 字符串（可含 data URL 前缀）
+    :param max_mb:     解码后最大允许大小（MB）；None 取默认值 _DEFAULT_IMAGE_MAX_MB
+    :return:           超出限制时返回 JSONResponse(413)，合规时返回 None
+    """
+    if max_mb is None:
+        max_mb = int(get("image.max_decode_mb", _DEFAULT_IMAGE_MAX_MB))
+    raw = base64_str.split(",", 1)[1] if "," in base64_str else base64_str
+    # Base64 每 4 字符对应 3 字节，快速估算无需实际解码
+    estimated_bytes = len(raw) * 3 // 4
+    limit_bytes = max_mb * 1024 * 1024
+    if estimated_bytes > limit_bytes:
+        msg = (
+            f"图像过大：估算解码后约 {estimated_bytes // (1024 * 1024)} MB，"
+            f"超出上限 {max_mb} MB。请压缩图像后重试。"
+        )
+        log_manager.warning(msg, source="inpaint")
+        return JSONResponse(
+            status_code=413,
+            content={"detail": msg, "message": msg},
+        )
+    return None
 
 
 # ============ Endpoints ============
@@ -169,6 +214,9 @@ async def detect_watermark(req: DetectRequest):
     """自动检测水印区域"""
     from core.watermark_detector import WatermarkDetector
 
+    if (err := check_image_size(req.image)):
+        return err
+
     image = decode_image(req.image)
     log_manager.info(f"开始水印检测 (sensitivity={req.sensitivity})", source="inpaint")
 
@@ -188,7 +236,8 @@ async def detect_watermark(req: DetectRequest):
 @router.post("/inpaint")
 async def inpaint_with_rois(req: InpaintRequest):
     """使用 ROI 列表去除水印"""
-    from core.inpainter import Inpainter
+    if (err := check_image_size(req.image)):
+        return err
 
     image = decode_image(req.image)
     log_manager.info(
@@ -197,64 +246,53 @@ async def inpaint_with_rois(req: InpaintRequest):
         source="inpaint",
     )
 
-    # 检查并确保模型已下载
-    await progress_manager.send_progress(5, f"正在检查模型...")
-    success, error_msg = await _ensure_model_ready_with_progress(req.model, "水印去除")
+    await progress_manager.send_progress(5, "正在检查模型...", task_id=req.task_id)
+    success, error_msg = await ensure_model_ready_with_progress(req.model, "水印去除", req.task_id)
     if not success:
-        await progress_manager.send_error(error_msg)
+        await progress_manager.send_error(error_msg, task_id=req.task_id)
         log_manager.error(f"水印去除失败（模型未就绪）: {error_msg}", source="inpaint")
         return JSONResponse(
             status_code=422,
             content={"detail": error_msg, "message": error_msg}
         )
 
-    await progress_manager.send_progress(10, "正在初始化模型...")
+    await progress_manager.send_progress(10, "正在初始化模型...", task_id=req.task_id)
 
     loop = asyncio.get_running_loop()
 
-    def _make_progress_callback():
-        """创建线程安全的进度回调"""
-        def callback(percent: int, message: str):
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    progress_manager.send_progress(percent, message),
-                    loop
-                )
-            except Exception as e:
-                log_manager.error(f"进度上报失败: {e}", source="inpaint")
-        return callback
-
     def _process():
-        # 使用新的执行器框架（支持 IOPaint / Restormer / NAFNet 等）
         from core.model_registry import get_model
         from core.model_executor import ModelExecutorFactory
 
-        # 获取模型配置
         model_config = get_model(req.model)
 
-        # 创建对应的执行器（自动根据 provider 分发）
-        executor = ModelExecutorFactory.create_executor(model_config, req.device)
+        model_exec = ModelExecutorFactory.create_executor(model_config, req.device)
 
-        # 统一调用接口
-        if executor.supports_mask():
+        if model_exec.supports_mask():
             # IOPaint 类模型：需要 mask 或 rois
-            return executor.execute(image, rois=req.rois, progress_callback=_make_progress_callback())
+            return model_exec.execute(
+                image,
+                rois=req.rois,
+                progress_callback=make_progress_callback(req.task_id, loop),
+            )
         else:
             # Restormer / NAFNet 类模型：直接处理（不需要 mask）
-            return executor.execute(image, progress_callback=_make_progress_callback())
+            return model_exec.execute(
+                image,
+                progress_callback=make_progress_callback(req.task_id, loop),
+            )
 
-    await progress_manager.send_progress(20, "正在处理...")
+    await progress_manager.send_progress(20, "正在处理...", task_id=req.task_id)
 
     try:
         result = await loop.run_in_executor(executor, _process)
-        await progress_manager.send_complete()
+        await progress_manager.send_complete(task_id=req.task_id)
         log_manager.info("水印去除完成", source="inpaint")
         return {"image": encode_image(result)}
     except Exception as e:
         err_str = str(e)
-        await progress_manager.send_error(err_str)
+        await progress_manager.send_error(err_str, task_id=req.task_id)
         log_manager.error(f"水印去除失败: {err_str}", source="inpaint")
-        # 提取第一行作为简短标题，避免把整个堆栈甩给前端
         first_line = err_str.split('\n')[0]
         return JSONResponse(status_code=422, content={"detail": err_str, "message": first_line})
 
@@ -262,7 +300,8 @@ async def inpaint_with_rois(req: InpaintRequest):
 @router.post("/inpaint/with-mask")
 async def inpaint_with_mask(req: InpaintWithMaskRequest):
     """使用自定义掩码去除水印"""
-    from core.inpainter import Inpainter
+    if (err := check_image_size(req.image)):
+        return err
 
     image = decode_image(req.image)
     mask = decode_mask(req.mask)
@@ -271,57 +310,44 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
         source="inpaint",
     )
 
-    # 检查并确保模型已下载
-    await progress_manager.send_progress(5, f"正在检查模型...")
-    success, error_msg = await _ensure_model_ready_with_progress(req.model, "掩码修复")
+    await progress_manager.send_progress(5, "正在检查模型...", task_id=req.task_id)
+    success, error_msg = await ensure_model_ready_with_progress(req.model, "掩码修复", req.task_id)
     if not success:
-        await progress_manager.send_error(error_msg)
+        await progress_manager.send_error(error_msg, task_id=req.task_id)
         log_manager.error(f"掩码修复失败（模型未就绪）: {error_msg}", source="inpaint")
         return JSONResponse(
             status_code=422,
             content={"detail": error_msg, "message": error_msg}
         )
 
-    await progress_manager.send_progress(10, "正在初始化模型...")
+    await progress_manager.send_progress(10, "正在初始化模型...", task_id=req.task_id)
 
     loop = asyncio.get_running_loop()
 
-    def _make_progress_callback():
-        """创建线程安全的进度回调（子线程 → 主线程事件循环）"""
-        def callback(percent: int, message: str):
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    progress_manager.send_progress(percent, message),
-                    loop
-                )
-            except Exception as e:
-                log_manager.error(f"进度上报失败: {e}", source="inpaint")
-        return callback
-
     def _process():
-        # 使用新的执行器框架（支持 IOPaint / Restormer / NAFNet 等）
         from core.model_registry import get_model
         from core.model_executor import ModelExecutorFactory
 
-        # 获取模型配置
         model_config = get_model(req.model)
 
-        # 创建对应的执行器（自动根据 provider 分发）
-        executor = ModelExecutorFactory.create_executor(model_config, req.device)
+        model_exec = ModelExecutorFactory.create_executor(model_config, req.device)
 
-        # 统一调用接口
-        return executor.execute(image, mask=mask, progress_callback=_make_progress_callback())
+        return model_exec.execute(
+            image,
+            mask=mask,
+            progress_callback=make_progress_callback(req.task_id, loop),
+        )
 
-    await progress_manager.send_progress(20, "正在处理...")
+    await progress_manager.send_progress(20, "正在处理...", task_id=req.task_id)
 
     try:
         result = await loop.run_in_executor(executor, _process)
-        await progress_manager.send_complete()
+        await progress_manager.send_complete(task_id=req.task_id)
         log_manager.info("掩码修复完成", source="inpaint")
         return {"image": encode_image(result)}
     except Exception as e:
         err_str = str(e)
-        await progress_manager.send_error(err_str)
+        await progress_manager.send_error(err_str, task_id=req.task_id)
         log_manager.error(f"掩码修复失败: {err_str}", source="inpaint")
         first_line = err_str.split('\n')[0]
         return JSONResponse(status_code=422, content={"detail": err_str, "message": first_line})

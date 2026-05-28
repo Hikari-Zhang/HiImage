@@ -9,7 +9,6 @@
 """
 import asyncio
 import base64
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 import cv2
@@ -18,48 +17,12 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.routers.inpaint import decode_image, encode_image
+from app.routers.inpaint import decode_image, encode_image, check_image_size, ensure_model_ready_with_progress
+from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 
 router = APIRouter()
-executor = ThreadPoolExecutor(max_workers=1)
-
-
-# ============ 模型检查辅助函数 ============
-
-async def _ensure_model_ready_with_progress(model_id: str, operation_name: str) -> tuple[bool, str]:
-    """
-    检查并确保模型已下载，支持进度推送。
-
-    :param model_id: 模型 ID
-    :param operation_name: 操作名称（用于日志和进度消息）
-    :return: (success, error_message)
-    """
-    from core.model_download_helper import ensure_model_ready
-
-    async def _progress_callback(percent: int, message: str):
-        try:
-            if percent >= 0:
-                await progress_manager.send_progress(
-                    max(5, min(percent, 30)),
-                    f"{operation_name}：{message}"
-                )
-            else:
-                await progress_manager.send_error(message)
-        except Exception as e:
-            log_manager.error(f"进度推送失败: {e}", source="cutout")
-
-    log_manager.info(f"[{operation_name}] 检查模型就绪状态: {model_id}", source="cutout")
-    success, error_msg = await ensure_model_ready(
-        model_id=model_id,
-        progress_callback=_progress_callback,
-    )
-
-    if not success:
-        log_manager.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}", source="cutout")
-
-    return success, error_msg
 
 
 # ============ 编解码辅助函数 ============
@@ -98,6 +61,7 @@ class CutoutRequest(BaseModel):
     image: str              # Base64 原图
     model: str = "birefnet" # 模型 ID
     device: str = "mps"     # 推理设备
+    task_id: str = ""       # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
 class RefineRequest(BaseModel):
@@ -169,6 +133,9 @@ async def get_cutout_models():
 @router.post("/cutout")
 async def run_cutout(req: CutoutRequest):
     """执行抠图，返回 RGBA 结果图 + alpha mask"""
+    if (err := check_image_size(req.image)):
+        return err
+
     source = decode_image(req.image)
 
     log_manager.info(
@@ -178,16 +145,16 @@ async def run_cutout(req: CutoutRequest):
     )
 
     # 检查模型是否就绪
-    await progress_manager.send_progress(5, "正在检查模型...")
-    success, error_msg = await _ensure_model_ready_with_progress(req.model, "抠图")
+    await progress_manager.send_progress(5, "正在检查模型...", task_id=req.task_id)
+    success, error_msg = await ensure_model_ready_with_progress(req.model, "抠图", req.task_id, source="cutout")
     if not success:
-        await progress_manager.send_error(error_msg)
+        await progress_manager.send_error(error_msg, task_id=req.task_id)
         return JSONResponse(
             status_code=422,
             content={"detail": error_msg, "message": error_msg}
         )
 
-    await progress_manager.send_progress(10, "正在初始化抠图模型...")
+    await progress_manager.send_progress(10, "正在初始化抠图模型...", task_id=req.task_id)
 
     loop = asyncio.get_running_loop()
 
@@ -197,13 +164,13 @@ async def run_cutout(req: CutoutRequest):
 
         model_config = get_model(req.model)
 
-        executor = ModelExecutorFactory.create_executor(model_config, req.device)
+        model_executor = ModelExecutorFactory.create_executor(model_config, req.device)
         try:
             # RembgExecutor.execute() 返回 RGBA numpy array
-            result_rgba = executor.execute(source)
+            result_rgba = model_executor.execute(source)
             return result_rgba
         finally:
-            executor.unload_model()
+            model_executor.unload_model()
             try:
                 import torch
                 if torch.cuda.is_available():
@@ -211,7 +178,7 @@ async def run_cutout(req: CutoutRequest):
             except Exception:
                 pass
 
-    await progress_manager.send_progress(20, "正在抠图处理...")
+    await progress_manager.send_progress(20, "正在抠图处理...", task_id=req.task_id)
 
     try:
         result_rgba = await loop.run_in_executor(executor, _process)
@@ -224,7 +191,7 @@ async def run_cutout(req: CutoutRequest):
             # 如果没有 alpha 通道，创建全白 mask
             alpha_mask = np.full((h, w), 255, dtype=np.uint8)
 
-        await progress_manager.send_complete("抠图完成")
+        await progress_manager.send_complete("抠图完成", task_id=req.task_id)
         log_manager.info(f"抠图完成: output={w}x{h}", source="cutout")
 
         return {
@@ -235,7 +202,7 @@ async def run_cutout(req: CutoutRequest):
         }
     except Exception as e:
         err_str = str(e)
-        await progress_manager.send_error(err_str)
+        await progress_manager.send_error(err_str, task_id=req.task_id)
         log_manager.error(f"抠图失败: {err_str}", source="cutout")
         first_line = err_str.split("\n")[0]
         return JSONResponse(
@@ -251,6 +218,9 @@ async def refine_mask(req: RefineRequest):
 
     纯 OpenCV 处理，无需 GPU。
     """
+    if (err := check_image_size(req.original_image)):
+        return err
+
     mask = decode_mask(req.mask)
     original = decode_image(req.original_image)
 

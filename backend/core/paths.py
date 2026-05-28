@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -57,6 +58,7 @@ RESTORMER_HOME = Path(os.environ.get("RESTORMER_HOME", str(Path.home() / ".cache
 U2NET_HOME = Path(os.environ.get("U2NET_HOME", str(Path.home() / ".u2net")))
 
 # 项目 models/ 目录（向后兼容旧代码）
+# ⚠️  已废弃：新代码请使用 MODELS_CACHE_DIR（~/.cache/models）；此变量仅作向后兼容保留。
 MODELS_DIR = PROJECT_ROOT / "models"
 
 # 模型缓存目录（默认下载位置）：~/.cache/hiimage/models/
@@ -179,23 +181,51 @@ def resolve_model_cache_path(cfg: dict) -> Path:
         return resolve_model_path(local_path)
 
 
+def detect_iopaint_path() -> str:
+    """
+    从当前 Python 环境的 Scripts/bin 目录查找 iopaint 可执行文件。
+
+    检查顺序（Windows 兼容）：
+      1. <python_dir>/iopaint.exe  （Windows）
+      2. <python_dir>/iopaint      （macOS / Linux）
+      3. 均未找到时返回 "iopaint"，依赖系统 PATH
+
+    用法：
+        from core.paths import detect_iopaint_path
+        iopaint = detect_iopaint_path()
+    """
+    python_dir = Path(sys.executable).parent
+    for candidate in (python_dir / "iopaint.exe", python_dir / "iopaint"):
+        if candidate.exists():
+            return str(candidate)
+    return "iopaint"
+
+
 # ──────────────────────────────────────────────────────────────
 # 向后兼容：保留旧的环境变量设置函数
 # ──────────────────────────────────────────────────────────────
 
 def apply_default_env_vars() -> None:
     """
-    为依赖环境变量的库（huggingface_hub, torch 等）设置默认环境变量。
+    为依赖环境变量的库（huggingface_hub, torch, gfpgan, rembg 等）设置默认环境变量。
 
     注意：此函数仅设置*未定义*的环境变量，不会覆盖用户已设置的值。
     在 app/main.py 启动时调用。
 
     当前设置的变量：
-      - HF_HOME       : HuggingFace 缓存目录
-      - TORCH_HOME    : Torch 缓存目录
+      - HF_HOME         : HuggingFace 缓存目录
+      - TORCH_HOME      : Torch 缓存目录
+      - GFPGAN_HOME     : GFPGAN 权重缓存目录
+      - REALESRGAN_HOME : Real-ESRGAN 权重缓存目录
+      - RESTORMER_HOME  : Restormer 权重缓存目录
+      - U2NET_HOME      : rembg / U2NET 模型缓存目录
     """
-    _set_default("HF_HOME", str(HF_HOME))
-    _set_default("TORCH_HOME", str(TORCH_HOME))
+    _set_default("HF_HOME",         str(HF_HOME))
+    _set_default("TORCH_HOME",      str(TORCH_HOME))
+    _set_default("GFPGAN_HOME",     str(GFPGAN_HOME))
+    _set_default("REALESRGAN_HOME", str(REALESRGAN_HOME))
+    _set_default("RESTORMER_HOME",  str(RESTORMER_HOME))
+    _set_default("U2NET_HOME",      str(U2NET_HOME))
 
 
 def _set_default(var_name: str, default_value: str) -> None:

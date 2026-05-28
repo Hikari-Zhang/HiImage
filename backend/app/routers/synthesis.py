@@ -7,57 +7,19 @@
   POST /api/synthesis/run            执行合成处理
 """
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.routers.inpaint import decode_image, encode_image
+from app.routers.inpaint import decode_image, encode_image, check_image_size, ensure_model_ready_with_progress
+from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
-from app.config import get
+from core.utils import make_progress_callback
 
 router = APIRouter()
-executor = ThreadPoolExecutor(max_workers=1)
-
-
-# ============ 模型检查辅助函数 ============
-
-async def _ensure_model_ready_with_progress(model_id: str, operation_name: str) -> tuple[bool, str]:
-    """
-    检查并确保模型已下载，支持进度推送。
-    
-    :param model_id: 模型 ID
-    :param operation_name: 操作名称（用于日志和进度消息）
-    :return: (success, error_message)
-    """
-    from core.model_download_helper import ensure_model_ready
-    
-    async def _progress_callback(percent: int, message: str):
-        """进度回调函数，通过 WebSocket 推送进度"""
-        try:
-            if percent >= 0:
-                await progress_manager.send_progress(
-                    max(5, min(percent, 30)),
-                    f"{operation_name}：{message}"
-                )
-            else:
-                await progress_manager.send_error(message)
-        except Exception as e:
-            log_manager.error(f"进度推送失败: {e}", source="synthesis")
-    
-    log_manager.info(f"[{operation_name}] 检查模型就绪状态: {model_id}", source="synthesis")
-    success, error_msg = await ensure_model_ready(
-        model_id=model_id,
-        progress_callback=_progress_callback,
-    )
-    
-    if not success:
-        log_manager.error(f"[{operation_name}] 模型未就绪: {model_id} - {error_msg}", source="synthesis")
-    
-    return success, error_msg
 
 
 # ──────────────────────────────────────────────────────────────
@@ -73,6 +35,7 @@ class SynthesisRequest(BaseModel):
     model_id: str = "rmbg"                 # 模型 ID
     device: str = "mps"
     prompt: str = ""                       # SD 系列模型的文字引导（可选）
+    task_id: str = ""                      # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
 # ──────────────────────────────────────────────────────────────
@@ -96,6 +59,11 @@ async def list_synthesis_models():
 @router.post("/synthesis/run")
 async def run_synthesis(req: SynthesisRequest):
     """执行智能合成处理"""
+    if (err := check_image_size(req.source_image)):
+        return err
+    if req.reference_image and (err := check_image_size(req.reference_image)):
+        return err
+
     source = decode_image(req.source_image)
     reference = decode_image(req.reference_image) if req.reference_image else None
     rois = [tuple(r) for r in req.rois] if req.rois else None
@@ -106,31 +74,19 @@ async def run_synthesis(req: SynthesisRequest):
         source="synthesis",
     )
     
-    # 检查并确保模型已下载
-    await progress_manager.send_progress(5, f"正在检查模型...")
-    success, error_msg = await _ensure_model_ready_with_progress(req.model_id, "智能合成")
+    await progress_manager.send_progress(5, "正在检查模型...", task_id=req.task_id)
+    success, error_msg = await ensure_model_ready_with_progress(req.model_id, "智能合成", req.task_id, source="synthesis")
     if not success:
-        await progress_manager.send_error(error_msg)
+        await progress_manager.send_error(error_msg, task_id=req.task_id)
         log_manager.error(f"智能合成失败（模型未就绪）: {error_msg}", source="synthesis")
         return JSONResponse(
             status_code=422,
             content={"detail": error_msg, "message": error_msg}
         )
-    
-    await progress_manager.send_progress(10, f"正在初始化 [{req.mode}] 处理...")
+
+    await progress_manager.send_progress(10, f"正在初始化 [{req.mode}] 处理...", task_id=req.task_id)
 
     loop = asyncio.get_running_loop()
-
-    def _make_progress_callback():
-        def callback(percent: int, message: str):
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    progress_manager.send_progress(percent, message),
-                    loop,
-                )
-            except Exception as e:
-                log_manager.error(f"进度上报失败: {e}", source="synthesis")
-        return callback
 
     def _process():
         from core.synthesizer import Synthesizer
@@ -139,7 +95,7 @@ async def run_synthesis(req: SynthesisRequest):
             model_id=req.model_id,
             device=req.device,
             prompt=req.prompt,
-            progress_callback=_make_progress_callback(),
+            progress_callback=make_progress_callback(req.task_id, loop, source="synthesis"),
         )
         return synth.run(
             source_rgb=source,
@@ -147,12 +103,12 @@ async def run_synthesis(req: SynthesisRequest):
             reference_rgb=reference,
         )
 
-    await progress_manager.send_progress(20, "正在处理中...")
+    await progress_manager.send_progress(20, "正在处理中...", task_id=req.task_id)
 
     try:
         result = await loop.run_in_executor(executor, _process)
         h, w = result.shape[:2]
-        await progress_manager.send_complete("合成完成")
+        await progress_manager.send_complete("合成完成", task_id=req.task_id)
         log_manager.info(f"智能合成完成: output={w}x{h}", source="synthesis")
         return {
             "image": encode_image(result),
@@ -161,7 +117,7 @@ async def run_synthesis(req: SynthesisRequest):
         }
     except Exception as e:
         err_str = str(e)
-        await progress_manager.send_error(err_str)
+        await progress_manager.send_error(err_str, task_id=req.task_id)
         log_manager.error(f"智能合成失败: {err_str}", source="synthesis")
         first_line = err_str.split("\n")[0]
         return JSONResponse(

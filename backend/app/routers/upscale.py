@@ -6,17 +6,15 @@ import os
 
 import cv2
 import numpy as np
-from concurrent.futures import ThreadPoolExecutor
-
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.routers.inpaint import decode_image, encode_image
+from app.routers.inpaint import decode_image, encode_image, check_image_size
+from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 
 router = APIRouter()
-executor = ThreadPoolExecutor(max_workers=1)
 
 
 @router.get("/models/upscale")
@@ -71,6 +69,7 @@ class UpscaleRequest(BaseModel):
     outscale: int | None = None  # 前端覆盖倍率；None 则使用模型默认值
     tile: int | None = None     # 分块大小；0 = 自动计算；None = 使用默认值
     output_path: str | None = None  # 非空时直接保存文件，不返回 base64
+    task_id: str = ""  # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
 class BatchUpscaleRequest(BaseModel):
@@ -82,6 +81,7 @@ class BatchUpscaleRequest(BaseModel):
     tile: int | None = None
     output_dir: str | None = None  # 非空时直接保存文件，返回文件路径而非 base64
     is_file_path: bool = False  # True 时 images 为文件路径列表
+    task_id: str = ""  # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
 @router.post("/upscale/batch")
@@ -136,13 +136,14 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
                 # Electron 模式：直接读取文件
                 file_path = img_data
                 file_name = os.path.basename(file_path)
-                import cv2
                 img_bgr = cv2.imread(file_path)
                 if img_bgr is None:
                     raise ValueError(f"无法读取图片: {file_path}")
                 image = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             else:
-                # Web 模式：Base64 解码
+                # Web 模式：Base64 解码（先做尺寸预检）
+                if check_image_size(img_data):
+                    raise ValueError("图像超出大小限制，请压缩后重试")
                 image = decode_image(img_data)
         except Exception as e:
             failed_count += 1
@@ -157,7 +158,7 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
         h_in, w_in = image.shape[:2]
         msg = f"正在处理第 {current}/{total} 张: {file_name} ({w_in}x{h_in})"
         progress = int((idx / total) * 100)
-        await progress_manager.send_progress(progress, msg)
+        await progress_manager.send_progress(progress, msg, task_id=req.task_id)
         log_manager.info(msg, source="upscale_batch")
 
         # 处理：复用 shared_upscaler，不再每张图新建实例
@@ -174,7 +175,6 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
 
             # 保存或编码结果
             if req.output_dir:
-                os.makedirs(req.output_dir, exist_ok=True)
                 base_name = os.path.splitext(file_name)[0]
                 out_path = os.path.join(req.output_dir, f"{base_name}_upscaled.png")
                 result_bgr = cv2.cvtColor(result_rgb, cv2.COLOR_RGB2BGR)
@@ -215,9 +215,9 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
             log_manager.error(f"批量超分辨率失败（第 {current}/{total} 张）: {str(e)}", source="upscale_batch")
 
     # 完成
-    await progress_manager.send_progress(100, f"批量处理完成：成功 {success_count} 张，失败 {failed_count} 张")
+    await progress_manager.send_progress(100, f"批量处理完成：成功 {success_count} 张，失败 {failed_count} 张", task_id=req.task_id)
     log_manager.info(f"批量超分辨率完成: 成功 {success_count}/{total}", source="upscale_batch")
-    await progress_manager.send_complete(f"批量处理完成：{success_count} 成功，{failed_count} 失败")
+    await progress_manager.send_complete(f"批量处理完成：{success_count} 成功，{failed_count} 失败", task_id=req.task_id)
 
     # 批量处理完成，释放模型和显存
     del shared_upscaler
@@ -242,6 +242,9 @@ async def upscale_image(req: UpscaleRequest):
     """超分辨率处理（单张）"""
     from core.upscaler import Upscaler
 
+    if (err := check_image_size(req.image)):
+        return err
+
     image = decode_image(req.image)
     h_in, w_in = image.shape[:2]
     log_manager.info(
@@ -249,7 +252,7 @@ async def upscale_image(req: UpscaleRequest):
         source="upscale",
     )
 
-    await progress_manager.send_progress(10, "正在加载超分辨率模型...")
+    await progress_manager.send_progress(10, "正在加载超分辨率模型...", task_id=req.task_id)
 
     tile = req.tile if req.tile is not None else 0
 
@@ -270,7 +273,7 @@ async def upscale_image(req: UpscaleRequest):
         return r
 
     loop = asyncio.get_running_loop()
-    await progress_manager.send_progress(30, "正在处理超分辨率...")
+    await progress_manager.send_progress(30, "正在处理超分辨率...", task_id=req.task_id)
 
     result = None
     try:
@@ -278,7 +281,7 @@ async def upscale_image(req: UpscaleRequest):
         # 释放输入图像（已在子线程中使用完毕）
         del image
 
-        await progress_manager.send_complete("超分辨率处理完成")
+        await progress_manager.send_complete("超分辨率处理完成", task_id=req.task_id)
 
         h, w = result.shape[:2]
         log_manager.info(f"超分辨率完成: output={w}x{h}", source="upscale")
@@ -324,6 +327,6 @@ async def upscale_image(req: UpscaleRequest):
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-        await progress_manager.send_error(str(e))
+        await progress_manager.send_error(str(e), task_id=req.task_id)
         log_manager.error(f"超分辨率失败: {str(e)}", source="upscale")
         raise

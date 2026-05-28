@@ -25,21 +25,10 @@ import numpy as np
 import cv2
 
 # 使用统一路径管理器
-from core.paths import MODELS_DIR as _MODELS_DIR, HF_HOME as _HF_HOME
+from core.paths import MODELS_DIR as _MODELS_DIR, HF_HOME as _HF_HOME, detect_iopaint_path
+from core.utils import resolve_effective_device
 import app.config as _cfg
 
-
-def _detect_iopaint_path() -> str:
-    """从当前 Python 环境的 bin 目录查找 iopaint"""
-    python_dir = Path(sys.executable).parent
-    iopaint_path = python_dir / "iopaint"
-    if iopaint_path.exists():
-        return str(iopaint_path)
-    return "iopaint"  # fallback
-
-# 旧版前缀匹配列表：仅用于向后兼容（当直接传入 iopaint_model_id 且不在注册表中时）
-# 新模型请在 core/models.yaml 中添加 iopaint_mode: server，无需修改此处
-_DIFFUSION_PREFIXES = ('runwayml/', 'Sanster/', 'diffusers/', 'Uminosachi/', 'redstonehero/', 'Fantasy-Studio/')
 
 SERVER_HOST = '127.0.0.1'
 
@@ -70,21 +59,20 @@ def is_diffusion_model(model_id: str) -> bool:
     检查顺序：
       1. 通过注册表 registry ID（如 "wm_anytext"）查找 iopaint_mode 字段
       2. 通过 iopaint_model_id 反向查找（兼容直接传入 "Sanster/AnyText" 的旧代码）
-      3. 回退到前缀匹配（_DIFFUSION_PREFIXES，兼容注册表之外的场景）
     """
     try:
         from core.model_registry import MODEL_BY_ID, MODELS
+        from core.constants import IOPaintMode
         # 优先：按 registry ID 查找（如 "wm_anytext"）
         if model_id in MODEL_BY_ID:
-            return MODEL_BY_ID[model_id].get("iopaint_mode") == "server"
+            return MODEL_BY_ID[model_id].get("iopaint_mode") == IOPaintMode.SERVER
         # 次之：通过 iopaint_model_id 反向查找（兼容直接传入 "Sanster/AnyText" 的旧调用）
         for m in MODELS:
             if m.get("iopaint_model_id") == model_id:
-                return m.get("iopaint_mode") == "server"
+                return m.get("iopaint_mode") == IOPaintMode.SERVER
     except Exception:
         pass
-    # 最终回退：前缀匹配（向后兼容，不在注册表中的模型）
-    return model_id.startswith(_DIFFUSION_PREFIXES)
+    return False
 
 
 class _ModelServer:
@@ -102,7 +90,7 @@ class _ModelServer:
         self._last_used: float = 0.0
         self._idle_timer: Optional[threading.Timer] = None
         self._active_inferences: int = 0   # 正在进行的推理请求数，> 0 时不允许 idle 关闭
-        self._iopaint_path = _detect_iopaint_path()
+        self._iopaint_path = detect_iopaint_path()
         self._log_lines: list = []   # 缓存子进程最近输出，供错误诊断
         self._iopaint_log_file = None  # 独立日志文件句柄
 
@@ -126,7 +114,7 @@ class _ModelServer:
             # 这里只检查进程是否需要重启。
 
             # 计算此次请求的有效设备（可能被 models.yaml 的 device_override 覆盖）
-            effective_device = self._resolve_effective_device(model_name, device)
+            effective_device = resolve_effective_device(model_name, device)
 
             needs_restart = (
                 self._proc is None
@@ -138,31 +126,9 @@ class _ModelServer:
 
             if needs_restart:
                 self._stop_unlocked()
-                self._start_unlocked(model_name, device, disable_nsfw)
+                self._start_unlocked(model_name, effective_device, disable_nsfw)
 
             return f'http://{SERVER_HOST}:{_port()}'
-
-    @staticmethod
-    def _resolve_effective_device(model_name: str, device: str) -> str:
-        """
-        查询 models.yaml 中模型的 device_override 字段，返回实际使用的设备名。
-        若无 override 或注册表不可用，返回原始 device。
-        """
-        try:
-            from core.model_registry import MODEL_BY_ID, MODELS
-            cfg = MODEL_BY_ID.get(model_name)
-            if cfg is None:
-                for m in MODELS:
-                    if m.get("iopaint_model_id") == model_name:
-                        cfg = m
-                        break
-            if cfg:
-                override = cfg.get("device_override")
-                if override:
-                    return override
-        except Exception:
-            pass
-        return device
 
     @staticmethod
     def _is_model_cached(model_name: str) -> bool:
@@ -318,16 +284,14 @@ class _ModelServer:
     # 私有方法
     # ------------------------------------------------------------------
 
-    def _start_unlocked(self, model_name: str, device: str, disable_nsfw: bool):
-        """启动 iopaint start 子进程并等待就绪（已持锁）"""
+    def _start_unlocked(self, model_name: str, effective_device: str, disable_nsfw: bool):
+        """启动 iopaint start 子进程并等待就绪（已持锁）。
+
+        :param effective_device: 已由 ensure_running 通过 resolve_effective_device 解析的设备名。
+        """
         # 使用 paths.py 中统一定义的 models 目录
         model_dir = str(_MODELS_DIR)
 
-        # 部分扩散模型在特定设备上存在兼容性问题，需要从注册表读取强制设备覆盖。
-        # 例如：AnyText 的 LDM/DDIM pipeline 使用了 MPS 不支持的 float64 cast
-        # 和 cumsum 操作，在 MPS 上运行时 iopaint server 推理时返回 HTTP 500。
-        # 对于这类模型，models.yaml 中设置 device_override: cpu，此处读取并覆盖。
-        effective_device = device
         _startup_cfg = None   # 注册表配置，供后续预启动检查和命令构造复用
         try:
             from core.model_registry import MODEL_BY_ID, MODELS
@@ -338,16 +302,8 @@ class _ModelServer:
                     if m.get("iopaint_model_id") == model_name:
                         _startup_cfg = m
                         break
-            if _startup_cfg:
-                override = _startup_cfg.get("device_override")
-                if override and override != device:
-                    print(
-                        f"[ModelServer] 模型 '{model_name}' 不支持设备 '{device}'，"
-                        f"按配置强制切换为 '{override}'"
-                    )
-                    effective_device = override
         except Exception:
-            pass  # 注册表不可用时，沿用用户设定的设备，不阻断启动
+            pass  # 注册表不可用时不阻断启动
 
         # ── 启动前模型完整性检查 ───────────────────────────────────────────────
         # 对 HF 托管的 server 模式模型做完整性检测，防止以损坏文件（如 git-lfs 指针
@@ -436,7 +392,7 @@ class _ModelServer:
             popen_kwargs['start_new_session'] = True
         self._proc = subprocess.Popen(cmd, **popen_kwargs)
         self._current_model = model_name
-        self._current_device = effective_device   # 存储有效设备（已应用 device_override）
+        self._current_device = effective_device
         self._current_nsfw = disable_nsfw
 
         # 异步打印服务日志
@@ -594,45 +550,77 @@ class _ModelServer:
     @staticmethod
     def _stream_logs(proc: subprocess.Popen, log_lines: list, log_file=None):
         """
-        将子进程 stdout 实时转发到当前进程 stdout，同时缓存到 log_lines 供错误诊断。
-        tqdm 进度条使用 \\r 原地刷新（不含 \\n），必须逐字符读取才能正确还原，
-        否则按行读取会将所有进度更新积压到下一个 \\n 才一起输出。
+        将子进程 stdout 实时转发到当前进程 stdout，同时缓存到 log_lines 供错误诊断，
+        并将完整日志写入独立文件（log_file）以便离线排查。
+        tqdm 进度条使用 \\r 原地刷新，批量读取（256 字符/次）后在缓冲中定位 \\r/\\n
+        拆分行/帧，与逐字符版本行为完全一致，但减少了约 256 倍的 read syscall 开销。
         """
         try:
-            buf = []
+            buf = ""
             while True:
-                ch = proc.stdout.read(1)
-                if not ch:
+                chunk = proc.stdout.read(256)
+                if not chunk:
                     # 进程已关闭，刷出最后一段缓冲
                     if buf:
-                        line = ''.join(buf)
+                        sys.stdout.write(f"[iopaint] {buf}\n")
+                        sys.stdout.flush()
+                        log_lines.append(buf)
+                        if len(log_lines) > 200:
+                            log_lines.pop(0)
+                        if log_file:
+                            try:
+                                log_file.write(buf + '\n')
+                                log_file.flush()
+                            except OSError:
+                                pass
+                    break
+                buf += chunk
+                # 消费缓冲中所有完整的行 / 回车帧
+                while True:
+                    ri = buf.find('\r')
+                    ni = buf.find('\n')
+                    if ri == -1 and ni == -1:
+                        break
+                    if ri == -1 or (ni != -1 and ni < ri):
+                        # \n 先出现 —— 完整日志行
+                        line, buf = buf[:ni], buf[ni + 1:]
                         sys.stdout.write(f"[iopaint] {line}\n")
                         sys.stdout.flush()
                         log_lines.append(line)
-                    break
-                if ch == '\r':
-                    # 行内刷新（tqdm 进度条）：原地覆盖当前行
-                    line = ''.join(buf)
-                    sys.stdout.write(f"\r[iopaint] {line}")
-                    sys.stdout.flush()
-                    buf = []
-                elif ch == '\n':
-                    line = ''.join(buf)
-                    sys.stdout.write(f"[iopaint] {line}\n")
-                    sys.stdout.flush()
-                    log_lines.append(line)
-                    # 只保留最近 200 行，避免内存无限增长
-                    if len(log_lines) > 200:
-                        log_lines.pop(0)
-                    buf = []
-                else:
-                    buf.append(ch)
+                        # 只保留最近 200 行，避免内存无限增长
+                        if len(log_lines) > 200:
+                            log_lines.pop(0)
+                        if log_file:
+                            try:
+                                log_file.write(line + '\n')
+                                log_file.flush()
+                            except OSError:
+                                pass
+                    else:
+                        # \r 先出现 —— tqdm 进度条原地刷新帧
+                        # \r\n（Windows CRLF）：跳过紧随的 \n，避免产生空日志行
+                        remainder = buf[ri + 1:]
+                        line, buf = buf[:ri], remainder[1:] if remainder.startswith('\n') else remainder
+                        sys.stdout.write(f"\r[iopaint] {line}")
+                        sys.stdout.flush()
         except (ValueError, OSError):
             pass
 
 
 # 全局单例
 _server = _ModelServer()
+
+# 注册进程退出钩子，确保 iopaint 子进程在主进程退出时被清理
+atexit.register(_server.stop)
+
+
+def _handle_sigterm(signum, frame):
+    _server.stop()
+    raise SystemExit(0)
+
+
+if hasattr(signal, 'SIGTERM'):
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 def get_server() -> _ModelServer:

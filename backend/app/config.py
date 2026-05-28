@@ -3,6 +3,7 @@
 """
 import json
 import os
+import threading
 from typing import Any
 
 # 项目根目录（backend/ 的上级）
@@ -28,27 +29,33 @@ DEFAULTS = {
 
 _cache: dict = {}
 _loaded = False
+_lock = threading.Lock()
 
 
 def _load() -> dict:
     global _cache, _loaded
+    # Fast path: already loaded (no lock needed for read)
     if _loaded:
         return _cache
-    _loaded = True
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        flat = {}
-        for section, values in raw.items():
-            if section.startswith("_"):
-                continue
-            if isinstance(values, dict):
-                for key, val in values.items():
-                    if not key.startswith("_"):
-                        flat[f"{section}.{key}"] = val
-        _cache = flat
-    except (FileNotFoundError, json.JSONDecodeError):
-        _cache = {}
+    with _lock:
+        # Re-check inside lock to avoid double-load
+        if _loaded:
+            return _cache
+        _loaded = True
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            flat = {}
+            for section, values in raw.items():
+                if section.startswith("_"):
+                    continue
+                if isinstance(values, dict):
+                    for key, val in values.items():
+                        if not key.startswith("_"):
+                            flat[f"{section}.{key}"] = val
+            _cache = flat
+        except (FileNotFoundError, json.JSONDecodeError):
+            _cache = {}
     return _cache
 
 
@@ -92,5 +99,6 @@ def save(settings: dict) -> None:
 def reload():
     """重新加载配置"""
     global _loaded
-    _loaded = False
+    with _lock:
+        _loaded = False
     _load()

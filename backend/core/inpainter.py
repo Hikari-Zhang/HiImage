@@ -17,18 +17,8 @@ import shutil
 from pathlib import Path
 
 from core.model_server import is_diffusion_model, inpaint_via_server
-
-
-# 自动检测 iopaint 可执行文件的路径（从当前 Python 环境）
-def _detect_iopaint_path() -> str:
-    """从当前 Python 环境的 Scripts/bin 目录查找 iopaint"""
-    python_dir = Path(sys.executable).parent
-    # Windows: Scripts\iopaint.exe；macOS/Linux: bin/iopaint
-    candidates = [python_dir / "iopaint.exe", python_dir / "iopaint"]
-    for p in candidates:
-        if p.exists():
-            return str(p)
-    return "iopaint"  # fallback: 依赖 PATH
+from core.paths import detect_iopaint_path
+from core.utils import resolve_effective_device
 
 
 def _build_model_groups() -> list:
@@ -155,9 +145,9 @@ class Inpainter:
                 self._enable_powerpaint_v2 = bool(cfg.get("iopaint_enable_powerpaint_v2", False))
         except Exception:
             pass
-        self.iopaint_path = iopaint_path or _detect_iopaint_path()
+        self.iopaint_path = iopaint_path or detect_iopaint_path()
         # 读取 models.yaml 中的 device_override，覆盖用户传入的 device
-        self.device = self._get_effective_device(device)
+        self.device = resolve_effective_device(self.model_name, device)
         self.dilation = dilation
         self.disable_nsfw = disable_nsfw
         self.prompt = prompt
@@ -174,22 +164,6 @@ class Inpainter:
         self._cleanup_old_tmp()
         # 新增：最大边长限制（超过此尺寸会自动缩放）
         self.max_size = max_size
-
-    def _get_effective_device(self, device: str) -> str:
-        """
-        获取有效设备：优先使用 models.yaml 中的 device_override，否则使用传入的 device。
-        用于处理某些模型不兼容 MPS 等后端的情况。
-        """
-        try:
-            from core.model_registry import MODEL_BY_ID
-            cfg = MODEL_BY_ID.get(self.model_name)
-            if cfg:
-                override = cfg.get("device_override")
-                if override:
-                    return override
-        except Exception:
-            pass
-        return device
 
     def _cleanup_old_tmp(self, max_age_hours: int = 24):
         """
@@ -356,45 +330,52 @@ class Inpainter:
             raise Exception(f"IOPaint 启动失败: {e}")
 
         # 流式转发日志，正确处理 \r（tqdm 进度条原地刷新）
+        # 批量读取（256 字符/次）代替逐字符读取，减少系统调用开销；
+        # 通过在缓冲中定位 \r / \n 的位置来拆分行，行为与逐字符版本完全一致。
         stdout_lines = []
         last_progress = 0
         try:
-            buf = []
+            buf = ""
             while True:
-                ch = proc.stdout.read(1)
-                if not ch:
+                chunk = proc.stdout.read(256)
+                if not chunk:
+                    # 进程已关闭，刷出最后一段缓冲
                     if buf:
-                        line = ''.join(buf)
+                        stdout_lines.append(buf)
+                        sys.stdout.write(buf + '\n')
+                        sys.stdout.flush()
+                    break
+                buf += chunk
+                # 消费缓冲中所有完整的行 / 回车帧
+                while True:
+                    ri = buf.find('\r')
+                    ni = buf.find('\n')
+                    if ri == -1 and ni == -1:
+                        break
+                    if ri == -1 or (ni != -1 and ni < ri):
+                        # \n 先出现 —— 完整日志行
+                        line, buf = buf[:ni], buf[ni + 1:]
                         stdout_lines.append(line)
                         sys.stdout.write(line + '\n')
                         sys.stdout.flush()
-                    break
-                if ch == '\r':
-                    line = ''.join(buf)
-                    sys.stdout.write(f'\r{line}')
-                    sys.stdout.flush()
-                    
-                    # 尝试从 tqdm 进度条中解析百分比（例如 "50%"）
-                    percent_match = re.search(r'(\d+)%', line)
-                    if percent_match:
-                        try:
-                            percent = int(percent_match.group(1))
-                            # 避免重复上报相同的进度
-                            if percent != last_progress and self.progress_callback:
-                                self.progress_callback(percent, f"处理中... {percent}%")
-                                last_progress = percent
-                        except (ValueError, AttributeError):
-                            pass
-                    
-                    buf = []
-                elif ch == '\n':
-                    line = ''.join(buf)
-                    stdout_lines.append(line)
-                    sys.stdout.write(line + '\n')
-                    sys.stdout.flush()
-                    buf = []
-                else:
-                    buf.append(ch)
+                    else:
+                        # \r 先出现 —— tqdm 进度条原地刷新帧
+                        # \r\n（Windows CRLF）：跳过紧随的 \n，避免产生空日志行
+                        remainder = buf[ri + 1:]
+                        line, buf = buf[:ri], remainder[1:] if remainder.startswith('\n') else remainder
+                        sys.stdout.write(f'\r{line}')
+                        sys.stdout.flush()
+                        # 尝试从 tqdm 进度条中解析百分比（例如 "50%"）
+                        percent_match = re.search(r'(\d+)%', line)
+                        if percent_match:
+                            try:
+                                percent = int(percent_match.group(1))
+                                # 避免重复上报相同的进度
+                                if percent != last_progress and self.progress_callback:
+                                    self.progress_callback(percent, f"处理中... {percent}%")
+                                    last_progress = percent
+                            except (ValueError, AttributeError):
+                                pass
         except (ValueError, OSError):
             pass
 

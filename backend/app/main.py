@@ -11,14 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 # 确保 backend/ 在 sys.path 中（core 模块可导入）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 优先使用 core.paths 作为路径的唯一数据源
-from core.paths import PROJECT_ROOT, MODELS_DIR, apply_default_env_vars
-
-# 如果 core.paths 未定义（向后兼容），则从 app.config 导入
+# 优先使用 core.paths 作为路径的唯一数据源；如果旧版本缺少导出则回退到 app.config
 try:
-    PROJECT_ROOT
-except NameError:
-    from app.config import PROJECT_ROOT, MODELS_DIR
+    from core.paths import PROJECT_ROOT, MODELS_DIR, apply_default_env_vars
+except ImportError:
+    from app.config import PROJECT_ROOT, MODELS_DIR  # type: ignore[assignment]
+    def apply_default_env_vars(): pass  # type: ignore[misc]
 
 from app.config import get
 from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, cutout, models as models_router_module

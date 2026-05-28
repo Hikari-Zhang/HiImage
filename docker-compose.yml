@@ -15,6 +15,8 @@ services:
       - ./config:/app/config
       # 临时文件
       - ./tmp:/app/tmp
+      # 处理结果持久化（防止容器销毁后丢失）
+      - ./output:/app/output
     environment:
       - PYTHONUNBUFFERED=1
       - HF_HOME=/app/models/huggingface
@@ -40,6 +42,7 @@ services:
   #     - ./models:/app/models
   #     - ./config:/app/config
   #     - ./tmp:/app/tmp
+  #     - ./output:/app/output
   #   environment:
   #     - PYTHONUNBUFFERED=1
   #     - HF_HOME=/app/models/huggingface
@@ -53,3 +56,9 @@ services:
   #             count: 1
   #             capabilities: [gpu]
   #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8787/api/health"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 3
+  #     start_period: 60s
