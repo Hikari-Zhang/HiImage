@@ -172,11 +172,11 @@ async def _wait_for_download_completion_poll(
     :param timeout: 超时时间（秒）
     :return: (success, error_message)
     """
-    start_time = asyncio.get_event_loop().time()
+    start_time = asyncio.get_running_loop().time()
     
     while True:
         # 检查超时
-        elapsed = asyncio.get_event_loop().time() - start_time
+        elapsed = asyncio.get_running_loop().time() - start_time
         if elapsed > timeout:
             raise asyncio.TimeoutError()
         

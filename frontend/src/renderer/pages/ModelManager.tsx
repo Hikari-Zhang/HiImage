@@ -7,7 +7,7 @@ import { clsx } from 'clsx'
 import { showToast } from '../components/ui'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useDownloadStore } from '../stores/useDownloadStore'
-import { useDownloadManager, registerDownloadDoneCallback } from '../hooks/useDownloadManager'
+import { useDownloadManager } from '../hooks/useDownloadManager'
 import { ModelStatus, DownloadStatus, Provider, IOPaintMode, ApiPath } from '../constants'
 import type { DownloadTask } from '../stores/useDownloadStore'
 import type { ModelStatusValue } from '../constants'
@@ -58,6 +58,15 @@ const BADGE_COLOR: Record<string, string> = {
   快速:   'bg-green-500/20 text-green-400',
   高质量: 'bg-purple-500/20 text-purple-400',
   动漫:   'bg-pink-500/20 text-pink-400',
+}
+
+/** 将带单位的大小字符串（如 "1.2 GB"、"300 MB"）统一转换为 MB 数值 */
+function parseMB(s: string): number {
+  const n = parseFloat(s)
+  if (s.includes('GB')) return n * 1024
+  if (s.includes('MB')) return n
+  if (s.includes('KB')) return n / 1024
+  return n / (1024 * 1024)
 }
 
 // ── 主组件 ────────────────────────────────────────────────────────────────────
@@ -121,9 +130,17 @@ export default function ModelManager() {
     loadModelsRef.current()
   }, [])
 
-  // 注册下载完成回调
+  // 监听下载完成（done → ok 转换），触发模型列表刷新
   useEffect(() => {
-    registerDownloadDoneCallback(() => loadModelsRef.current())
+    return useDownloadStore.subscribe(
+      (state) => state.tasks,
+      (tasks, prev) => {
+        const hasNewDone = Object.entries(tasks).some(
+          ([id, t]) => t.status === ModelStatus.OK && prev[id]?.status === DownloadStatus.DONE
+        )
+        if (hasNewDone) loadModelsRef.current()
+      }
+    )
   }, [])
 
   // ── 批次面板自动展开 ────────────────────────────────────────────────────────
@@ -449,13 +466,6 @@ function BulkTaskRow({ task }: { task: DownloadTask }) {
       </div>
       {/* 单行进度条 */}
       {task.status === DownloadStatus.DOWNLOADING && task.downloaded && task.totalSize && task.totalSize !== '?' && (() => {
-        const parseMB = (s: string) => {
-          const n = parseFloat(s)
-          if (s.includes('GB')) return n * 1024
-          if (s.includes('MB')) return n
-          if (s.includes('KB')) return n / 1024
-          return n / (1024 * 1024)
-        }
         const pct = Math.min(100, Math.round(parseMB(task.downloaded) / parseMB(task.totalSize) * 100))
         return (
           <div className="mt-1 h-0.5 bg-bg-hover rounded-full overflow-hidden">
@@ -523,13 +533,6 @@ function ModelRow({
   // 行内进度百分比
   const pct = (() => {
     if (!downloadTask?.downloaded || !downloadTask.totalSize || downloadTask.totalSize === '?') return null
-    const parseMB = (s: string) => {
-      const n = parseFloat(s)
-      if (s.includes('GB')) return n * 1024
-      if (s.includes('MB')) return n
-      if (s.includes('KB')) return n / 1024
-      return n / (1024 * 1024)
-    }
     const p = Math.min(100, Math.round(parseMB(downloadTask.downloaded) / parseMB(downloadTask.totalSize) * 100))
     return isNaN(p) ? null : p
   })()

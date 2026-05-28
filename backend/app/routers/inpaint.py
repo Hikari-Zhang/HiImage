@@ -176,7 +176,7 @@ async def detect_watermark(req: DetectRequest):
         detector = WatermarkDetector(sensitivity=req.sensitivity)
         return detector.detect(image)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     regions = await loop.run_in_executor(executor, _detect)
 
     log_manager.info(f"水印检测完成，发现 {len(regions)} 个区域", source="inpaint")
@@ -210,7 +210,7 @@ async def inpaint_with_rois(req: InpaintRequest):
 
     await progress_manager.send_progress(10, "正在初始化模型...")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _make_progress_callback():
         """创建线程安全的进度回调"""
@@ -284,7 +284,7 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
 
     await progress_manager.send_progress(10, "正在初始化模型...")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _make_progress_callback():
         """创建线程安全的进度回调（子线程 → 主线程事件循环）"""

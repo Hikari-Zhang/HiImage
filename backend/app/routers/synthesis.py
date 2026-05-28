@@ -119,7 +119,7 @@ async def run_synthesis(req: SynthesisRequest):
     
     await progress_manager.send_progress(10, f"正在初始化 [{req.mode}] 处理...")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _make_progress_callback():
         def callback(percent: int, message: str):

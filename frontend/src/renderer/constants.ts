@@ -128,8 +128,7 @@ export const ApiPath = {
   MODELS_HEALTH:        '/api/models/health',
   MODELS_SUBSCRIBE:     '/api/models/subscribe',
   MODELS_DOWNLOAD:      '/api/models/download',
-  MODELS_INPAINT:       '/api/models/inpaint',
-  MODELS_UPSCALE:       '/api/models/upscale',
+  MODELS_GROUPS:        '/api/models/groups',
   HEALTH:               '/api/health',
   WS_PROGRESS:          '/api/ws/progress',
   SYNTHESIS_MODES:      '/api/synthesis/modes',
@@ -137,5 +136,4 @@ export const ApiPath = {
   CUTOUT:               '/api/cutout',
   CUTOUT_REFINE:        '/api/cutout/refine',
   CUTOUT_COMPOSITE:     '/api/cutout/composite',
-  CUTOUT_MODELS:        '/api/cutout/models',
 } as const

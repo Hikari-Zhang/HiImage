@@ -4,7 +4,15 @@
       "Bash(rtk git *)",
       "Bash(venv\\\\Scripts\\\\iopaint.exe run *)",
       "Bash(cmd *)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(rtk ls *)",
+      "Bash(rtk grep *)",
+      "Bash(rtk tsc *)",
+      "Bash(python -c \"from core.model_setup import ensure_iopaint_hub_links; print\\('model_setup OK'\\)\")",
+      "Bash(python -c \"from core.model_checker import ModelChecker, resolve_hf_model_path, invalidate_model_cache; print\\('model_checker OK'\\)\")",
+      "Bash(rtk gain *)",
+      "Skill(update-config)",
+      "Bash(node *)"
     ]
   }
 }

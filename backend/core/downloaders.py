@@ -139,13 +139,68 @@ def download_rembg(cfg: dict, progress_cb=None, cancel_check=None) -> None:
 
 # ── HuggingFace 单模型下载 ─────────────────────────────────────────────────────
 
+def _make_tqdm_class(progress_cb, cancel_check, file_idx: int, total_files: int, filename: str):
+    """
+    工厂函数：生成绑定当前文件上下文的 tqdm 兼容进度类。
+
+    hf_hub_download() 内部使用 tqdm 显示进度，传入自定义类可将下载进度
+    转发给我们的 progress_cb 回调，并在 update() 中检查取消信号。
+    """
+    class _HFProgressAdapter:
+        def __init__(self, *, total=None, **kw):
+            self.total = total  # 文件总字节数（Content-Length）
+            self.n = 0          # 已下载字节数
+            self._last_t = time.monotonic()
+            self._last_n = 0
+
+        def update(self, n=1):
+            # 取消检查：在每次 chunk 更新时触发
+            if cancel_check and cancel_check():
+                raise InterruptedError("下载已取消")
+            self.n += n
+            now = time.monotonic()
+            elapsed = now - self._last_t
+            if elapsed >= 0.5 and progress_cb:
+                speed = (self.n - self._last_n) / elapsed
+                self._last_t = now
+                self._last_n = self.n
+                pct = f"{self.n * 100 // self.total}%" if self.total else ""
+                progress_cb({
+                    "message": f"({file_idx + 1}/{total_files}) {filename} {pct}",
+                    "speed": fmt_speed(speed),
+                    "downloaded": fmt_size(self.n),
+                    "total_size": fmt_size(self.total) if self.total else "?",
+                })
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+        def set_postfix(self, *args, **kwargs):
+            pass
+
+        def set_description(self, *args, **kwargs):
+            pass
+
+    return _HFProgressAdapter
+
+
 def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     """
-    通过 huggingface_hub 逐文件下载 HF 模型，支持实时速度回调。
+    通过 huggingface_hub 逐文件下载 HF 模型到标准 hub 缓存格式，支持实时速度回调。
+
+    下载路径：~/.cache/huggingface/hub/models--<org>--<repo>/（标准 HF hub 格式）
+    不再使用 manual/ 扁平目录。
 
     - 遵循 HF_ENDPOINT 环境变量（镜像站支持）
     - 遵循 HF_TOKEN 环境变量（门控模型授权）
     - 401/403 时抛出友好错误信息
+    - 进度和取消通过自定义 tqdm 类（_HFProgressAdapter）传递给 hf_hub_download()
 
     :param cancel_check: 可选，无参函数，返回 True 时抛出 InterruptedError 终止下载。
     """
@@ -153,7 +208,8 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     def _on_cancel():
         _check_cancel(cancel_check)
 
-    from huggingface_hub import list_repo_files, hf_hub_url
+    import inspect
+    from huggingface_hub import list_repo_files, hf_hub_download
     from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
     hf_cache = os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface"))
@@ -161,30 +217,29 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     repo_id = cfg["hf_model_id"]
     name = cfg.get("name", repo_id)
 
-    hf_endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.com")
+    # tqdm_class 参数在 huggingface_hub >= 0.20 才支持，兼容旧版
+    _supports_tqdm_class = "tqdm_class" in inspect.signature(hf_hub_download).parameters
 
     IGNORE_SUFFIXES = {".msgpack", ".h5"}
     IGNORE_PREFIXES = ("flax_model", "tf_model")
 
-    # 下载前先检测：如果已存在但状态为 corrupted，删除整个缓存目录重新下载
+    # 下载前先检测：如果已存在但状态为 corrupted，删除缓存目录重新下载
     from core.model_checker import ModelChecker
     checker = ModelChecker()
     pre_check = checker.check_model(cfg["id"])
     if pre_check.status == "corrupted":
+        # 清理 hub/ 目录（新路径）——直接按路径公式删除，避免 scan_cache_dir
+        # 对合成符号链接结构（无真实 blobs）返回不一致结果的问题
+        try:
+            hub_model_dir = Path(hf_cache) / "hub" / ("models--" + repo_id.replace("/", "--"))
+            if hub_model_dir.exists():
+                shutil.rmtree(hub_model_dir)
+        except Exception:
+            pass
+        # 向后兼容：也清理旧的 manual/ 目录
         manual_dir = Path(hf_cache) / "manual" / repo_id.replace("/", "--")
         if manual_dir.exists():
             shutil.rmtree(manual_dir)
-        try:
-            from huggingface_hub import scan_cache_dir
-            hub_dir = Path(hf_cache) / "hub"
-            if hub_dir.exists():
-                cache_info = scan_cache_dir(hub_dir)
-                for repo in cache_info.repos:
-                    if repo.repo_id == repo_id:
-                        shutil.rmtree(repo.repo_path)
-                        break
-        except Exception:
-            pass
 
     try:
         all_files = list(list_repo_files(repo_id, token=token))
@@ -204,115 +259,34 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
         and not any(f.startswith(p) for p in IGNORE_PREFIXES)
     ]
 
-    repo_dir = Path(hf_cache) / "manual" / repo_id.replace("/", "--")
-    repo_dir.mkdir(parents=True, exist_ok=True)
-
+    hub_cache_dir = str(Path(hf_cache) / "hub")
     total_files = len(files)
-    skipped_files = 0
+
     for file_idx, filename in enumerate(files):
-        _on_cancel()
+        _on_cancel()  # 文件间取消检查
 
-        dest = repo_dir / filename
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        if progress_cb:
+            progress_cb({
+                "message": f"准备下载 ({file_idx + 1}/{total_files}): {filename}",
+                "speed": "", "downloaded": "", "total_size": "",
+            })
 
-        if dest.exists():
-            file_size = dest.stat().st_size
-            is_weight_file = dest.suffix.lower() in {".safetensors", ".bin", ".pth", ".pt", ".ckpt"}
-            min_size = 1024 * 1024 if is_weight_file else 1024
-            if file_size < min_size:
-                try:
-                    dest.unlink()
-                except OSError:
-                    pass
-            elif dest.suffix.lower() == ".safetensors":
-                header_ok = False
-                try:
-                    import struct
-                    with open(str(dest), "rb") as _f:
-                        _hdr = _f.read(8)
-                    if len(_hdr) == 8:
-                        _hlen = struct.unpack("<Q", _hdr)[0]
-                        header_ok = (0 < _hlen <= 100 * 1024 * 1024)
-                    if not header_ok:
-                        raise ValueError("header length 异常")
-                except Exception:
-                    try:
-                        dest.unlink()
-                    except OSError:
-                        pass
-                if header_ok:
-                    skipped_files += 1
-                    if progress_cb:
-                        progress_cb({
-                            "message": f"文件已存在，跳过 ({file_idx + 1}/{total_files}): {filename}",
-                            "speed": "", "downloaded": "", "total_size": "",
-                        })
-                    continue
-            else:
-                skipped_files += 1
-                if progress_cb:
-                    progress_cb({
-                        "message": f"文件已存在，跳过 ({file_idx + 1}/{total_files}): {filename}",
-                        "speed": "", "downloaded": "", "total_size": "",
-                    })
-                continue
+        tqdm_cls = _make_tqdm_class(progress_cb, cancel_check, file_idx, total_files, filename)
 
-        url = hf_hub_url(repo_id=repo_id, filename=filename)
-        headers = {"User-Agent": "HiImage/2.0"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-
-        req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=300) as resp:
-                content_length = resp.headers.get("Content-Length")
-                total_bytes = int(content_length) if content_length else 0
-
-                downloaded = 0
-                start_time = time.monotonic()
-                last_report_time = start_time
-                last_report_bytes = 0
-
-                with open(dest, "wb") as f:
-                    while True:
-                        _on_cancel()
-                        chunk = resp.read(256 * 1024)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        downloaded += len(chunk)
-
-                        now = time.monotonic()
-                        elapsed_since_last = now - last_report_time
-                        if elapsed_since_last >= 0.5 and progress_cb:
-                            speed = (downloaded - last_report_bytes) / elapsed_since_last
-                            last_report_time = now
-                            last_report_bytes = downloaded
-                            pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
-                            progress_cb({
-                                "message": f"({file_idx + 1}/{total_files}) {filename} {pct}",
-                                "speed": fmt_speed(speed),
-                                "downloaded": fmt_size(downloaded),
-                                "total_size": fmt_size(total_bytes) if total_bytes else "?",
-                            })
-
+            hf_kwargs: dict = dict(
+                repo_id=repo_id,
+                filename=filename,
+                cache_dir=hub_cache_dir,
+                token=token,
+            )
+            if _supports_tqdm_class:
+                hf_kwargs["tqdm_class"] = tqdm_cls
+            hf_hub_download(**hf_kwargs)
         except InterruptedError:
-            if dest.exists():
-                try:
-                    dest.unlink()
-                except OSError:
-                    pass
             raise
         except Exception as file_err:
-            if dest.exists():
-                try:
-                    dest.unlink()
-                except OSError:
-                    pass
             raise RuntimeError(f"下载文件 {filename} 失败: {file_err}") from file_err
-
-    if skipped_files == total_files:
-        pass  # 所有文件已存在
 
 
 def download_hf_multi(cfg: dict, progress_cb=None, cancel_check=None) -> None:

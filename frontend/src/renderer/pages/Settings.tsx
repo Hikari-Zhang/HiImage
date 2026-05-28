@@ -6,6 +6,7 @@ import { showToast } from '../components/ui'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
+import { useFirstVisible } from '../hooks/useFirstVisible'
 import ModelManager from './ModelManager'
 
 type ConnectionMode = 'local' | 'remote'
@@ -29,11 +30,12 @@ const DEFAULTS = {
   upscaleTile: 0,  // 0 = 自动计算
 }
 
-export default function Settings() {
+export default function Settings({ isVisible = false }: { isVisible?: boolean }) {
   const backendURL = useBackendStore((s) => s.backendURL)
   const setBackendURL = useBackendStore((s) => s.setBackendURL)
   const store = useSettingsStore()
   const { getDevices } = useBackendAPI()
+  const ready = useFirstVisible(isVisible)
 
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
 
@@ -68,6 +70,7 @@ export default function Settings() {
 
   // 初始化：从 Electron 主进程读取连接配置，从后端读取应用设置
   useEffect(() => {
+    if (!ready) return
     // 读取连接模式
     if (window.electronAPI?.getBackendConfig) {
       window.electronAPI.getBackendConfig().then((cfg: any) => {
@@ -111,7 +114,7 @@ export default function Settings() {
         // 后端不可达时不阻断页面，所有设备视为可用
       })
       .finally(() => setDevicesLoading(false))
-  }, [backendURL])
+  }, [backendURL, ready])
 
   const handleTestConnection = async () => {
     setConnectionStatus('testing')

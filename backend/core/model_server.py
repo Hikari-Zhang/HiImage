@@ -167,14 +167,45 @@ class _ModelServer:
     @staticmethod
     def _is_model_cached(model_name: str) -> bool:
         """
-        检查模型是否在本地 HF 标准缓存中（hub/ 目录）。
+        检查模型是否已在本地缓存（manual/ 或标准 hub/ 目录）且文件完整。
         对于内置 IOPaint 模型（名称不含 /），始终返回 True。
+
+        注意：此处仅做快速缓存存在性检查，深度完整性验证（包括 LFS 指针检测）
+        由 _start_unlocked() 的预启动检查（ModelChecker）负责。
         """
         if '/' not in model_name:
             return True
+        from pathlib import Path
+        # 优先检查 manual/ 目录（HiImage 旧格式下载存放位置）
+        # 只要目录有实际文件（且非 git-lfs 指针桩），视为已缓存
+        manual_dir = Path(_HF_HOME) / "manual" / model_name.replace("/", "--")
+        if manual_dir.is_dir():
+            has_files = False
+            has_lfs_stub = False
+            _LFS_WEIGHT_SUFFIXES = {".bin", ".pt", ".pth", ".ckpt"}
+            try:
+                for f in manual_dir.rglob("*"):
+                    if not f.is_file():
+                        continue
+                    has_files = True
+                    # git-lfs 指针文件：< 1 KB 的权重文件，头部含 "git-lfs.github.com"
+                    if f.suffix.lower() in _LFS_WEIGHT_SUFFIXES and f.stat().st_size < 1024:
+                        try:
+                            head = f.read_bytes(200).decode("utf-8", errors="ignore")
+                            if "git-lfs.github.com" in head:
+                                has_lfs_stub = True
+                                break
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+            if has_files and not has_lfs_stub:
+                return True
+            # 空目录或全为 LFS 指针桩 → 继续检查 hub/
+
+        # 检查标准 hub 缓存（snapshot_download local_files_only 方式）
         try:
             from huggingface_hub import snapshot_download
-            from pathlib import Path
             hub_dir = Path(_HF_HOME) / "hub"
             snapshot_download(
                 repo_id=model_name,
@@ -188,19 +219,17 @@ class _ModelServer:
     @staticmethod
     def _register_manual_model(model_name: str) -> bool:
         """
-        将 manual/ 目录中的模型注册到标准 HF hub 缓存中。
+        将 manual/ 目录中的模型注册到标准 HF hub 缓存中（纯离线，不触发网络请求）。
 
-        HiImage 的下载功能将模型保存在 manual/ 目录中，但 huggingface_hub /
-        diffusers 只能从标准 hub 缓存结构（hub/models--xxx/snapshots/）加载模型。
+        HiImage 下载器将模型保存在 manual/ 目录，iopaint / diffusers 只认标准
+        hub 缓存结构（hub/models--xxx/refs/main + snapshots/<hash>/）。
+        此函数通过符号链接将两者桥接，无需重新下载任何文件。
 
-        此函数通过 snapshot_download 将 manual/ 中的文件正确地注册到 hub 缓存。
-        如果联网可用，snapshot_download 会验证 repo 并将文件组织到标准结构。
-        如果 manual/ 中已有全部文件，可以离线完成注册（通过创建正确的缓存结构）。
-
-        返回 True 表示注册成功，False 表示失败。
+        返回 True 表示注册成功或已存在，False 表示 manual/ 不存在（尚未下载）。
         """
         from pathlib import Path
         import os
+
         manual_dir = Path(_HF_HOME) / "manual" / model_name.replace("/", "--")
         if not manual_dir.exists():
             return False
@@ -208,67 +237,48 @@ class _ModelServer:
         hub_dir = Path(_HF_HOME) / "hub"
         hub_dir.mkdir(parents=True, exist_ok=True)
 
-        # 先尝试在线注册（snapshot_download 会组织文件到标准缓存结构）
-        try:
-            from huggingface_hub import snapshot_download
-            snapshot_download(
-                repo_id=model_name,
-                cache_dir=str(hub_dir),
-                local_files_only=False,
-            )
-            print(f"[ModelServer] 模型 {model_name} 已注册到标准缓存")
+        model_cache_dir = hub_dir / f"models--{model_name.replace('/', '--')}"
+        refs_main = model_cache_dir / "refs" / "main"
+
+        # 若 refs/main 已存在，hub 缓存结构完整，直接跳过
+        if refs_main.exists():
+            print(f"[ModelServer] 模型 {model_name} hub 缓存结构已存在，跳过注册")
             return True
-        except Exception as e:
-            print(f"[ModelServer] 在线注册失败: {e}")
 
-        # 在线注册失败，尝试离线注册
-        # 手动创建 hub 缓存目录结构，并将 manual/ 中的文件复制/链接过去
-        try:
-            from huggingface_hub import try_to_load_from_cache
-            # 先尝试从缓存加载（可能 partial 注册过）
-            result = try_to_load_from_cache(
-                repo_id=model_name,
-                filename="model_index.json",
-                cache_dir=str(hub_dir),
-            )
-            if result is not None:
-                print(f"[ModelServer] 模型 {model_name} 已在标准缓存中")
-                return True
-        except Exception:
-            pass
-
-        # 离线场景：手动构建缓存结构
-        # 需要创建一个伪 commit hash 和快照目录
+        # 离线注册：手动构建标准 hub 缓存目录结构
         try:
             import hashlib
             import shutil
-            # 用文件列表的 hash 作为伪 commit hash
-            files = sorted(f.name for f in manual_dir.iterdir() if f.is_file())
-            fake_hash = hashlib.sha256("".join(files).encode()).hexdigest()[:40]
 
-            model_cache_dir = hub_dir / f"models--{model_name.replace('/', '--')}"
+            # 用全部文件路径（含子目录递归）的哈希作为伪 commit hash
+            all_files = sorted(
+                str(f.relative_to(manual_dir))
+                for f in manual_dir.rglob("*") if f.is_file()
+            )
+            fake_hash = hashlib.sha256("".join(all_files).encode()).hexdigest()[:40]
+
             snapshots_dir = model_cache_dir / "snapshots" / fake_hash
             refs_dir = model_cache_dir / "refs"
             refs_dir.mkdir(parents=True, exist_ok=True)
             refs_dir.joinpath("main").write_text(fake_hash)
 
             snapshots_dir.mkdir(parents=True, exist_ok=True)
-            # 将 manual/ 中的文件复制（或符号链接）到快照目录
-            for f in manual_dir.iterdir():
-                if f.is_file():
-                    dest = snapshots_dir / f.name
-                    if not dest.exists():
-                        # 优先用符号链接节省空间
-                        try:
-                            os.symlink(str(f.resolve()), str(dest))
-                        except Exception:
-                            shutil.copy2(str(f), str(dest))
+            (model_cache_dir / "blobs").mkdir(exist_ok=True)
 
-            # 创建 blob 文件（huggingface_hub 需要）
-            blobs_dir = model_cache_dir / "blobs"
-            blobs_dir.mkdir(exist_ok=True)
+            # 将 manual/ 下所有条目（文件 + 子目录）软链接到快照目录
+            # 注意：diffusers 模型包含 unet/ vae/ text_encoder/ 等子目录，
+            # 必须处理 is_dir() 条目，不能仅过滤 is_file()
+            for item in manual_dir.iterdir():
+                dest = snapshots_dir / item.name
+                if not dest.exists() and not dest.is_symlink():
+                    try:
+                        os.symlink(str(item.resolve()), str(dest))
+                    except OSError:
+                        if item.is_file():
+                            shutil.copy2(str(item), str(dest))
+                        # 子目录无法链接时跳过（不影响主流程）
 
-            print(f"[ModelServer] 模型 {model_name} 已手动注册到标准缓存（离线模式）")
+            print(f"[ModelServer] 模型 {model_name} 已注册到标准缓存（离线模式）")
             return True
         except Exception as e:
             print(f"[ModelServer] 离线注册失败: {e}")
@@ -318,17 +328,18 @@ class _ModelServer:
         # 和 cumsum 操作，在 MPS 上运行时 iopaint server 推理时返回 HTTP 500。
         # 对于这类模型，models.yaml 中设置 device_override: cpu，此处读取并覆盖。
         effective_device = device
+        _startup_cfg = None   # 注册表配置，供后续预启动检查和命令构造复用
         try:
             from core.model_registry import MODEL_BY_ID, MODELS
             # 优先按 registry ID 查找；若直接传入了 iopaint_model_id 则反向查找
-            cfg = MODEL_BY_ID.get(model_name)
-            if cfg is None:
+            _startup_cfg = MODEL_BY_ID.get(model_name)
+            if _startup_cfg is None:
                 for m in MODELS:
                     if m.get("iopaint_model_id") == model_name:
-                        cfg = m
+                        _startup_cfg = m
                         break
-            if cfg:
-                override = cfg.get("device_override")
+            if _startup_cfg:
+                override = _startup_cfg.get("device_override")
                 if override and override != device:
                     print(
                         f"[ModelServer] 模型 '{model_name}' 不支持设备 '{device}'，"
@@ -337,6 +348,26 @@ class _ModelServer:
                     effective_device = override
         except Exception:
             pass  # 注册表不可用时，沿用用户设定的设备，不阻断启动
+
+        # ── 启动前模型完整性检查 ───────────────────────────────────────────────
+        # 对 HF 托管的 server 模式模型做完整性检测，防止以损坏文件（如 git-lfs 指针
+        # 桩、截断下载）启动 IOPaint，避免晦涩的 "PytorchStreamReader failed" /
+        # "config.json not found in directory snapshots\main" 等报错。
+        # 若检测到 CORRUPTED / PARTIAL，直接抛出友好错误，提示用户重新下载。
+        if _startup_cfg and (_startup_cfg.get("hf_model_id") or _startup_cfg.get("hf_models")):
+            try:
+                from core.model_checker import ModelChecker
+                _check = ModelChecker().check_model(_startup_cfg["id"], use_cache=False)
+                if _check.status in ("corrupted", "partial"):
+                    raise RuntimeError(
+                        f"模型「{_startup_cfg.get('name', model_name)}」文件损坏或不完整"
+                        f"（{_check.message}）。\n"
+                        "请在「模型管理」页面重新下载该模型后再试。"
+                    )
+            except RuntimeError:
+                raise   # 完整性检查失败：向上传递，不启动 IOPaint
+            except Exception:
+                pass    # ModelChecker 意外失败时不阻断启动（保守策略）
 
         # 确保依赖模型已下载到缓存
         self._ensure_dependencies(model_name)
@@ -494,6 +525,18 @@ class _ModelServer:
             return (
                 "⚠️  模型未在本地缓存，且无法从 HuggingFace Hub 下载。\n"
                 "请检查网络连接，或在「设置」中配置 HuggingFace 镜像地址（如 https://hf-mirror.com）。"
+            )
+        if 'config.json' in log_lower and ('not found' in log_lower or 'no file named' in log_lower):
+            return (
+                "⚠️  模型文件结构不完整（缺少 config.json）。\n"
+                "可能原因：旧版下载器仅获取了 git-lfs 指针文件而非实际权重。\n"
+                "请在「模型管理」页面重新下载该模型。"
+            )
+        if 'pytorchstreamreader' in log_lower or 'failed reading zip archive' in log_lower:
+            return (
+                "⚠️  模型权重文件损坏（无法解析为 zip/pickle 格式）。\n"
+                "可能原因：旧版下载器下载了 git-lfs 指针桩而非真实权重文件。\n"
+                "请在「模型管理」页面重新下载该模型。"
             )
         if 'connection' in log_lower and ('error' in log_lower or 'refused' in log_lower or 'timeout' in log_lower):
             return "⚠️  网络连接失败，无法访问 HuggingFace Hub，请检查网络或配置镜像。"

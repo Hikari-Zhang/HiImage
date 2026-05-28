@@ -164,7 +164,7 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
         def _process(upscaler_instance, img):
             return upscaler_instance.upscale(img)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             result_rgb = await loop.run_in_executor(executor, _process, shared_upscaler, image)
             # 释放输入图像（已处理完毕）
@@ -269,7 +269,7 @@ async def upscale_image(req: UpscaleRequest):
                 torch.cuda.empty_cache()
         return r
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await progress_manager.send_progress(30, "正在处理超分辨率...")
 
     result = None

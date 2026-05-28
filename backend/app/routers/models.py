@@ -4,17 +4,14 @@
 GET    /api/models/health              → 检测所有注册模型的完整性
 GET    /api/models/health/{model_id}   → 检测单个模型的完整性
 GET    /api/models/list                → 返回所有注册模型的元数据（含当前状态）
+GET    /api/models/groups              → 聚合接口：一次返回所有功能的模型分组
 
-── 新下载队列 API（推荐） ──────────────────────────────────────────────────────
+── 下载队列 API ────────────────────────────────────────────────────────────────
 POST   /api/models/download/{model_id} → 提交单模型下载任务（返回任务状态）
 POST   /api/models/download/bulk       → 批量提交（一键下载），返回任务列表
 DELETE /api/models/download/{model_id} → 取消下载任务
 GET    /api/models/subscribe/{model_id}→ SSE 订阅单个模型的实时状态变更
 GET    /api/models/queue               → 查询当前队列中所有活跃任务
-
-── 旧 SSE 接口（已废弃，保留向下兼容） ─────────────────────────────────────────
-GET    /api/models/download            → SSE 流：一键下载所有缺失模型（旧）
-GET    /api/models/download/{model_id} → SSE 流：下载单个模型（旧）
 
 DELETE /api/models/{model_id}/files    → 删除指定模型的本地权重文件（不修改 models.yaml）
 """
@@ -32,8 +29,6 @@ from fastapi.responses import StreamingResponse
 from core.model_checker import ModelChecker
 from core.model_registry import MODELS, MODE_GROUPS
 from core.constants import ModelStatus as MS, DownloadStatus as DS, Provider, IOPaintMode
-from core.utils import fmt_speed, fmt_size
-from core.downloaders import download_rembg, download_hf, download_hf_multi, download_direct
 
 logger = logging.getLogger("models")
 
@@ -126,189 +121,12 @@ async def models_list():
     }
 
 
-# ── 一键下载所有缺失模型（SSE 流） ──────────────────────────────────────────
+# ── 下载队列 API ─────────────────────────────────────────────────────────────
 
 def _sse(event: str, data: dict) -> str:
     """构造一条 SSE 消息。"""
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-
-async def _download_generator(request: Request):
-    """
-    异步生成器：依次下载每个缺失/损坏的模型，逐条推送 SSE 事件。
-
-    SSE 事件类型：
-      start     → 开始处理（含总数）
-      model     → 单个模型状态变更（checking / skipped / downloading / done / error）
-                  downloading 状态时含 speed / downloaded / total_size 字段
-      finish    → 全部完成
-    """
-    checker = ModelChecker()
-    loop = asyncio.get_event_loop()
-
-    # IOPaint cli 模型（需要下载权重但由 iopaint 自动管理），单独记录跳过原因
-    cli_models = [
-        m for m in MODELS
-        if m.get("provider") == Provider.IOPAINT and m.get("iopaint_mode") == IOPaintMode.CLI
-    ]
-    # 过滤出需要下载的模型
-    downloadable = [m for m in MODELS if m not in cli_models]
-
-    if cli_models:
-        logger.info(
-            f"[一键下载] 跳过 {len(cli_models)} 个 IOPaint cli 模型"
-            f"（首次使用时由 iopaint 自动下载）："
-            f" {', '.join(m.get('name', m['id']) for m in cli_models)}"
-        )
-
-    logger.info(f"[一键下载] 开始：共 {len(downloadable)} 个可下载模型，{len(cli_models)} 个 IOPaint 内置跳过")
-    yield _sse("start", {"total": len(downloadable), "message": f"共 {len(downloadable)} 个可下载模型，正在检测..."})
-
-    ok_count = 0
-    skip_count = 0
-    fail_count = 0
-
-    for idx, model_cfg in enumerate(downloadable):
-        # 客户端断开时停止
-        if await request.is_disconnected():
-            logger.warning("[一键下载] 客户端断开连接，终止下载")
-            break
-
-        mid = model_cfg["id"]
-        name = model_cfg.get("name", mid)
-        provider = model_cfg.get("provider", "")
-
-        # 检测当前状态
-        logger.debug(f"[一键下载] 检测 ({idx + 1}/{len(downloadable)}): {name}")
-        result = await loop.run_in_executor(None, checker.check_model, mid)
-
-        if result.status == MS.OK:
-            skip_count += 1
-            logger.info(f"[一键下载] 已存在，跳过 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
-            yield _sse("model", {
-                "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                "status": DS.SKIPPED, "message": f"已存在，跳过 ({result.message})"
-            })
-            continue
-
-        if result.status == MS.CORRUPTED:
-            logger.warning(f"[一键下载] 文件损坏，重新下载 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
-        elif result.status == MS.PARTIAL:
-            logger.warning(f"[一键下载] 下载不完整，重新下载 ({idx + 1}/{len(downloadable)}): {name} — {result.message}")
-        else:
-            logger.info(f"[一键下载] 缺失，开始下载 ({idx + 1}/{len(downloadable)}): {name}")
-
-        # 开始下载 — 通过 asyncio.Queue 从工作线程接收进度
-        progress_queue: asyncio.Queue = asyncio.Queue()
-
-        yield _sse("model", {
-            "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-            "status": DS.DOWNLOADING, "message": "准备下载...",
-            "speed": "", "downloaded": "", "total_size": "",
-        })
-
-        # 在线程池中运行下载，进度通过 queue 传回
-        def _put(data: dict):
-            loop.call_soon_threadsafe(progress_queue.put_nowait, data)
-
-        if provider == Provider.REMBG:
-            logger.info(f"[一键下载] 使用 rembg 下载 ONNX 权重: {name}")
-            future = loop.run_in_executor(None, lambda: download_rembg(model_cfg, progress_cb=_put, cancel_check=None))
-        elif model_cfg.get("local_path") and model_cfg.get("download_url") and not model_cfg.get("hf_model_id") and not model_cfg.get("hf_models"):
-            logger.info(f"[一键下载] 直接下载权重文件: {name} → {model_cfg['local_path']}")
-            future = loop.run_in_executor(None, lambda: download_direct(model_cfg, progress_cb=_put, cancel_check=None))
-        elif model_cfg.get("hf_models"):
-            logger.info(f"[一键下载] 从 HuggingFace 下载组合模型: {name} ({len(model_cfg['hf_models'])} 个子模型)")
-            future = loop.run_in_executor(None, lambda: download_hf_multi(model_cfg, progress_cb=_put, cancel_check=None))
-        elif model_cfg.get("hf_model_id"):
-            logger.info(f"[一键下载] 从 HuggingFace 下载: {name} (repo: {model_cfg['hf_model_id']})")
-            future = loop.run_in_executor(None, lambda: download_hf(model_cfg, progress_cb=_put, cancel_check=None))
-        else:
-            logger.warning(f"[一键下载] 无下载来源，跳过: {name} (id={mid}, provider={provider})")
-            yield _sse("model", {
-                "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                "status": DS.SKIPPED, "message": "无下载来源，跳过"
-            })
-            skip_count += 1
-            continue
-
-        try:
-            # 持续消费进度，直到 future 结束
-            _last_log_pct = -1
-            while not future.done():
-                await asyncio.sleep(0.2)
-                # 消费当前 queue 中所有待处理的进度消息
-                while not progress_queue.empty():
-                    item = progress_queue.get_nowait()
-                    if isinstance(item, dict):
-                        # 每 10% 向日志写一次进度（避免日志刷屏）
-                        msg = item.get("message", "")
-                        if "%" in msg:
-                            try:
-                                pct = int(msg.split("%")[0].split()[-1])
-                                if pct // 10 > _last_log_pct // 10:
-                                    _last_log_pct = pct
-                                    logger.debug(
-                                        f"[下载进度] {name}: {pct}%"
-                                        f" {item.get('downloaded','')} / {item.get('total_size','')}"
-                                        f" @ {item.get('speed','')}"
-                                    )
-                            except (ValueError, IndexError):
-                                pass
-                        yield _sse("model", {
-                            "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                            "status": DS.DOWNLOADING,
-                            **item,
-                        })
-
-            # future 结束后再清空一次剩余队列
-            while not progress_queue.empty():
-                item = progress_queue.get_nowait()
-                if isinstance(item, dict):
-                    yield _sse("model", {
-                        "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                        "status": DS.DOWNLOADING,
-                        **item,
-                    })
-
-            # 检查是否有异常
-            exc = future.exception()
-            if exc:
-                raise exc
-
-            ok_count += 1
-            logger.info(f"[一键下载] ✓ 下载完成 ({idx + 1}/{len(downloadable)}): {name}")
-            yield _sse("model", {
-                "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                "status": DS.DONE, "message": "下载完成",
-                "speed": "", "downloaded": "", "total_size": "",
-            })
-
-        except Exception as e:
-            fail_count += 1
-            logger.error(f"[一键下载] ✗ 下载失败 ({idx + 1}/{len(downloadable)}): {name} — {e}", exc_info=True)
-            yield _sse("model", {
-                "id": mid, "name": name, "index": idx + 1, "total": len(downloadable),
-                "status": DS.ERROR, "message": f"下载失败: {str(e)[:200]}",
-                "speed": "", "downloaded": "", "total_size": "",
-            })
-
-    summary_msg = f"完成：{ok_count} 个下载成功，{skip_count} 个已跳过，{fail_count} 个失败"
-    if fail_count > 0:
-        logger.warning(f"[一键下载] {summary_msg}")
-    else:
-        logger.info(f"[一键下载] {summary_msg}")
-    yield _sse("finish", {
-        "ok": ok_count,
-        "skipped": skip_count,
-        "failed": fail_count,
-        "message": summary_msg
-    })
-
-
-# ── 新下载队列 API ──────────────────────────────────────────────────────────
-
-# ── 新下载队列 API ────────────────────────────────────────────────────────────
 
 @router.post("/download/bulk")
 async def queue_download_bulk():
@@ -331,7 +149,7 @@ async def queue_download_bulk():
     from core.download_queue import get_download_queue
 
     checker = ModelChecker()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     # 过滤可下载模型（排除 IOPaint cli 内置模型）
     downloadable = [
@@ -455,172 +273,6 @@ async def get_queue_status():
     }
 
 
-# ── 旧 SSE 接口（保留向下兼容）────────────────────────────────────────────────
-
-@router.get("/download")
-async def models_download(request: Request):
-    """
-    [已废弃] SSE 流：一键下载所有缺失/损坏的模型。
-    新代码请使用 POST /api/models/download/bulk + GET /api/models/subscribe/{id}。
-
-    客户端通过 EventSource 连接此接口，接收实时进度推送。
-    事件类型：start / model / finish
-    """
-    return StreamingResponse(
-        _download_generator(request),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-async def _download_single_generator(request: Request, model_id: str):
-    """
-    异步生成器：下载指定单个模型，推送 SSE 事件。
-    事件类型与 _download_generator 保持一致：start / model / finish
-    """
-    from core.model_registry import MODEL_BY_ID
-
-    cfg = MODEL_BY_ID.get(model_id)
-    if not cfg:
-        yield _sse("finish", {
-            "ok": 0, "skipped": 0, "failed": 1,
-            "message": f"未知模型 ID: {model_id!r}"
-        })
-        return
-
-    checker = ModelChecker()
-    loop = asyncio.get_event_loop()
-    name = cfg.get("name", model_id)
-
-    # IOPaint cli 模型：首次使用由 iopaint 自动下载，此接口无法主动触发
-    if cfg.get("provider") == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
-        logger.info(
-            f"[单模型下载] 跳过 IOPaint cli 模型: {name}"
-            f"（iopaint 将在首次使用时自动下载权重，size_mb={cfg.get('size_mb')} MB）"
-        )
-        yield _sse("finish", {
-            "ok": 0, "skipped": 1, "failed": 0,
-            "message": "IOPaint 内置模型将在首次使用时自动下载，无需手动触发"
-        })
-        return
-    provider = cfg.get("provider", "")
-
-    logger.info(f"[单模型下载] 开始：{name} (id={model_id})")
-    yield _sse("start", {"total": 1, "message": f"准备下载 {name}..."})
-
-    # 检测当前状态
-    result = await loop.run_in_executor(None, checker.check_model, model_id)
-    if result.status == MS.OK:
-        logger.info(f"[单模型下载] 已存在，跳过: {name} — {result.message}")
-        yield _sse("model", {
-            "id": model_id, "name": name, "index": 1, "total": 1,
-            "status": DS.SKIPPED, "message": f"已存在，跳过 ({result.message})"
-        })
-        yield _sse("finish", {"ok": 0, "skipped": 1, "failed": 0, "message": "模型已存在，无需重新下载"})
-        return
-
-    progress_queue: asyncio.Queue = asyncio.Queue()
-
-    yield _sse("model", {
-        "id": model_id, "name": name, "index": 1, "total": 1,
-        "status": DS.DOWNLOADING, "message": "准备下载...",
-        "speed": "", "downloaded": "", "total_size": "",
-    })
-
-    def _put(data: dict):
-        loop.call_soon_threadsafe(progress_queue.put_nowait, data)
-
-    if provider == Provider.REMBG:
-        logger.info(f"[单模型下载] 使用 rembg 下载 ONNX 权重: {name}")
-        future = loop.run_in_executor(None, lambda: download_rembg(cfg, progress_cb=_put, cancel_check=None))
-    elif cfg.get("local_path") and cfg.get("download_url") and not cfg.get("hf_model_id") and not cfg.get("hf_models"):
-        logger.info(f"[单模型下载] 直接下载权重文件: {name} → {cfg['local_path']}")
-        future = loop.run_in_executor(None, lambda: download_direct(cfg, progress_cb=_put, cancel_check=None))
-    elif cfg.get("hf_models"):
-        logger.info(f"[单模型下载] 从 HuggingFace 下载组合模型: {name} ({len(cfg['hf_models'])} 个子模型)")
-        future = loop.run_in_executor(None, lambda: download_hf_multi(cfg, progress_cb=_put, cancel_check=None))
-    elif cfg.get("hf_model_id"):
-        logger.info(f"[单模型下载] 从 HuggingFace 下载: {name} (repo: {cfg['hf_model_id']})")
-        future = loop.run_in_executor(None, lambda: download_hf(cfg, progress_cb=_put, cancel_check=None))
-    else:
-        logger.warning(f"[单模型下载] 无下载来源，跳过: {name} (id={model_id}, provider={provider})")
-        yield _sse("model", {
-            "id": model_id, "name": name, "index": 1, "total": 1,
-            "status": DS.SKIPPED, "message": "无下载来源，跳过"
-        })
-        yield _sse("finish", {"ok": 0, "skipped": 1, "failed": 0, "message": "该模型无可用下载来源"})
-        return
-
-    try:
-        while not future.done():
-            if await request.is_disconnected():
-                future.cancel()
-                return
-            await asyncio.sleep(0.2)
-            # 消费当前 queue 中所有待处理的进度消息
-            while not progress_queue.empty():
-                item = progress_queue.get_nowait()
-                if isinstance(item, dict):
-                    yield _sse("model", {
-                        "id": model_id, "name": name, "index": 1, "total": 1,
-                        "status": DS.DOWNLOADING,
-                        **item,
-                    })
-
-        # 清空剩余队列
-        while not progress_queue.empty():
-            item = progress_queue.get_nowait()
-            if isinstance(item, dict):
-                yield _sse("model", {
-                    "id": model_id, "name": name, "index": 1, "total": 1,
-                    "status": DS.DOWNLOADING,
-                    **item,
-                })
-
-        exc = future.exception()
-        if exc:
-            raise exc
-
-        yield _sse("model", {
-            "id": model_id, "name": name, "index": 1, "total": 1,
-            "status": DS.DONE, "message": "下载完成",
-            "speed": "", "downloaded": "", "total_size": "",
-        })
-        logger.info(f"[单模型下载] 完成：{name}")
-        yield _sse("finish", {"ok": 1, "skipped": 0, "failed": 0, "message": f"{name} 下载完成"})
-
-    except Exception as e:
-        logger.error(f"[单模型下载] 失败：{name} — {e}", exc_info=True)
-        yield _sse("model", {
-            "id": model_id, "name": name, "index": 1, "total": 1,
-            "status": DS.ERROR, "message": f"下载失败: {str(e)[:200]}",
-            "speed": "", "downloaded": "", "total_size": "",
-        })
-        yield _sse("finish", {"ok": 0, "skipped": 0, "failed": 1, "message": f"下载失败: {str(e)[:100]}"})
-
-
-@router.get("/download/{model_id}")
-async def model_download_single(model_id: str, request: Request):
-    """
-    [已废弃] SSE 流：下载单个指定模型。
-    新代码请使用 POST /api/models/download/{model_id} + GET /api/models/subscribe/{model_id}。
-
-    客户端通过 EventSource 连接此接口，接收实时进度推送。
-    事件类型：start / model / finish
-    """
-    return StreamingResponse(
-        _download_single_generator(request, model_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 @router.delete("/{model_id}/files")
 async def delete_model_files(model_id: str):
     """
@@ -735,6 +387,80 @@ async def delete_model_files(model_id: str):
         "message": f"已删除 {len(deleted)} 个文件/目录",
         "deleted": deleted,
         "not_found": not_found,
+    }
+
+
+@router.get("/groups")
+async def get_model_groups():
+    """
+    聚合接口：一次返回所有功能的模型分组，替代三次并发请求。
+
+    返回格式：
+    ```json
+    {
+      "inpaint": { "groups": [{"label": "...", "models": [...]}] },
+      "upscale": { "groups": [{"label": "...", "models": [...]}] },
+      "cutout":  { "groups": [{"label": "...", "models": [...]}], "default_model": "birefnet" }
+    }
+    ```
+    """
+    from core.model_registry import get_models_for_mode, get_default_model
+
+    # ── inpaint ──────────────────────────────────────────────────────────────
+    inpaint_groups: dict[str, list] = {}
+    for m in get_models_for_mode("watermark_removal"):
+        g = m.get("display_group", "其他")
+        inpaint_groups.setdefault(g, []).append({
+            "id":          m["id"],
+            "name":        m.get("name", m["id"]),
+            "description": m.get("description", ""),
+            "badge":       m.get("badge", ""),
+        })
+
+    # ── upscale ──────────────────────────────────────────────────────────────
+    upscale_groups: dict[str, list] = {}
+    for m in get_models_for_mode("upscale"):
+        g = m.get("display_group", "其他")
+        upscale_groups.setdefault(g, []).append({
+            "id":          m["id"],
+            "name":        m.get("name", m["id"]),
+            "description": m.get("description", ""),
+            "scale":       m.get("scale", 4),
+            "outscale":    m.get("outscale", m.get("scale", 4)),
+            "badge":       m.get("badge", ""),
+            "supports_custom_outscale": m.get("supports_custom_outscale", False),
+        })
+
+    # ── cutout ───────────────────────────────────────────────────────────────
+    cutout_groups: dict[str, list] = {}
+    for m in get_models_for_mode("cutout"):
+        g = m.get("display_group", "通用抠图")
+        cutout_groups.setdefault(g, []).append({
+            "id":              m["id"],
+            "name":            m.get("name", m["id"]),
+            "description":     m.get("description", ""),
+            "recommended_for": m.get("recommended_for", ""),
+            "size_mb":         m.get("size_mb"),
+            "badge":           m.get("badge", ""),
+            "provider":        m.get("provider", ""),
+        })
+
+    try:
+        default_cutout = get_default_model("cutout")
+    except KeyError:
+        default_cutout = "birefnet"
+
+    return {
+        "inpaint": {
+            "groups": [{"label": label, "models": ms} for label, ms in inpaint_groups.items()],
+        },
+        "upscale": {
+            "groups": [{"label": label, "models": ms} for label, ms in upscale_groups.items()],
+        },
+        "cutout": {
+            "groups": [{"label": label, "models": ms} for label, ms in cutout_groups.items()],
+            "default_model": default_cutout,
+        },
     }
 
 

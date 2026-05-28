@@ -189,7 +189,7 @@ async def run_cutout(req: CutoutRequest):
 
     await progress_manager.send_progress(10, "正在初始化抠图模型...")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _process():
         from core.model_executor import ModelExecutorFactory

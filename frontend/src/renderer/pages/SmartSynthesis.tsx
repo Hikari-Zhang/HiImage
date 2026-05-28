@@ -17,6 +17,7 @@ import { useSettingsStore } from '../stores/useSettingsStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
+import { useFirstVisible } from '../hooks/useFirstVisible'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
 import { useMaskExport } from '../hooks/useMaskExport'
@@ -109,7 +110,7 @@ function defaultModel(models: SynthesisModel[], modeGroup: ModeGroup | undefined
 
 // ─── 组件 ─────────────────────────────────────────────────────────────────
 
-export default function SmartSynthesis() {
+export default function SmartSynthesis({ isVisible = false }: { isVisible?: boolean }) {
   const {
     sourceImage, resultImage, rois, selectedROIs, imageWidth, imageHeight,
     maskStrokes, brushSettings, canvasTool,
@@ -130,7 +131,8 @@ export default function SmartSynthesis() {
   const [showResult, setShowResult] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
 
-  // ── 动态加载的模式与模型 ─────────────────────────────────────────────────
+  // ── 动态加载的模式与模型 —— 首次变为可见时才触发网络请求 ────────────────────
+  const ready = useFirstVisible(isVisible)
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([])
   const [allModels, setAllModels] = useState<SynthesisModel[]>([])
   const [configLoading, setConfigLoading] = useState(true)
@@ -149,6 +151,7 @@ export default function SmartSynthesis() {
 
   // ── 加载模式与模型配置 ────────────────────────────────────────────────────
   useEffect(() => {
+    if (!ready) return
     let cancelled = false
     ;(async () => {
       try {
@@ -176,7 +179,7 @@ export default function SmartSynthesis() {
       }
     })()
     return () => { cancelled = true }
-  }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ready])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeModeConfig = modeGroups.find((m) => m.id === activeMode)
   const availableModels = modeModels(allModels, activeMode)

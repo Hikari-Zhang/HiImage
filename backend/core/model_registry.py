@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import threading
 import yaml
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,13 @@ _YAML_PATH = Path(__file__).parent / "models.yaml"
 
 def _load() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """读取 models.yaml，返回 (models, mode_groups)。"""
-    with open(_YAML_PATH, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(_YAML_PATH, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except FileNotFoundError:
+        raise RuntimeError(f"models.yaml 不存在: {_YAML_PATH}")
+    except yaml.YAMLError as e:
+        raise RuntimeError(f"models.yaml 格式错误: {e}")
 
     raw_models: list[dict] = data.get("models", [])
     raw_modes: list[dict] = data.get("mode_groups", [])
@@ -42,6 +48,9 @@ MODELS, MODE_GROUPS = _load()
 
 MODEL_BY_ID: dict[str, dict] = {m["id"]: m for m in MODELS}
 MODE_BY_ID:  dict[str, dict] = {g["id"]: g for g in MODE_GROUPS}
+
+# reload() 多线程并发保护锁
+_lock = threading.Lock()
 
 
 # ── 工具函数 ────────────────────────────────────────────────────────────────
@@ -85,7 +94,13 @@ def get_mode(mode_id: str) -> dict:
 
 def reload() -> None:
     """热重载配置（开发调试用；生产环境重启进程即可）。"""
-    global MODELS, MODE_GROUPS, MODEL_BY_ID, MODE_BY_ID
-    MODELS, MODE_GROUPS = _load()
-    MODEL_BY_ID = {m["id"]: m for m in MODELS}
-    MODE_BY_ID  = {g["id"]: g for g in MODE_GROUPS}
+    # IO 在锁外完成，避免长时间持有锁
+    models, modes = _load()
+    model_by_id = {m["id"]: m for m in models}
+    mode_by_id  = {g["id"]: g for g in modes}
+    # 原子替换全局引用，防止多线程并发读到半更新状态
+    with _lock:
+        global MODELS, MODE_GROUPS, MODEL_BY_ID, MODE_BY_ID
+        MODELS, MODE_GROUPS = models, modes
+        MODEL_BY_ID = model_by_id
+        MODE_BY_ID  = mode_by_id

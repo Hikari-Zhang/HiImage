@@ -6,7 +6,7 @@
 
 用法：
     from core.paths import HF_HOME, MODELS_DIR, resolve_model_path
-    print(HF_HOME)  # ~/.cache/hiimage/huggingface
+    print(HF_HOME)  # ~/.cache/huggingface
 """
 from __future__ import annotations
 
@@ -21,10 +21,10 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ──────────────────────────────────────────────────────────────
-# 默认缓存根目录：~/.cache/hiimage/
-# 可通过环境变量 HIIMAGE_CACHE 自定义
+# 默认缓存根目录：~/.cache/
+# 可通过环境变量 HIIMAGE_CACHE 自定义（默认值已从 hiimage/ 移除）
 # ──────────────────────────────────────────────────────────────
-_DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "hiimage"
+_DEFAULT_CACHE_ROOT = Path.home() / ".cache"
 CACHE_ROOT = Path(os.environ.get("HIIMAGE_CACHE", str(_DEFAULT_CACHE_ROOT)))
 
 # ──────────────────────────────────────────────────────────────
@@ -42,7 +42,15 @@ TORCH_HOME = Path(os.environ.get("TORCH_HOME", str(CACHE_ROOT / "torch")))
 
 # GFPGAN 权重缓存
 # 可通过环境变量 GFPGAN_HOME 覆盖
-GFPGAN_HOME = Path(os.environ.get("GFPGAN_HOME", str(CACHE_ROOT / "gfpgan")))
+GFPGAN_HOME = Path(os.environ.get("GFPGAN_HOME", str(Path.home() / ".cache" / "gfpgan")))
+
+# Real-ESRGAN 权重缓存
+# 可通过环境变量 REALESRGAN_HOME 覆盖
+REALESRGAN_HOME = Path(os.environ.get("REALESRGAN_HOME", str(Path.home() / ".cache" / "realesrgan")))
+
+# Restormer 权重缓存
+# 可通过环境变量 RESTORMER_HOME 覆盖
+RESTORMER_HOME = Path(os.environ.get("RESTORMER_HOME", str(Path.home() / ".cache" / "restormer")))
 
 # rembg / U2NET 模型缓存
 # 可通过环境变量 U2NET_HOME 覆盖（与 rembg 保持一致）
@@ -99,16 +107,36 @@ def resolve_hf_model_path(repo_id: str) -> str:
     """
     解析 HF 模型加载路径。
 
-    优先使用 manual/ 目录（HiImage 下载路径），
-    找不到时返回原始 repo_id，由 transformers/diffusers 自行解析标准 HF 缓存。
+    检查顺序：
+      1. 标准 hub 缓存（新下载位置）：通过 snapshot_download(local_files_only=True) 获取 snapshot 路径
+      2. manual/ 扁平目录（旧下载位置，向后兼容）
+      3. 均未找到：返回原始 repo_id，由 transformers/diffusers 自行解析
 
     用法：
         from core.paths import resolve_hf_model_path
         local_path = resolve_hf_model_path("timbrooks/instruct-pix2pix")
     """
+    # 1. 标准 hub 缓存（新路径）
+    hub_dir = HF_HOME / "hub"
+    if hub_dir.exists():
+        try:
+            from huggingface_hub import snapshot_download
+            path = snapshot_download(
+                repo_id=repo_id,
+                local_files_only=True,
+                cache_dir=str(hub_dir),
+            )
+            if path:
+                return path
+        except Exception:
+            pass
+
+    # 2. manual/ 扁平目录（旧路径，向后兼容）
     manual_dir = get_hf_manual_dir() / repo_id.replace("/", "--")
     if manual_dir.exists() and manual_dir.is_dir():
         return str(manual_dir)
+
+    # 3. 未找到：返回 repo_id 让 diffusers 自行解析（可能会触发在线下载）
     return repo_id
 
 
@@ -117,10 +145,10 @@ def resolve_model_cache_path(cfg: dict) -> Path:
     统一解析模型缓存路径（下载/加载/检查均使用此函数）。
 
     根据 provider 类型，自动定位到正确的缓存子目录：
-      - realesrgan  → MODELS_CACHE_DIR / "realesrgan" / weight_filename
-      - restormer    → MODELS_CACHE_DIR / "restormer" / weight_filename
-      - gfpgan       → GFPGAN_HOME / weight_filename
-      - 其他         → resolve_model_path(local_path)  # 向后兼容
+      - realesrgan  → REALESRGAN_HOME / weight_filename  （~/.cache/realesrgan/）
+      - restormer   → RESTORMER_HOME / weight_filename   （~/.cache/restormer/）
+      - gfpgan      → GFPGAN_HOME / weight_filename      （~/.cache/gfpgan/）
+      - 其他        → resolve_model_path(local_path)     # 向后兼容
 
     优先级：
       1. cfg["weight_filename"]  # 文件名
@@ -140,9 +168,9 @@ def resolve_model_cache_path(cfg: dict) -> Path:
 
     # 根据 provider 定位到正确的缓存目录
     if provider == "realesrgan":
-        return MODELS_CACHE_DIR / "realesrgan" / weight_filename
+        return REALESRGAN_HOME / weight_filename
     elif provider == "restormer":
-        return MODELS_CACHE_DIR / "restormer" / weight_filename
+        return RESTORMER_HOME / weight_filename
     elif provider == "gfpgan":
         return GFPGAN_HOME / weight_filename
     else:

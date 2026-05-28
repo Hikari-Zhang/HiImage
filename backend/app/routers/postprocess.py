@@ -100,7 +100,7 @@ async def postprocess_fix(req: PostprocessRequest):
             device=req.device,
         )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(executor, _process)
         await progress_manager.send_complete("后处理完成")
@@ -163,7 +163,7 @@ async def run_pipeline(req: PipelineRequest):
             progress_callback=_cb,
         )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await progress_manager.send_progress(15, "正在处理...")
 
     try:

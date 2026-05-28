@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     # 初始化日志系统
     import asyncio
     setup_logging()
-    log_manager.set_loop(asyncio.get_event_loop())
+    log_manager.set_loop(asyncio.get_running_loop())
 
     # Startup: 设置环境变量
     hf_endpoint = get("network.hf_endpoint", "https://huggingface.com")
@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
     # 为已下载的 IOPaint server 模式模型补全 hub/ 软链接，
     # 使 iopaint scan_diffusers_models() 能识别本地缓存，避免重复触发下载
     try:
-        from core.model_checker import ensure_iopaint_hub_links
+        from core.model_setup import ensure_iopaint_hub_links
         ensure_iopaint_hub_links()
     except Exception as _e:
         print(f"[Backend] iopaint hub 链接补全失败（非致命）: {_e}")

@@ -187,7 +187,7 @@ class DownloadQueue:
             self._broadcast(model_id, task.to_dict())
             if model_id in self._active:
                 del self._active[model_id]
-            self._slot_event.set()
+            self._get_slot_event().set()
             logger.info(f"[队列] 取消下载中任务: {task.model_name}")
             return True
 
@@ -313,7 +313,7 @@ class DownloadQueue:
                 except Exception as dep_e:
                     logger.warning(f"[_run_download] 依赖下载失败 {dep_id}: {dep_e}")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         progress_queue: asyncio.Queue = asyncio.Queue()
 
         def _put(data: dict) -> None:
@@ -411,7 +411,7 @@ class DownloadQueue:
 
                 # 为 IOPaint server 模式模型补全 hub/ 软链接（使 iopaint 能扫描到本地缓存）
                 try:
-                    from core.model_checker import ensure_iopaint_hub_links
+                    from core.model_setup import ensure_iopaint_hub_links
                     ensure_iopaint_hub_links(model_id)
                 except Exception as _link_err:
                     logger.warning(f"[队列] iopaint hub 链接补全失败（非致命）: {_link_err}")

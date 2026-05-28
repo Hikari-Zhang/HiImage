@@ -9,7 +9,7 @@
  *   以及在挂载时触发 syncModelStatus 同步后端文件状态。
  */
 
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useRef } from 'react'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { showToast } from '../components/ui'
@@ -23,15 +23,6 @@ const _sseMap = new Map<string, EventSource>()
 
 /** 已取消的 modelId 集合，用于防止 startDownload 的 POST 回调覆盖 cancelled 状态 */
 const _cancelledSet = new Set<string>()
-
-/** 确保 syncModelStatus 只在应用启动时执行一次 */
-let _syncDone = false
-let _onDownloadDone: (() => void) | null = null
-
-/** 注册下载完成回调（ModelManager 用于刷新模型列表） */
-export function registerDownloadDoneCallback(fn: () => void) {
-  _onDownloadDone = fn
-}
 
 // ── 辅助函数 ──────────────────────────────────────────────────────────────────
 
@@ -90,7 +81,6 @@ function ensureSubscribed(modelId: string, url: string) {
         es.close()
         _sseMap.delete(modelId)
         _syncOne(modelId)
-        setTimeout(() => _onDownloadDone?.(), 500)
       }
 
       if (patch.status === DownloadStatus.ERROR) {
@@ -360,12 +350,21 @@ export function useDownloadManager() {
 
   // ── 挂载时：同步状态 + 恢复连接 ────────────────────────────────────────────
 
+  const syncDoneRef = useRef(false)
+
   useEffect(() => {
-    if (!_syncDone) {
-      _syncDone = true
+    if (!syncDoneRef.current) {
+      syncDoneRef.current = true
       syncModelStatus()
     }
     resume()
+
+    // 监听后端重启事件，重新同步状态（后端重启后 _syncDone 重置，避免状态停留在旧快照）
+    const unsub = window.electronAPI?.onBackendReady?.(() => {
+      syncDoneRef.current = false
+      syncModelStatus()
+    })
+    return () => unsub?.()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   return {

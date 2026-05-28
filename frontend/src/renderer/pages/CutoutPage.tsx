@@ -18,6 +18,7 @@ import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
+import { useFirstVisible } from '../hooks/useFirstVisible'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
 import { DownloadStatus, ModelStatus } from '../constants'
@@ -38,7 +39,7 @@ const CHECKERBOARD_STYLE = {
   backgroundColor: '#1a1a1a',
 }
 
-export default function CutoutPage() {
+export default function CutoutPage({ isVisible = false }: { isVisible?: boolean }) {
   // ── Store 状态 ──
   const {
     sourceImage, sourceFilePath, resultImage, resultMask,
@@ -83,8 +84,10 @@ export default function CutoutPage() {
   const pendingPointRef = useRef<{ x: number; y: number } | null>(null)
 
   // ── 模型列表 ──
+  const ready = useFirstVisible(isVisible)
   const [cutoutModelGroups, setCutoutModelGroups] = useState<ModelGroup[]>([])
   useEffect(() => {
+    if (!ready) return
     getCutoutModels()
       .then((data) => {
         if (data?.groups) {
@@ -100,7 +103,7 @@ export default function CutoutPage() {
         }
       })
       .catch(() => {})
-  }, [])
+  }, [ready])
 
   // ── 加载结果图到 Konva ──
   const displayImage = compositeResult || resultImage

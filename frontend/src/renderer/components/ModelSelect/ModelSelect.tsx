@@ -38,8 +38,6 @@ interface ModelSelectProps {
   groups?: ModelGroup[]
   size?: 'sm' | 'md'
   className?: string
-  /** 是否在选中模型未下载时自动触发下载（默认 true） */
-  autoDownloadOnSelect?: boolean
 }
 
 // ── 状态图标 ──────────────────────────────────────────────────────────────────
@@ -107,7 +105,6 @@ export default function ModelSelect({
   groups,
   size = 'sm',
   className,
-  autoDownloadOnSelect = true,
 }: ModelSelectProps) {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -136,17 +133,7 @@ export default function ModelSelect({
   const handleSelect = useCallback((optionValue: string) => {
     onChange(optionValue)
     setOpen(false)
-    // 如果选中的模型未下载且开启了自动触发，自动 submit
-    if (autoDownloadOnSelect) {
-      const task = tasks[optionValue]
-      // task 不存在（从未进入队列）或 error 时触发下载
-      // done/queued/downloading 时不重复触发
-      if (!task || task.status === DownloadStatus.ERROR) {
-        // 此处不立即触发，等用户点"开始"按钮时再触发
-        // （功能页面自己决定是否立即下载）
-      }
-    }
-  }, [onChange, autoDownloadOnSelect, tasks])
+  }, [onChange])
 
   // 下载图标点击：触发该模型的下载
   const handleDownloadClick = useCallback((e: React.MouseEvent, modelId: string) => {
@@ -189,7 +176,7 @@ export default function ModelSelect({
         key={opt.value}
         onClick={() => !opt.disabled && handleSelect(opt.value)}
         className={clsx(
-          'flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors',
+          'group flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors',
           size === 'sm' ? 'text-xs' : 'text-sm',
           isSelected ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-primary',
           opt.disabled && 'opacity-40 cursor-not-allowed',

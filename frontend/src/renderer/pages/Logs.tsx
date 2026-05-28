@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Trash2, ArrowDown, Filter, CircleAlert, Info, AlertTriangle, Bug } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useFirstVisible } from '../hooks/useFirstVisible'
 
 interface LogEntry {
   timestamp: string
@@ -16,15 +17,17 @@ const LEVEL_CONFIG = {
   ERROR: { color: 'text-status-error', bg: 'bg-red-900/15', icon: CircleAlert },
 }
 
-export default function Logs() {
+export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState<string>('ALL')
   const [autoScroll, setAutoScroll] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const ready = useFirstVisible(isVisible)
 
   // Fetch initial logs
   useEffect(() => {
+    if (!ready) return
     const fetchLogs = async () => {
       try {
         const backendURL = window.electronAPI
@@ -38,10 +41,11 @@ export default function Logs() {
       }
     }
     fetchLogs()
-  }, [])
+  }, [ready])
 
   // WebSocket for real-time logs
   useEffect(() => {
+    if (!ready) return
     const connectWS = async () => {
       const backendURL = window.electronAPI
         ? await window.electronAPI.getBackendURL()
@@ -69,7 +73,7 @@ export default function Logs() {
     return () => {
       wsRef.current?.close()
     }
-  }, [])
+  }, [ready])
 
   // Auto scroll to bottom
   useEffect(() => {
