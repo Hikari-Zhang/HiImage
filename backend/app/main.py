@@ -44,6 +44,14 @@ async def lifespan(app: FastAPI):
 
     # 为依赖环境变量的库设置默认路径（仅设置未定义的环境变量）
     apply_default_env_vars()
+    # 在主线程预导入 model_server，确保 signal.signal(SIGTERM) 在主线程注册。
+    # 若推迟到首次推理请求时导入，会在线程池工作线程中触发
+    # "signal only works in main thread" ValueError。
+    try:
+        import core.model_server  # noqa: F401  — 副作用：注册 SIGTERM 处理器
+    except Exception as _e:
+        print(f"[Backend] model_server 预导入失败（非致命）: {_e}")
+
     # 为已下载的 IOPaint server 模式模型补全 hub/ 软链接，
     # 使 iopaint scan_diffusers_models() 能识别本地缓存，避免重复触发下载
     try:

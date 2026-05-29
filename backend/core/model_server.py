@@ -620,7 +620,12 @@ def _handle_sigterm(signum, frame):
 
 
 if hasattr(signal, 'SIGTERM'):
-    signal.signal(signal.SIGTERM, _handle_sigterm)
+    try:
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except ValueError:
+        # signal.signal() 只能在主线程调用；若模块首次被工作线程导入则跳过注册，
+        # main.py 的 lifespan 启动时会在主线程完成预导入，确保处理器最终注册。
+        pass
 
 
 def get_server() -> _ModelServer:
