@@ -139,6 +139,7 @@ export default function Denoise() {
       const newItems: ImageQueueItem[] = Array.from(files).map(file => ({
         id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
         fileName: file.name,
+        filePath: (file as File & { path?: string }).path,
         file,
         status: 'pending' as const,
       }))
@@ -169,6 +170,7 @@ export default function Denoise() {
         .map(file => ({
           id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
           fileName: file.name,
+          filePath: (file as File & { path?: string }).path,
           file,
           status: 'pending' as const,
         }))
@@ -262,9 +264,14 @@ export default function Denoise() {
         }
         return { ...item, status: 'error' as const, error: r?.error || '处理失败' }
       })
-      setBatchItems(next.map(({ dataUrl, resultDataUrl, ...rest }) => {
-        if (rest.resultPath) return rest as ImageQueueItem
-        return { ...rest, resultDataUrl } as ImageQueueItem
+      setBatchItems(next.map(item => {
+        if (item.resultPath) {
+          const lightweightItem = { ...item }
+          delete lightweightItem.dataUrl
+          delete lightweightItem.resultDataUrl
+          return lightweightItem
+        }
+        return item.resultDataUrl ? { ...item, dataUrl: item.resultDataUrl } : item
       }))
       const { success, failed } = result.summary
       finishProcess('批量降噪完成')
@@ -369,6 +376,7 @@ export default function Denoise() {
       const newItems: ImageQueueItem[] = Array.from(files as FileList).map(file => ({
         id: `img_${Date.now()}_${Math.random().toString(36).substr(1, 5)}`,
         fileName: file.name,
+        filePath: (file as File & { path?: string }).path,
         file,
         status: 'pending' as const,
       }))
@@ -394,8 +402,8 @@ export default function Denoise() {
         title="图片降噪"
         subtitle={
           mode === 'batch'
-            ? `${batchItems.length} 张图片 | 保持原分辨率 | ${denoiseModel}`
-            : inputSize.w > 0 ? `${inputSize.w}x${inputSize.h}（保持分辨率）` : undefined
+            ? `${batchItems.length} 张图片 | 保持原始分辨率 | ${denoiseModel}`
+            : inputSize.w > 0 ? `${inputSize.w}x${inputSize.h}（保持原始分辨率）` : undefined
         }
         right={
           <div className="flex items-center gap-2">
@@ -533,7 +541,7 @@ export default function Denoise() {
                 </div>
                 <div className="flex justify-between text-xs">
                   <span className="text-fg-secondary">分辨率</span>
-                  <span className="text-fg-accent">保持原尺寸</span>
+                  <span className="text-fg-accent">保持原始分辨率</span>
                 </div>
               </div>
             </section>
