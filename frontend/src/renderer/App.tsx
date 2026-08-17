@@ -23,6 +23,7 @@ export default function App() {
           {/* 路径注册，实际渲染由 MainLayout 内的常驻组件处理 */}
           <Route path="watermark" element={null} />
           <Route path="cutout"    element={null} />
+          <Route path="denoise"   element={null} />
           <Route path="upscale"   element={null} />
           <Route path="synthesis" element={null} />
           <Route path="logs"      element={null} />

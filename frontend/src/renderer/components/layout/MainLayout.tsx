@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import WatermarkRemoval from '../../pages/WatermarkRemoval'
 import CutoutPage from '../../pages/CutoutPage'
+import Denoise from '../../pages/Denoise'
 import SuperResolution from '../../pages/SuperResolution'
 import SmartSynthesis from '../../pages/SmartSynthesis'
 import Settings from '../../pages/Settings'
@@ -11,6 +12,7 @@ import Logs from '../../pages/Logs'
 const PAGES = [
   { path: '/watermark',  element: <WatermarkRemoval /> },
   { path: '/cutout',     element: <CutoutPage /> },
+  { path: '/denoise',    element: <Denoise /> },
   { path: '/upscale',    element: <SuperResolution /> },
   { path: '/synthesis',  element: <SmartSynthesis /> },
   { path: '/logs',       element: <Logs /> },
