@@ -49,7 +49,7 @@ def _require_denoise_model(model_id: str) -> dict:
         raise HTTPException(
             status_code=400,
             detail=f"未知降噪模型: {model_id!r}，可选: {allowed}",
-        )
+        ) from None
     if cfg.get("provider") != "realesrgan" or "denoise" not in cfg.get("tags", []):
         raise HTTPException(
             status_code=400,
@@ -63,6 +63,23 @@ def _match_input_size(result: np.ndarray, src: np.ndarray) -> np.ndarray:
     if result.shape[0] != h or result.shape[1] != w:
         result = cv2.resize(result, (w, h), interpolation=cv2.INTER_AREA)
     return result
+
+
+def _denoised_output_path(output_dir: str, file_name: str) -> str:
+    base_name = os.path.splitext(file_name)[0]
+    output_path = os.path.join(output_dir, f"{base_name}_denoised.png")
+    suffix = 2
+    while os.path.exists(output_path):
+        output_path = os.path.join(
+            output_dir, f"{base_name}_denoised_{suffix}.png"
+        )
+        suffix += 1
+    if suffix > 2:
+        log_manager.warning(
+            f"降噪输出文件名冲突，使用后缀路径: {output_path}",
+            source="denoise_batch",
+        )
+    return output_path
 
 
 @router.get("/models/denoise")
@@ -169,8 +186,7 @@ async def denoise_image_batch(req: BatchDenoiseRequest):
             del image
             h_out, w_out = result_rgb.shape[:2]
             if req.output_dir:
-                base_name = os.path.splitext(file_name)[0]
-                out_path = os.path.join(req.output_dir, f"{base_name}_denoised.png")
+                out_path = _denoised_output_path(req.output_dir, file_name)
                 result_bgr = cv2.cvtColor(result_rgb, cv2.COLOR_RGB2BGR)
                 if not cv2.imwrite(out_path, result_bgr):
                     raise RuntimeError(f"写入降噪图片失败: {out_path}")

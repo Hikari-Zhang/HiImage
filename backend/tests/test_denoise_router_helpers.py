@@ -1,8 +1,25 @@
 import asyncio
+import os
 
 import numpy as np
 import pytest
 from fastapi import HTTPException
+
+
+def test_denoised_output_path_adds_suffix_on_collision(tmp_path):
+    from app.routers.denoise import _denoised_output_path
+
+    first = tmp_path / "1_denoised.png"
+    second = tmp_path / "1_denoised_2.png"
+    third = tmp_path / "1_denoised_3.png"
+
+    assert _denoised_output_path(str(tmp_path), "1.png") == os.fspath(first)
+    first.touch()
+
+    assert _denoised_output_path(str(tmp_path), "1.png") == os.fspath(second)
+    second.touch()
+
+    assert _denoised_output_path(str(tmp_path), "1.png") == os.fspath(third)
 
 
 def test_list_denoise_models_groups():
