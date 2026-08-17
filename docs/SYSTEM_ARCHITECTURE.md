@@ -5,13 +5,13 @@
 
 ## 1. 概述
 
-HiImage 是 **Electron + FastAPI** 的跨平台 AI 图像处理桌面应用。核心功能：去水印、抠图、超分辨率、智能合成。
+HiImage 是 **Electron + FastAPI** 的跨平台 AI 图像处理桌面应用。核心功能：去水印、抠图、超分辨率、图片降噪、智能合成。
 
 设计原则：
 
 - **配置驱动**：模型元数据集中在 `backend/core/models.yaml`，同 provider 新增模型通常只改 YAML。
 - **端云协同**：Electron 管理本地 FastAPI 生命周期，也支持连接远程后端。
-- **工作区流水线**：去水印 / 超分 / 合成共享「工作图」，选区与画笔按页隔离，便于先去水印再超分。抠图使用独立 store（RGBA + mask 管线不同）。
+- **工作区流水线**：去水印 / 降噪 / 超分 / 合成共享「工作图」，选区与画笔按页隔离，便于先去水印再超分。抠图使用独立 store（RGBA + mask 管线不同）。
 
 ## 2. 高层架构
 
@@ -56,6 +56,7 @@ HiImage 是 **Electron + FastAPI** 的跨平台 AI 图像处理桌面应用。�
 |------|------|----------|
 | `/watermark` | 去水印 | 工作区 source；本页 ROI/画笔 |
 | `/cutout` | 抠图 | **独立** `useCutoutStore` |
+| `/denoise` | 图片降噪 | 工作区 working image（原图或上一页结果） |
 | `/upscale` | 超分辨率 | 工作区 working image（原图或上一页结果） |
 | `/synthesis` | 智能合成 | 同上 + 本页 ROI/画笔 |
 | `/logs` `/settings` | 日志 / 设置 | 无工作图 |
@@ -65,8 +66,8 @@ HiImage 是 **Electron + FastAPI** 的跨平台 AI 图像处理桌面应用。�
 **共享工作图** `useWorkspaceStore`：
 
 - `sourceImage` / `sourceFilePath`：打开或「将结果设为原图」后的底图
-- `resultImage`：最近一次去水印 / 超分 / 合成的成功结果（跨页交接）
-- `inputSource`: `'original' | 'result'`：超分、合成默认用结果，可切回原图
+- `resultImage`：最近一次去水印 / 降噪 / 超分 / 合成的成功结果（跨页交接）
+- `inputSource`: `'original' | 'result'`：超分、降噪、合成默认用结果，可切回原图
 - 去水印始终编辑 `sourceImage`（在结果上再去水印需点「将结果设为原图」）
 
 **按页隔离** `useWatermarkToolStore` / `useSynthesisToolStore`：
