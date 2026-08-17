@@ -101,6 +101,18 @@ export default function Denoise() {
     img.src = workingImage
   }, [workingImage, mode, resultImage])
 
+  useEffect(() => {
+    if (!isBatchProcessing || !statusMessage) return
+    const match = statusMessage.match(/第\s*(\d+)/)
+    if (!match) return
+    const oneBased = parseInt(match[1], 10)
+    if (Number.isNaN(oneBased) || oneBased < 1) return
+    const index = oneBased - 1
+    if (index < batchItems.length) {
+      setBatchCurrentIndex(index)
+    }
+  }, [statusMessage, isBatchProcessing, batchItems.length])
+
   const handleOpenFile = async () => {
     if (window.electronAPI) {
       const handler = mode === 'batch' ? window.electronAPI.openFiles?.() : window.electronAPI.openFile()
