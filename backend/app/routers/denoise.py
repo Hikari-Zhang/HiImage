@@ -118,11 +118,13 @@ async def denoise_image_batch(req: BatchDenoiseRequest):
 
     tile = req.tile if req.tile is not None else 0
     shared = Upscaler(model_name=req.model, device=req.device, tile=tile)
-    try:
-        shared._ensure_model_loaded()
-    except Exception as e:
-        log_manager.error(f"批量降噪模型加载失败: {e}", source="denoise_batch")
-        raise RuntimeError(f"模型加载失败: {e}") from e
+    if tile > 0:
+        shared._current_tile = tile
+        try:
+            shared._ensure_model_loaded()
+        except Exception as e:
+            log_manager.error(f"批量降噪模型加载失败: {e}", source="denoise_batch")
+            raise RuntimeError(f"模型加载失败: {e}") from e
 
     results = []
     success_count = 0
@@ -170,7 +172,8 @@ async def denoise_image_batch(req: BatchDenoiseRequest):
                 base_name = os.path.splitext(file_name)[0]
                 out_path = os.path.join(req.output_dir, f"{base_name}_denoised.png")
                 result_bgr = cv2.cvtColor(result_rgb, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(out_path, result_bgr)
+                if not cv2.imwrite(out_path, result_bgr):
+                    raise RuntimeError(f"写入降噪图片失败: {out_path}")
                 del result_rgb
                 results.append({
                     "index": idx,
@@ -244,33 +247,28 @@ async def denoise_image(req: DenoiseRequest):
     result = None
     try:
         result = await loop.run_in_executor(executor, _process, image)
-        del image
-        await progress_manager.send_complete("降噪处理完成")
         h, w = result.shape[:2]
         log_manager.info(f"降噪完成: output={w}x{h}", source="denoise")
         if req.output_path:
             out_dir = os.path.dirname(req.output_path) or "."
             os.makedirs(out_dir, exist_ok=True)
             result_bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(req.output_path, result_bgr)
-            del result
+            if not cv2.imwrite(req.output_path, result_bgr):
+                raise RuntimeError(f"写入降噪图片失败: {req.output_path}")
             if req.device == "cuda":
                 import torch
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+            await progress_manager.send_complete("降噪处理完成")
             return {"outputPath": req.output_path, "width": w, "height": h}
         encoded = encode_image(result)
-        del result
         if req.device == "cuda":
             import torch
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+        await progress_manager.send_complete("降噪处理完成")
         return {"image": encoded, "width": w, "height": h}
     except Exception as e:
-        if image is not None:
-            del image
-        if result is not None:
-            del result
         if req.device == "cuda":
             import torch
             if torch.cuda.is_available():
