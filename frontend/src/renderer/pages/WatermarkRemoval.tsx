@@ -8,7 +8,8 @@ import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
 import { Button, Select, Slider, Progress, showToast } from '../components/ui'
 import ModelSelect from '../components/ModelSelect/ModelSelect'
-import { useImageStore } from '../stores/useImageStore'
+import { useWatermarkToolStore, type ROI } from '../stores/useImageStore'
+import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
 import { useProcessStore } from '../stores/useProcessStore'
@@ -32,14 +33,17 @@ const POSTPROCESS_OPTIONS = [
 
 export default function WatermarkRemoval() {
   const {
-    sourceImage, resultImage, rois, selectedROIs, imageWidth, imageHeight,
+    sourceImage, sourceFilePath, imageWidth, imageHeight,
+    loadImage, setImageDimensions, setHandoffResult,
+  } = useWorkspaceStore()
+  const {
+    rois, selectedROIs,
     maskStrokes, brushSettings, canvasTool,
-    setSourceImage, setImageDimensions, setResultImage,
     addROI, removeROI, clearROIs, selectROI,
     addMaskStroke, undoMaskStroke, clearMaskStrokes, setCanvasTool, setBrushSettings,
-  } = useImageStore()
+  } = useWatermarkToolStore()
 
-  const { isProcessing, progress, statusMessage, startProcess, updateProgress, finishProcess, setError, reset } = useProcessStore()
+  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { detectWatermark, inpaint, inpaintWithMask, runPipeline } = useBackendAPI()
   const {
     device, inpaintModel, defaultDilation, sensitivity, disableNsfw,
@@ -57,54 +61,9 @@ export default function WatermarkRemoval() {
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [pageResult, setPageResult] = useState<string | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const wsRef = useRef<WebSocket | null>(null)
-
-  // WebSocket listener for progress updates
-  useEffect(() => {
-    const connectProgressWS = async () => {
-      try {
-        const backendURL = window.electronAPI
-          ? await window.electronAPI.getBackendURL()
-          : 'http://127.0.0.1:8787'
-        const wsURL = backendURL.replace('http', 'ws') + '/api/ws/progress'
-
-        const ws = new WebSocket(wsURL)
-        ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data)
-            if (msg.type === 'progress' && typeof msg.percent === 'number') {
-              updateProgress(msg.percent, msg.message || '')
-            } else if (msg.type === 'complete') {
-              finishProcess(msg.message || '处理完成')
-            } else if (msg.type === 'error') {
-              setError(msg.message || '处理出错')
-            }
-          } catch (err) {
-            console.error('Failed to parse progress message:', err)
-          }
-        }
-        ws.onerror = () => {
-          console.error('Progress WebSocket error')
-        }
-        ws.onclose = () => {
-          // Reconnect after 3s
-          setTimeout(connectProgressWS, 3000)
-        }
-        wsRef.current = ws
-      } catch (err) {
-        console.error('Failed to connect progress WebSocket:', err)
-        setTimeout(connectProgressWS, 3000)
-      }
-    }
-
-    connectProgressWS()
-    return () => {
-      wsRef.current?.close()
-    }
-  }, [updateProgress, finishProcess, setError])
-
 
   // Open file
   const handleOpenFile = async () => {
@@ -123,7 +82,8 @@ export default function WatermarkRemoval() {
       // 通过 IPC 读取文件内容为 base64 data URL，避免 file:// 协议权限问题
       const dataUrl = await window.electronAPI!.readImageFile(filePath)
       reset()
-      setSourceImage(dataUrl, filePath)
+      loadImage(dataUrl, filePath)
+      setPageResult(null)
       setShowResult(false)
     } catch (err: any) {
       showToast('error', `读取图片失败: ${err.message}`)
@@ -142,7 +102,8 @@ export default function WatermarkRemoval() {
     const reader = new FileReader()
     reader.onload = () => {
       reset()
-      setSourceImage(reader.result as string)
+      loadImage(reader.result as string)
+      setPageResult(null)
       setShowResult(false)
     }
     reader.readAsDataURL(file)
@@ -162,7 +123,8 @@ export default function WatermarkRemoval() {
     const reader = new FileReader()
     reader.onload = () => {
       reset()
-      setSourceImage(reader.result as string)
+      loadImage(reader.result as string)
+      setPageResult(null)
       setShowResult(false)
     }
     reader.readAsDataURL(file)
@@ -266,7 +228,9 @@ export default function WatermarkRemoval() {
         return
       }
 
-      setResultImage(`data:image/png;base64,${resultBase64}`)
+      const resultUrl = `data:image/png;base64,${resultBase64}`
+      setPageResult(resultUrl)
+      setHandoffResult(resultUrl)
       setShowResult(true)
       finishProcess('处理完成')
       showToast('success', usePipeline ? 'Pipeline 处理完成' : '水印去除完成')
@@ -319,9 +283,8 @@ export default function WatermarkRemoval() {
 
   // Save
   const handleSave = async () => {
-    if (!resultImage) return
+    if (!pageResult) return
     // 默认文件名：原文件名_processed.png
-    const { sourceFilePath } = useImageStore.getState()
     let defaultName = 'result.png'
     if (sourceFilePath) {
       const baseName = sourceFilePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || 'result'
@@ -330,7 +293,7 @@ export default function WatermarkRemoval() {
     if (window.electronAPI) {
       const filePath = await window.electronAPI.saveFile(defaultName)
       if (filePath) {
-        const result = await window.electronAPI.saveImageFile(filePath, resultImage)
+        const result = await window.electronAPI.saveImageFile(filePath, pageResult)
         if (result.success) {
           showToast('success', `已保存至: ${filePath}`)
         } else {
@@ -339,7 +302,7 @@ export default function WatermarkRemoval() {
       }
     } else {
       const a = document.createElement('a')
-      a.href = resultImage
+      a.href = pageResult
       a.download = defaultName
       a.click()
     }
@@ -347,11 +310,10 @@ export default function WatermarkRemoval() {
 
   // 将处理结果作为新的源图进行再次处理
   const handleUseResultAsSource = () => {
-    if (!resultImage) return
-    const { sourceFilePath } = useImageStore.getState()
+    if (!pageResult) return
     reset()
-    clearROIs()
-    setSourceImage(resultImage, sourceFilePath ?? undefined)
+    loadImage(pageResult, sourceFilePath)
+    setPageResult(null)
     setShowResult(false)
     showToast('success', '已将处理结果设为原图')
   }
@@ -435,8 +397,8 @@ export default function WatermarkRemoval() {
               <Button onClick={handleOpenFile}>打开图片</Button>
               <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileInput} />
             </div>
-          ) : showResult && resultImage && sourceImage ? (
-            <ImageCompare beforeSrc={sourceImage} afterSrc={resultImage} beforeLabel="原图" afterLabel="处理后" />
+          ) : showResult && pageResult && sourceImage ? (
+            <ImageCompare beforeSrc={sourceImage} afterSrc={pageResult} beforeLabel="原图" afterLabel="处理后" />
           ) : (
             <>
               {/* 始终显示 MaskCanvas，同时支持 ROI 和画笔遮罩 */}
@@ -709,7 +671,7 @@ export default function WatermarkRemoval() {
               <Progress value={progress} label={`${statusMessage} ${progress > 0 ? progress + '%' : ''}`} />
             )}
 
-            {resultImage && (
+            {pageResult && (
               <>
                 <Button
                   variant="secondary"

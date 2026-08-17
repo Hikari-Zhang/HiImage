@@ -34,8 +34,10 @@ HiImage 是一款基于 Electron + React + FastAPI 构建的 **AI 驱动图像�
 | 功能模块 | 说明 |
 |---------|------|
 | **去水印** | 框选水印区域，AI 修复，支持 30+ 模型（快速模型无需下载，扩散模型首次自动下载） |
+| **抠图** | BiRefNet / rembg 抠图，画笔微调与边缘精修 |
 | **超分辨率** | Real-ESRGAN 2x/4x 放大，支持通用/精细化/动漫三类模型，**支持批量处理** |
 | **智能合成** | 7 种模式：换背景 / 换装 / 换脸 / 虚拟试穿 / 精准替换 / 智能定位 / 自由编辑 |
+| **跨页流水线** | 去水印 / 超分 / 合成共享工作图；选区与画笔按页隔离 |
 | **批量处理** | 一次性导入多张图片，逐张处理，实时显示进度，支持 Electron 直接读取本地文件 |
 
 ### 1.3 技术选型
@@ -674,12 +676,13 @@ function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/watermark" />} />
-          <Route path="/watermark" element={<WatermarkRemoval />} />
-          <Route path="/upscale" element={<SuperResolution />} />
-          <Route path="/synthesis" element={<SmartSynthesis />} />
-          <Route path="/models" element={<ModelManager />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/logs" element={<Logs />} />
+          {/* 实际由 MainLayout 常驻挂载，此处仅注册路径 */}
+          <Route path="/watermark" element={null} />
+          <Route path="/cutout" element={null} />
+          <Route path="/upscale" element={null} />
+          <Route path="/synthesis" element={null} />
+          <Route path="/settings" element={null} />
+          <Route path="/logs" element={null} />
         </Route>
       </Routes>
     </BrowserRouter>
@@ -1260,30 +1263,11 @@ interface SettingsState {
 }
 ```
 
-#### 7.1.4 `useImageStore` - 图像状态
+#### 7.1.4 工作区与工具状态（v1.4）
 
-```typescript
-interface ImageState {
-  sourceImage: string | null
-  resultImage: string | null
-  rois: Array<[number, number, number, number]>
-  selectedROIs: number[]
-  imageWidth: number
-  imageHeight: number
-  
-  maskStrokes: Array<...>
-  brushSettings: ...
-  canvasTool: 'draw' | 'pan'
-  
-  setSourceImage: (image: string | null) => void
-  setResultImage: (image: string | null) => void
-  addROI: (roi: [number, number, number, number]) => void
-  removeROI: (index: number) => void
-  clearROIs: () => void
-  selectROI: (index: number) => void
-  ...
-}
-```
+去水印 / 超分 / 合成共享 `useWorkspaceStore`（原图、结果、`inputSource`），ROI 与画笔分别在 `useWatermarkToolStore` / `useSynthesisToolStore`。超分与合成默认处理上一页结果，可切回原图。抠图使用独立的 `useCutoutStore`。
+
+进度 WebSocket 在 App 级通过 `useProgressWebSocket` 连接一次，写入全局 `useProcessStore`。
 
 #### 7.1.5 `useModelStore` - 模型列表
 

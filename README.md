@@ -7,8 +7,10 @@ AI 驱动的图像处理桌面工具，基于 Electron + React + FastAPI 构建�
 | 功能 | 说明 |
 |------|------|
 | **去水印** | 框选水印区域，AI 修复，支持 30+ 模型（快速模型无需下载，扩散模型首次自动下载） |
+| **抠图** | BiRefNet / rembg 等模型抠图，画笔微调 + 羽化/膨胀精修，合成自定义背景 |
 | **超分辨率** | Real-ESRGAN 2x/4x 放大，支持通用/精细化/动漫三类模型，**支持批量处理** |
 | **智能合成** | 7 种模式：换背景 / 换装 / 换脸 / 虚拟试穿 / 精准替换 / 智能定位 / 自由编辑 |
+| **跨页流水线** | 去水印 / 超分 / 合成共享工作图：一页的结果可直接作为下一页输入（可选回原图） |
 | **批量处理** | 一次性导入多张图片，逐张处理，实时显示进度，支持 Electron 直接读取本地文件 |
 
 ---
@@ -73,6 +75,15 @@ npm run package   # 打包 Electron 应用（.dmg / .exe）
 
 **扩散模型（首次自动下载）**：AnyText / PowerPaint V1 / SD 1.5 Inpainting / Realistic Vision / DreamShaper / Anything V4 / SDXL Inpainting
 
+### 抠图
+
+1. 打开图片
+2. 选择模型（推荐 BiRefNet），点击抠图
+3. 用画笔增减前景，必要时调节羽化 / 膨胀
+4. 可合成到自定义背景后保存 PNG
+
+抠图不占用去水印/超分/合成的工作图，避免透明通道结果和 RGB 流水线混在一起。
+
 ### 超分辨率
 
 #### 单张处理
@@ -130,7 +141,7 @@ HiImage/
 ├── backend/                  # Python FastAPI 后端
 │   ├── app/
 │   │   ├── main.py          # FastAPI 入口
-│   │   ├── routers/         # API 路由（inpaint / upscale / synthesis / settings / logs / system）
+│   │   ├── routers/         # API 路由（inpaint / cutout / upscale / synthesis / models / …）
 │   │   └── websocket/      # 进度推送 WebSocket
 │   └── core/               # AI 推理核心
 │       ├── inpainter.py     # IOPaint 调用封装

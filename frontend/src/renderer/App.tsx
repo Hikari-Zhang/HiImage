@@ -4,10 +4,12 @@ import MainLayout from './components/layout/MainLayout'
 import { ToastContainer } from './components/ui'
 import { useBackendStore } from './stores/useBackendStore'
 import { useModelStore } from './stores/useModelStore'
+import { useProgressWebSocket } from './hooks/useProgressWebSocket'
 
 export default function App() {
   const backendURL = useBackendStore((s) => s.backendURL)
   const loadModels = useModelStore((s) => s.loadModels)
+  useProgressWebSocket()
 
   useEffect(() => {
     loadModels(backendURL)

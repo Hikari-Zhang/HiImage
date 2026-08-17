@@ -12,7 +12,14 @@ import MaskToolbar from '../components/MaskToolbar'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
 import { Button, Select, Progress, showToast } from '../components/ui'
-import { useImageStore } from '../stores/useImageStore'
+import WorkspaceInputBar from '../components/WorkspaceInputBar'
+import { useSynthesisToolStore, type ROI } from '../stores/useImageStore'
+import {
+  useWorkspaceStore,
+  selectWorkingImage,
+  selectWorkingWidth,
+  selectWorkingHeight,
+} from '../stores/useWorkspaceStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
@@ -110,13 +117,19 @@ function defaultModel(models: SynthesisModel[], modeGroup: ModeGroup | undefined
 // ─── 组件 ─────────────────────────────────────────────────────────────────
 
 export default function SmartSynthesis() {
+  const sourceImage = useWorkspaceStore((s) => s.sourceImage)
+  const sourceFilePath = useWorkspaceStore((s) => s.sourceFilePath)
+  const loadImage = useWorkspaceStore((s) => s.loadImage)
+  const setHandoffResult = useWorkspaceStore((s) => s.setHandoffResult)
+  const workingImage = useWorkspaceStore(selectWorkingImage)
+  const workingWidth = useWorkspaceStore(selectWorkingWidth)
+  const workingHeight = useWorkspaceStore(selectWorkingHeight)
   const {
-    sourceImage, resultImage, rois, selectedROIs, imageWidth, imageHeight,
+    rois, selectedROIs,
     maskStrokes, brushSettings, canvasTool,
-    setSourceImage, setImageDimensions, setResultImage,
     addROI, removeROI, clearROIs, selectROI,
     addMaskStroke, undoMaskStroke, clearMaskStrokes, setBrushSettings, setCanvasTool,
-  } = useImageStore()
+  } = useSynthesisToolStore()
 
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { device, setDevice } = useSettingsStore()
@@ -129,6 +142,9 @@ export default function SmartSynthesis() {
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showResult, setShowResult] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
+  const [pageResult, setPageResult] = useState<string | null>(null)
+  const [compareBefore, setCompareBefore] = useState<string | null>(null)
+  const [inputSize, setInputSize] = useState({ w: 0, h: 0 })
 
   // ── 动态加载的模式与模型 ─────────────────────────────────────────────────
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([])
@@ -201,7 +217,9 @@ export default function SmartSynthesis() {
     try {
       const dataUrl = await window.electronAPI!.readImageFile(filePath)
       reset()
-      setSourceImage(dataUrl, filePath)
+      loadImage(dataUrl, filePath)
+      setPageResult(null)
+      setCompareBefore(null)
       setShowResult(false)
     } catch (err: any) {
       showToast('error', `读取主图失败: ${err.message}`)
@@ -239,7 +257,9 @@ export default function SmartSynthesis() {
     }
     const dataUrl = await loadImageAsDataUrl(file)
     reset()
-    setSourceImage(dataUrl)
+    loadImage(dataUrl)
+    setPageResult(null)
+    setCompareBefore(null)
     setShowResult(false)
   }
 
@@ -254,7 +274,9 @@ export default function SmartSynthesis() {
     }
     const dataUrl = await loadImageAsDataUrl(file)
     reset()
-    setSourceImage(dataUrl)
+    loadImage(dataUrl)
+    setPageResult(null)
+    setCompareBefore(null)
     setShowResult(false)
   }
 
@@ -300,12 +322,21 @@ export default function SmartSynthesis() {
 
   const handleROIDrawn = useCallback((roi: Omit<ROI, 'id'>) => { addROI(roi) }, [addROI])
   const handleROISelect = useCallback((id: string) => { selectROI(id) }, [selectROI])
-  const handleImageLoad = useCallback((w: number, h: number) => { setImageDimensions(w, h) }, [setImageDimensions])
+  const handleImageLoad = useCallback((w: number, h: number) => {
+    setInputSize({ w, h })
+  }, [])
+
+  useEffect(() => {
+    if (!workingImage || showResult) return
+    const img = new window.Image()
+    img.onload = () => setInputSize({ w: img.naturalWidth, h: img.naturalHeight })
+    img.src = workingImage
+  }, [workingImage, showResult])
 
   // ── 执行合成 ──────────────────────────────────────────────────────────────
 
   const handleProcess = async () => {
-    if (!sourceImage) return
+    if (!workingImage) return
     if (activeModeConfig?.needsReference && !referenceImage) {
       showToast('warning', `请先上传${activeModeConfig.referenceLabel}`)
       return
@@ -333,14 +364,17 @@ export default function SmartSynthesis() {
 
     try {
       startProcess(selectedModel)
+      setCompareBefore(workingImage)
+
+      const maskW = inputSize.w || workingWidth
+      const maskH = inputSize.h || workingHeight
 
       // 使用合并遮罩模式（支持画笔遮罩 + ROI 矩形）
       let result
       if (maskStrokes.length > 0 || rois.length > 0) {
-        // 导出合并遮罩为 base64（画笔遮罩 + ROI 矩形）
-        const maskDataURL = await exportCombinedMask(maskStrokes, rois, imageWidth, imageHeight)
+        const maskDataURL = await exportCombinedMask(maskStrokes, rois, maskW, maskH)
         result = await runSynthesis({
-          source_image: sourceImage,
+          source_image: workingImage,
           reference_image: referenceImage ?? undefined,
           mask: maskDataURL,
           mode: activeMode,
@@ -351,7 +385,7 @@ export default function SmartSynthesis() {
       } else {
         // 无遮罩模式
         result = await runSynthesis({
-          source_image: sourceImage,
+          source_image: workingImage,
           reference_image: referenceImage ?? undefined,
           mode: activeMode,
           model_id: selectedModel,
@@ -360,7 +394,9 @@ export default function SmartSynthesis() {
         })
       }
 
-      setResultImage(`data:image/png;base64,${result.image}`)
+      const resultUrl = `data:image/png;base64,${result.image}`
+      setPageResult(resultUrl)
+      setHandoffResult(resultUrl, { width: result.width, height: result.height })
       setShowResult(true)
       finishProcess('合成完成')
       showToast('success', `智能合成完成 (${result.width}×${result.height})`)
@@ -414,21 +450,31 @@ export default function SmartSynthesis() {
   // ── 保存 ─────────────────────────────────────────────────────────────────
 
   const handleSave = async () => {
-    if (!resultImage) return
+    if (!pageResult) return
     const fileName = `synthesis_${activeMode}.png`
     if (window.electronAPI) {
       const filePath = await window.electronAPI.saveFile(fileName)
       if (filePath) {
-        const res = await window.electronAPI.saveImageFile(filePath, resultImage)
+        const res = await window.electronAPI.saveImageFile(filePath, pageResult)
         if (res.success) showToast('success', `已保存至: ${filePath}`)
         else showToast('error', `保存失败: ${res.error}`)
       }
     } else {
       const a = document.createElement('a')
-      a.href = resultImage
+      a.href = pageResult
       a.download = fileName
       a.click()
     }
+  }
+
+  const handleUseResultAsSource = () => {
+    if (!pageResult) return
+    reset()
+    loadImage(pageResult, sourceFilePath)
+    setPageResult(null)
+    setCompareBefore(null)
+    setShowResult(false)
+    showToast('success', '已将处理结果设为原图')
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -444,8 +490,19 @@ export default function SmartSynthesis() {
     <div className="flex-1 flex flex-col min-h-0">
       <PageHeader
         title="智能合成"
-        subtitle={imageWidth > 0 ? `${imageWidth} × ${imageHeight}` : undefined}
-        right={<span className="text-xs text-fg-secondary">{activeModeConfig?.name ?? '...'} | {device}</span>}
+        subtitle={inputSize.w > 0 ? `${inputSize.w} × ${inputSize.h}` : undefined}
+        right={
+          <div className="flex items-center gap-3">
+            <WorkspaceInputBar
+              onChange={() => {
+                setPageResult(null)
+                setCompareBefore(null)
+                setShowResult(false)
+              }}
+            />
+            <span className="text-xs text-fg-secondary">{activeModeConfig?.name ?? '...'} | {device}</span>
+          </div>
+        }
       />
 
       <div className="flex-1 flex overflow-hidden min-h-0">
@@ -462,11 +519,11 @@ export default function SmartSynthesis() {
               <Button onClick={handleOpenSource}>打开主图</Button>
               <input ref={sourceFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleSourceFileInput} />
             </div>
-          ) : showResult && resultImage && sourceImage ? (
+          ) : showResult && pageResult && workingImage ? (
             <ImageCompare
-              beforeSrc={sourceImage}
-              afterSrc={resultImage}
-              beforeLabel="原图"
+              beforeSrc={compareBefore || workingImage}
+              afterSrc={pageResult}
+              beforeLabel="输入"
               afterLabel="合成结果"
             />
           ) : (
@@ -474,7 +531,7 @@ export default function SmartSynthesis() {
               {/* 根据 canvasTool 切换画布 */}
               {canvasTool === 'rectangle' ? (
                 <ImageCanvas
-                  imageSrc={sourceImage}
+                  imageSrc={workingImage}
                   rois={rois}
                   selectedROIs={selectedROIs}
                   tool={tool}
@@ -484,7 +541,7 @@ export default function SmartSynthesis() {
                 />
               ) : (
                 <MaskCanvas
-                  imageSrc={sourceImage}
+                  imageSrc={workingImage}
                   strokes={maskStrokes}
                   brushSettings={brushSettings}
                   canvasTool={canvasTool}
@@ -815,7 +872,7 @@ export default function SmartSynthesis() {
                   onClick={handleProcess}
                   disabled={
                     isProcessing
-                    || !sourceImage
+                    || !workingImage
                     || (activeModeConfig?.needsReference && !referenceImage)
                     || (activeModeConfig?.needsROI && rois.length === 0)
                     || (activeModeConfig?.promptRequired && !prompt.trim())
@@ -842,7 +899,7 @@ export default function SmartSynthesis() {
               <Progress value={progress} label={`${statusMessage} ${progress > 0 ? progress + '%' : ''}`} />
             )}
 
-            {resultImage && (
+            {pageResult && (
               <>
                 <Button
                   variant="secondary"
@@ -851,6 +908,15 @@ export default function SmartSynthesis() {
                   size="sm"
                 >
                   {showResult ? '返回编辑' : '查看对比'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={handleUseResultAsSource}
+                  icon={<Upload size={14} />}
+                  className="w-full"
+                  size="sm"
+                >
+                  将结果设为原图
                 </Button>
                 <Button
                   variant="ghost"

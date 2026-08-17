@@ -251,9 +251,6 @@ async def refine_mask(req: RefineRequest):
 
     纯 OpenCV 处理，无需 GPU。
     """
-    mask = decode_mask(req.mask)
-    original = decode_image(req.original_image)
-
     log_manager.info(
         f"遮罩精修: feather={req.feather}, dilate={req.dilate}, "
         f"has_brush_add={req.brush_add is not None}, "
@@ -262,7 +259,8 @@ async def refine_mask(req: RefineRequest):
     )
 
     def _process():
-        nonlocal mask
+        mask = decode_mask(req.mask)
+        original = decode_image(req.original_image)
         # 1. 画笔编辑
         if req.brush_add is not None:
             brush_add = decode_mask(req.brush_add)
@@ -302,11 +300,11 @@ async def refine_mask(req: RefineRequest):
             mask = cv2.resize(mask, (w, h))
 
         result_rgba = np.dstack([original, mask])
-
         return result_rgba, mask
 
+    loop = asyncio.get_event_loop()
     try:
-        result_rgba, refined_mask = _process()
+        result_rgba, refined_mask = await loop.run_in_executor(executor, _process)
         h, w = result_rgba.shape[:2]
 
         log_manager.info(f"遮罩精修完成: output={w}x{h}", source="cutout")
@@ -333,23 +331,23 @@ async def composite_cutout(req: CompositeRequest):
 
     将 RGBA 结果图与纯色背景合成，返回 RGB 结果。
     """
-    # 解码 RGBA 图像
-    if "," in req.image:
-        base64_str = req.image.split(",", 1)[1]
-    else:
-        base64_str = req.image
-    img_bytes = base64.b64decode(base64_str)
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    img_bgra = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-
-    if img_bgra is None:
-        return JSONResponse(
-            status_code=422,
-            content={"detail": "无法解码图像", "message": "无法解码图像"},
-        )
+    log_manager.info(
+        f"合成背景: color={req.background_color}",
+        source="cutout",
+    )
 
     def _process():
-        # BGRA → RGB
+        if "," in req.image:
+            base64_str = req.image.split(",", 1)[1]
+        else:
+            base64_str = req.image
+        img_bytes = base64.b64decode(base64_str)
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img_bgra = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
+
+        if img_bgra is None:
+            raise ValueError("无法解码图像")
+
         if img_bgra.shape[2] == 4:
             alpha = img_bgra[:, :, 3:4].astype(np.float32) / 255.0
             bgr = img_bgra[:, :, :3].astype(np.float32)
@@ -357,25 +355,22 @@ async def composite_cutout(req: CompositeRequest):
             alpha = np.ones((*img_bgra.shape[:2], 1), dtype=np.float32)
             bgr = img_bgra.astype(np.float32)
 
-        # 解析背景色
         hex_color = req.background_color.lstrip("#")
         if len(hex_color) == 6:
             r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
         else:
             r, g, b = 255, 255, 255
 
-        # OpenCV 用 BGR
         bg = np.array([b, g, r], dtype=np.float32)
         bg_layer = np.full_like(bgr, bg)
 
-        # Alpha blending
         result_bgr = (bgr * alpha + bg_layer * (1 - alpha)).astype(np.uint8)
         result_rgb = cv2.cvtColor(result_bgr, cv2.COLOR_BGR2RGB)
-
         return result_rgb
 
+    loop = asyncio.get_event_loop()
     try:
-        result = _process()
+        result = await loop.run_in_executor(executor, _process)
         h, w = result.shape[:2]
 
         return {

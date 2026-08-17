@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { Upload, Download, Images, List, CheckCircle2 } from 'lucide-react'
 import { Button, Select, Progress, showToast } from '../components/ui'
 import ImageCanvas from '../components/ImageCanvas'
@@ -7,7 +7,13 @@ import PageHeader from '../components/layout/PageHeader'
 import ModelSelect from '../components/ModelSelect/ModelSelect'
 import BatchImageQueue, { type ImageQueueItem } from '../components/BatchImageQueue'
 import BatchProgress from '../components/BatchProgress'
-import { useImageStore } from '../stores/useImageStore'
+import WorkspaceInputBar from '../components/WorkspaceInputBar'
+import {
+  useWorkspaceStore,
+  selectWorkingImage,
+  selectWorkingWidth,
+  selectWorkingHeight,
+} from '../stores/useWorkspaceStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
@@ -18,10 +24,13 @@ import { useDownloadManager } from '../hooks/useDownloadManager'
 import { DownloadStatus, ModelStatus } from '../constants'
 
 export default function SuperResolution() {
-  const {
-    sourceImage, imageWidth, imageHeight, sourceFilePath,
-    setSourceImage, setImageDimensions,
-  } = useImageStore()
+  const sourceImage = useWorkspaceStore((s) => s.sourceImage)
+  const sourceFilePath = useWorkspaceStore((s) => s.sourceFilePath)
+  const loadImage = useWorkspaceStore((s) => s.loadImage)
+  const setHandoffResult = useWorkspaceStore((s) => s.setHandoffResult)
+  const workingImage = useWorkspaceStore(selectWorkingImage)
+  const workingWidth = useWorkspaceStore(selectWorkingWidth)
+  const workingHeight = useWorkspaceStore(selectWorkingHeight)
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { upscale } = useBackendAPI()
   const { device, upscaleModel, upscaleTile, setDevice, setUpscaleModel } = useSettingsStore()
@@ -40,6 +49,8 @@ export default function SuperResolution() {
   const [isBatchProcessing, setIsBatchProcessing] = useState(false)
 
   const [resultImage, setResultImage] = useState<string | null>(null)
+  const [compareBefore, setCompareBefore] = useState<string | null>(null)
+  const [inputSize, setInputSize] = useState({ w: 0, h: 0 })
   const [outputSize, setOutputSize] = useState({ w: 0, h: 0 })
   // outscale: null 表示跟随模型默认值，用户可手动覆盖
   const [outscale, setOutscale] = useState<number | null>(null)
@@ -55,7 +66,7 @@ export default function SuperResolution() {
   // 当前模型是否支持自定义输出倍率
   const supportsCustomOutscale = upscaleModelMeta[upscaleModel]?.supportsCustomOutscale ?? false
 
-  // 加载原图（写入共享 useImageStore）
+  // 加载原图（写入工作区；批量模式加入队列）
   const loadSource = (dataUrl: string, filePath?: string) => {
     if (mode === 'batch') {
       // 批量模式：添加到队列
@@ -74,17 +85,28 @@ export default function SuperResolution() {
       img.src = dataUrl
       return
     }
-    // 单图模式：原有逻辑
+    // 单图模式
     setResultImage(null)
+    setCompareBefore(null)
     reset()
-    setSourceImage(dataUrl, filePath)
+    loadImage(dataUrl, filePath)
     const img = new Image()
     img.onload = () => {
-      setImageDimensions(img.naturalWidth, img.naturalHeight)
+      setInputSize({ w: img.naturalWidth, h: img.naturalHeight })
       setOutputSize({ w: img.naturalWidth * currentScale, h: img.naturalHeight * currentScale })
     }
     img.src = dataUrl
   }
+
+  useEffect(() => {
+    if (!workingImage || mode === 'batch' || resultImage) return
+    const img = new Image()
+    img.onload = () => {
+      setInputSize({ w: img.naturalWidth, h: img.naturalHeight })
+      setOutputSize({ w: img.naturalWidth * currentScale, h: img.naturalHeight * currentScale })
+    }
+    img.src = workingImage
+  }, [workingImage, currentScale, mode, resultImage])
 
   // Open file
   const handleOpenFile = async () => {
@@ -155,8 +177,8 @@ export default function SuperResolution() {
     setUpscaleModel(newModel)
     setOutscale(null)  // 重置为新模型的默认倍率
     const scale = upscaleModelMeta[newModel]?.defaultOutscale ?? 4
-    if (imageWidth > 0) {
-      setOutputSize({ w: imageWidth * scale, h: imageHeight * scale })
+    if (workingWidth > 0) {
+      setOutputSize({ w: workingWidth * scale, h: workingHeight * scale })
     }
   }
 
@@ -330,7 +352,7 @@ export default function SuperResolution() {
 
   // Process - Single mode
   const handleUpscale = async () => {
-    if (!sourceImage) return
+    if (!workingImage) return
 
     const task = downloadTasks[upscaleModel]
     if (task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED) {
@@ -351,8 +373,9 @@ export default function SuperResolution() {
 
     try {
       startProcess(upscaleModel)
+      setCompareBefore(workingImage)
       const result = await upscale({
-        image: sourceImage,
+        image: workingImage,
         model: upscaleModel,
         device,
         outscale: currentScale,
@@ -364,8 +387,11 @@ export default function SuperResolution() {
       if (result.outputPath) {
         const dataUrl = await window.electronAPI.readImageFile(result.outputPath)
         setResultImage(dataUrl)
+        setHandoffResult(dataUrl, { width: result.width, height: result.height })
       } else {
-        setResultImage(`data:image/png;base64,${result.image}`)
+        const dataUrl = `data:image/png;base64,${result.image}`
+        setResultImage(dataUrl)
+        setHandoffResult(dataUrl, { width: result.width, height: result.height })
       }
 
       setOutputSize({ w: result.width, h: result.height })
@@ -380,7 +406,6 @@ export default function SuperResolution() {
   // Save single image
   const handleSave = async () => {
     if (!resultImage) return
-    const { sourceFilePath } = useImageStore.getState()
     const baseName = sourceFilePath
       ? sourceFilePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') || 'image'
       : 'image'
@@ -406,8 +431,6 @@ export default function SuperResolution() {
   // 将处理结果设为原图
   const handleUseResultAsSource = () => {
     if (!resultImage) return
-    // 保留原始文件路径，保存时文件名仍以原图名为准
-    const { sourceFilePath } = useImageStore.getState()
     loadSource(resultImage, sourceFilePath ?? undefined)
     showToast('success', '已将处理结果设为原图')
   }
@@ -480,10 +503,19 @@ export default function SuperResolution() {
         subtitle={
           mode === 'batch'
             ? `${batchItems.length} 张图片 | 输出: ${currentScale}x | ${upscaleModel.replace('RealESRGAN_', '')}`
-            : imageWidth > 0 ? `${imageWidth}x${imageHeight} → ${outputSize.w}x${outputSize.h}` : undefined
+            : inputSize.w > 0 ? `${inputSize.w}x${inputSize.h} → ${outputSize.w}x${outputSize.h}` : undefined
         }
         right={
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            {mode === 'single' && (
+              <WorkspaceInputBar
+                onChange={() => {
+                  setResultImage(null)
+                  setCompareBefore(null)
+                }}
+              />
+            )}
+            <div className="flex items-center gap-1">
             <button
               onClick={() => setMode('single')}
               className={`px-2 py-1 rounded text-xs ${
@@ -506,6 +538,7 @@ export default function SuperResolution() {
               <Images size={12} className="inline mr-1" />
               批量
             </button>
+            </div>
           </div>
         }
       />
@@ -541,21 +574,21 @@ export default function SuperResolution() {
           ) : resultImage ? (
             <div className="w-full h-full p-4">
               <ImageCompare
-                beforeSrc={sourceImage}
+                beforeSrc={compareBefore || workingImage || sourceImage}
                 afterSrc={resultImage}
-                beforeLabel={`原图 (${imageWidth}x${imageHeight})`}
+                beforeLabel={`输入 (${inputSize.w}x${inputSize.h})`}
                 afterLabel={`${currentScale}x (${outputSize.w}x${outputSize.h})`}
               />
             </div>
           ) : (
             <ImageCanvas
-              imageSrc={sourceImage}
+              imageSrc={workingImage}
               rois={[]}
               selectedROIs={[]}
               tool="pan"
               onROIDrawn={() => {}}
               onROISelect={() => {}}
-              onImageLoad={(w, h) => setImageDimensions(w, h)}
+              onImageLoad={(w, h) => setInputSize({ w, h })}
             />
           )}
           <input ref={fileInputRef} type="file" accept="image/*" multiple={mode === 'batch'} className="hidden" onChange={handleFileInput} />
@@ -589,8 +622,8 @@ export default function SuperResolution() {
               onChange={(e) => {
                 const val = Number(e.target.value)
                 setOutscale(val)
-                if (imageWidth > 0) {
-                  setOutputSize({ w: imageWidth * val, h: imageHeight * val })
+                if (workingWidth > 0) {
+                  setOutputSize({ w: workingWidth * val, h: workingHeight * val })
                 }
               }}
               size="sm"
@@ -640,7 +673,7 @@ export default function SuperResolution() {
               <div className="bg-bg-primary rounded border border-border-subtle p-2.5 space-y-1.5">
                 <div className="flex justify-between text-xs">
                   <span className="text-fg-secondary">输入尺寸</span>
-                  <span className="text-fg-primary">{imageWidth > 0 ? `${imageWidth} x ${imageHeight}` : '-'}</span>
+                  <span className="text-fg-primary">{inputSize.w > 0 ? `${inputSize.w} x ${inputSize.h}` : '-'}</span>
                 </div>
                 <div className="flex justify-between text-xs">
                   <span className="text-fg-secondary">输出尺寸</span>
@@ -650,7 +683,7 @@ export default function SuperResolution() {
                   <span className="text-fg-secondary">放大倍率</span>
                   <span className="text-fg-accent">{currentScale}x</span>
                 </div>
-                {imageWidth > 0 && (
+                {inputSize.w > 0 && (
                   <div className="flex justify-between text-xs">
                     <span className="text-fg-secondary">预计大小</span>
                     <span className="text-fg-primary">~{Math.round(outputSize.w * outputSize.h * 3 / 1024 / 1024)} MB</span>
@@ -710,7 +743,7 @@ export default function SuperResolution() {
                   return (
                     <Button
                       onClick={handleUpscale}
-                      disabled={!sourceImage || isProcessing || isModelBusy}
+                      disabled={!workingImage || isProcessing || isModelBusy}
                       loading={isProcessing}
                       className="w-full"
                       size="lg"

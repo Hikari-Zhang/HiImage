@@ -2,6 +2,8 @@
 
 > 基于 `SYSTEM_ARCHITECTURE.md` 与 `SCRIPTS_REFERENCE.md` 及核心源码分析。  
 > 文档版本：1.0 · 2026-05-13
+>
+> **v1.4 说明（2026-08-17）**：当前架构以 `docs/SYSTEM_ARCHITECTURE.md` 为准。本文中「执行器缺乏统一基类」等条目已过时（已有 `BaseModelExecutor`）。P0（进度 WS、工作区流水线、cutout 线程池）在 v1.4 处理；其余技术债仍可参考下文。
 
 ---
 
