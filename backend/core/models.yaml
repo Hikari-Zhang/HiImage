@@ -1314,7 +1314,7 @@ mode_groups:
     name: 图片降噪
     icon: droplet
     icon_name: Droplets
-    description: 保持分辨率，去除压缩噪声与颗粒，支持单张与批量
+    description: 保持原始分辨率，去除压缩噪声与颗粒，支持单张与批量
     default_model: denoise-general
     needs_reference: false
     needs_roi: false
