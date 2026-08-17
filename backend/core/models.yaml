@@ -1104,6 +1104,52 @@ models:
     supports_custom_outscale: true               # 支持自定义输出倍率（用户可选择放大）
     features: [upscale]
 
+  # ── 图片降噪（denoise）──────────────────────────────────────────────────
+  # outscale: 1 — 与清晰化增强相同：网络先 4x 再缩回，保持分辨率
+  # 权重复用已有 Real-ESRGAN 文件，不新增下载
+
+  - id: denoise-general
+    name: 通用降噪（推荐）
+    provider: realesrgan
+    tags: [denoise]
+    description: 保持原始分辨率，去除照片/截图的压缩噪声与颗粒｜复用 realesr-general-x4v3 权重（~5 MB）
+    recommended_for: 图片降噪（照片/截图，不放大）
+    requires_reference: false
+    size_mb: 5
+    badge: 推荐
+    scale: 4
+    outscale: 1
+    weight_filename: realesr-general-x4v3.pth
+    local_path: models/realesrgan/realesr-general-x4v3.pth
+    arch: SRVGGNetCompact
+    num_conv: 32
+    display_group: 通用降噪
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth
+    supported_params: {}
+    supports_custom_outscale: false
+    features: [denoise]
+
+  - id: denoise-anime
+    name: 动漫/插画降噪
+    provider: realesrgan
+    tags: [denoise]
+    description: 保持原始分辨率，针对动漫/插画去噪，线条更干净｜复用 RealESRGAN_x4plus_anime_6B 权重（~18 MB）
+    recommended_for: 图片降噪（动漫/插画，不放大）
+    requires_reference: false
+    size_mb: 18
+    badge: 动漫
+    scale: 4
+    outscale: 1
+    weight_filename: RealESRGAN_x4plus_anime_6B.pth
+    local_path: models/realesrgan/RealESRGAN_x4plus_anime_6B.pth
+    arch: RRDBNet
+    num_block: 6
+    display_group: 动漫/插画
+    download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
+    supported_params: {}
+    supports_custom_outscale: false
+    features: [denoise]
+
   # ── 图像复原（image_restoration）────────────────────────────────────
   # 2026-05-14: 暂时禁用 Restormer，待修复架构通道不匹配问题后重新启用
   # - id: restormer_denoise
@@ -1260,6 +1306,16 @@ mode_groups:
     icon: zoom-in
     description: Real-ESRGAN 智能放大图像，支持 2x/4x，多种场景优化
     default_model: RealESRGAN_x4plus
+    needs_reference: false
+    needs_roi: false
+    needs_prompt: false
+
+  - id: denoise
+    name: 图片降噪
+    icon: droplet
+    icon_name: Droplets
+    description: 保持分辨率，去除压缩噪声与颗粒，支持单张与批量
+    default_model: denoise-general
     needs_reference: false
     needs_roi: false
     needs_prompt: false
