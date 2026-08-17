@@ -458,8 +458,7 @@ export default function Denoise() {
       <div className="flex-1 flex overflow-hidden min-h-0">
         <div
           className="flex-1 bg-[#1a1a1a] flex items-center justify-center relative"
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
+          {...(mode === 'single' ? { onDrop: handleDrop, onDragOver: handleDragOver } : {})}
         >
           {mode === 'batch' ? (
             <div className="w-full h-full p-4">
