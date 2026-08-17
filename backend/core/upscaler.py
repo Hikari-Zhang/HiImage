@@ -90,25 +90,39 @@ AVAILABLE_UPSCALE_MODELS = [entry[0] for entry in UPSCALE_MODEL_LIST]
 _WEIGHTS_DIR = str(_MC / 'realesrgan')
 
 
+def _get_realesrgan_config(model_name: str) -> dict:
+    """按模型 ID 读取 YAML；仅允许 provider=realesrgan。"""
+    from core.model_registry import get_model
+
+    try:
+        cfg = get_model(model_name)
+    except KeyError as e:
+        raise ValueError(f"未知模型: {model_name!r}") from e
+    if cfg.get("provider") != "realesrgan":
+        raise ValueError(
+            f"不支持的模型: {model_name}（provider={cfg.get('provider')!r}，需要 realesrgan）"
+        )
+    return cfg
+
+
 def _get_weight_path(model_name: str) -> str:
-    """
-    获取模型权重路径。
-    使用 paths.py 统一解析（MODELS_CACHE_DIR / 'realesrgan' / weight_filename）。
-    """
+    """获取模型权重路径（MODELS_CACHE_DIR / realesrgan / weight_filename）。"""
     from .paths import resolve_model_cache_path
 
-    # 构建最小 cfg 字典，供 resolve_model_cache_path() 使用
-    cfg = {
+    cfg = _get_realesrgan_config(model_name)
+    return str(resolve_model_cache_path({
         "provider": "realesrgan",
-        "weight_filename": _MODEL_WEIGHT.get(model_name, f"{model_name}.pth")
-    }
-    return str(resolve_model_cache_path(cfg))
+        "weight_filename": cfg.get("weight_filename", f"{model_name}.pth"),
+    }))
 
 
 def _download_weight(model_name: str, progress_callback=None) -> str:
     """下载模型权重，支持进度回调 callback(downloaded_bytes, total_bytes)"""
     os.makedirs(_WEIGHTS_DIR, exist_ok=True)
-    url = _MODEL_URL[model_name]
+    cfg = _get_realesrgan_config(model_name)
+    url = cfg.get("download_url", "")
+    if not url:
+        raise RuntimeError(f"模型 {model_name} 未配置 download_url")
     dest = _get_weight_path(model_name)
 
     print(f"[Upscaler] 正在下载模型权重: {url}")
@@ -154,19 +168,17 @@ class Upscaler:
     DEFAULT_TILE_PAD = 10
 
     def __init__(self, model_name: str = 'RealESRGAN_x4plus', device: str = 'cpu', outscale: int | None = None, tile: int = 0):
-        if model_name not in AVAILABLE_UPSCALE_MODELS:
-            raise ValueError(f"不支持的模型: {model_name}，可选: {AVAILABLE_UPSCALE_MODELS}")
+        cfg = _get_realesrgan_config(model_name)
         self.model_name = model_name
         self.device = device
-        self.scale = _MODEL_SCALE[model_name]          # 权重内置倍率（用于网络构建）
-        # outscale: 实际输出倍率；前端传值优先，否则用 YAML outscale，最后 fallback 到 scale
+        self._cfg = cfg
+        self.scale = cfg.get("scale", 4)
         if outscale is not None:
             self.outscale = outscale
         else:
-            self.outscale = _MODEL_OUTSCALE[model_name]
-        self._upsampler = None  # 懒加载
-        self._current_tile = 0    # 当前 tile 值（在 upscale 中计算）
-        # tile: 0 = 自动计算；>0 = 固定 tile 大小
+            self.outscale = cfg.get("outscale", self.scale)
+        self._upsampler = None
+        self._current_tile = 0
         self._tile = tile
 
     @staticmethod
@@ -304,9 +316,9 @@ class Upscaler:
                 "  pip install realesrgan basicsr facexlib"
             ) from e
 
-        arch      = _MODEL_ARCH.get(self.model_name, "RRDBNet")
-        num_block = _MODEL_NUM_BLOCK.get(self.model_name, 23)
-        num_conv  = _MODEL_NUM_CONV.get(self.model_name, 32)
+        arch      = self._cfg.get("arch", "RRDBNet")
+        num_block = self._cfg.get("num_block", 23)
+        num_conv  = self._cfg.get("num_conv", 32)
 
         if arch == "SRVGGNetCompact":
             # 轻量模型：general-x4v3 (num_conv=32) / animevideov3 (num_conv=16)
