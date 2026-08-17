@@ -157,6 +157,61 @@ export function useBackendAPI() {
     }>
   }
 
+  const denoise = async (params: {
+    image: string
+    model: string
+    device: string
+    tile?: number
+    output_path?: string
+  }) => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/denoise`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: params.image,
+        model: params.model,
+        device: params.device,
+        tile: params.tile,
+        output_path: params.output_path || undefined,
+      }),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`降噪失败: ${err}`)
+    }
+    return res.json() as Promise<{
+      image: string
+      width: number
+      height: number
+      outputPath?: string
+    }>
+  }
+
+  const denoiseBatch = async (params: {
+    images: string[]
+    model: string
+    device: string
+    tile?: number
+    output_dir?: string
+    is_file_path?: boolean
+  }) => {
+    const url = await getURL()
+    const res = await fetch(`${url}/api/denoise/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`批量降噪失败: ${err}`)
+    }
+    return res.json() as Promise<{
+      results: { index: number; status: 'success' | 'error'; image?: string; outputPath?: string; width?: number; height?: number; error?: string; fileName?: string }[]
+      summary: { total: number; success: number; failed: number }
+    }>
+  }
+
   /**
    * 获取模型列表
    */
@@ -378,7 +433,7 @@ export function useBackendAPI() {
   }
 
   return {
-    detectWatermark, inpaint, inpaintWithMask, upscale, upscaleBatch, runPipeline,
+    detectWatermark, inpaint, inpaintWithMask, upscale, upscaleBatch, denoise, denoiseBatch, runPipeline,
     getPostprocessMethods, getInpaintModels, getUpscaleModels,
     getSynthesisModes, getSynthesisModels, runSynthesis, getDevices,
     cutout, cutoutRefine, cutoutComposite, getCutoutModels,

@@ -98,6 +98,21 @@ const DEFAULT_CUTOUT_GROUPS: ModelGroup[] = [
   },
 ]
 
+const DEFAULT_DENOISE_GROUPS: ModelGroup[] = [
+  {
+    label: '通用降噪',
+    options: [
+      { value: 'denoise-general', label: '通用降噪（推荐）', description: '保持原始分辨率，去除照片/截图压缩噪声与颗粒' },
+    ],
+  },
+  {
+    label: '动漫/插画',
+    options: [
+      { value: 'denoise-anime', label: '动漫/插画降噪', description: '保持原始分辨率，针对动漫/插画去噪' },
+    ],
+  },
+]
+
 interface ModelStoreState {
   /** 修复模型分组列表 */
   inpaintGroups: ModelGroup[]
@@ -105,6 +120,8 @@ interface ModelStoreState {
   upscaleGroups: ModelGroup[]
   /** 抠图模型分组列表 */
   cutoutGroups: ModelGroup[]
+  /** 降噪模型分组列表 */
+  denoiseGroups: ModelGroup[]
   /**
    * 每个超分辨率模型的元数据（model_id → meta）
    *   defaultOutscale:         默认输出倍率
@@ -126,6 +143,7 @@ export const useModelStore = create<ModelStoreState>((set) => ({
   inpaintGroups: DEFAULT_INPAINT_GROUPS,
   upscaleGroups: DEFAULT_UPSCALE_GROUPS,
   cutoutGroups: DEFAULT_CUTOUT_GROUPS,
+  denoiseGroups: DEFAULT_DENOISE_GROUPS,
   upscaleModelMeta: {},
   isLoaded: false,
   isLoading: false,
@@ -134,10 +152,11 @@ export const useModelStore = create<ModelStoreState>((set) => ({
   loadModels: async (backendURL: string) => {
     set({ isLoading: true, error: null })
     try {
-      const [inpaintRes, upscaleRes, cutoutRes] = await Promise.all([
+      const [inpaintRes, upscaleRes, cutoutRes, denoiseRes] = await Promise.all([
         fetch(`${backendURL}/api/models/inpaint`),
         fetch(`${backendURL}/api/models/upscale`),
         fetch(`${backendURL}/api/cutout/models`),
+        fetch(`${backendURL}/api/models/denoise`),
       ])
 
       if (!inpaintRes.ok || !upscaleRes.ok) {
@@ -195,7 +214,22 @@ export const useModelStore = create<ModelStoreState>((set) => ({
         )
       }
 
-      set({ inpaintGroups, upscaleGroups, cutoutGroups, upscaleModelMeta, isLoaded: true, isLoading: false })
+      const denoiseData = denoiseRes.ok ? await denoiseRes.json() : null
+      let denoiseGroups: ModelGroup[] = DEFAULT_DENOISE_GROUPS
+      if (denoiseData?.groups) {
+        denoiseGroups = denoiseData.groups.map(
+          (g: { label: string; models: Array<{ id: string; name: string; description: string }> }) => ({
+            label: stripDecorators(g.label),
+            options: g.models.map((m) => ({
+              value: m.id,
+              label: m.name,
+              description: m.description,
+            })),
+          })
+        )
+      }
+
+      set({ inpaintGroups, upscaleGroups, cutoutGroups, denoiseGroups, upscaleModelMeta, isLoaded: true, isLoading: false })
     } catch (err: any) {
       console.warn('[ModelStore] 加载模型列表失败，使用默认配置:', err.message)
       // 失败时保留默认值

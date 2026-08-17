@@ -18,6 +18,7 @@ interface SettingsState {
   upscaleModel: string
   upscaleEnabled: boolean
   upscaleTile: number  // 0 = 自动计算；>0 = 固定 tile 大小
+  denoiseModel: string
 
   // Cutout
   cutoutModel: string
@@ -48,6 +49,7 @@ interface SettingsState {
   setInpaintModel: (model: string) => void
   setUpscaleModel: (model: string) => void
   setUpscaleTile: (tile: number) => void
+  setDenoiseModel: (model: string) => void
   setCutoutModel: (model: string) => void
   setDilation: (dilation: number) => void
   setSensitivity: (sensitivity: number) => void
@@ -72,6 +74,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   upscaleModel: 'RealESRGAN_x4plus',
   upscaleEnabled: false,
   upscaleTile: 0,  // 0 = 自动计算
+  denoiseModel: 'denoise-general',
   cutoutModel: 'birefnet',
   serverPort: 51821,
   keepaliveSeconds: 300,
@@ -90,6 +93,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setInpaintModel: (model) => set({ inpaintModel: model }),
   setUpscaleModel: (model) => set({ upscaleModel: model }),
   setUpscaleTile: (tile) => set({ upscaleTile: tile }),
+  setDenoiseModel: (model) => set({ denoiseModel: model }),
   setCutoutModel: (model) => set({ cutoutModel: model }),
   setDilation: (dilation) => set({ defaultDilation: dilation }),
   setSensitivity: (sensitivity) => set({ sensitivity }),
@@ -164,6 +168,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({
         inpaintModel: defaults.watermark_removal ?? 'wm_lama',
         cutoutModel: defaults.cutout ?? 'birefnet',
+        denoiseModel: defaults.denoise ?? 'denoise-general',
         defaultsLoaded: true,
       })
     } catch (err) {
