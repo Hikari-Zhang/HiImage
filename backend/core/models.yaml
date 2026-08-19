@@ -1105,36 +1105,110 @@ models:
     features: [upscale]
 
   # ── 图片降噪（denoise）──────────────────────────────────────────────────
-  # outscale: 1 — 与清晰化增强相同：网络先 4x 再缩回，保持分辨率
-  # 权重复用已有 Real-ESRGAN 文件，不新增下载
+  # restoration：spandrel 加载官方 .pth，同分辨率
+  # realesrgan：outscale 1，4x 再缩回，快速清晰化
+
+  - id: denoise-scunet-psnr
+    name: SCUNet 盲去噪（推荐）
+    provider: restoration
+    tags: [denoise]
+    description: 保持原始分辨率，盲去噪，适合照片与截图的压缩颗粒｜SCUNet real-psnr（~72 MB）
+    recommended_for: 照片 / 截图盲去噪
+    suitable_for: 盲去噪（压缩颗粒 + 一般照片噪声，保纹理）
+    requires_reference: false
+    size_mb: 72
+    badge: 推荐
+    weight_filename: scunet_color_real_psnr.pth
+    local_path: models/restoration/scunet_color_real_psnr.pth
+    display_group: 照片 / 截图
+    download_url: https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth
+    supported_params: {}
+    supports_custom_outscale: false
+    features: [denoise]
+
+  - id: denoise-scunet-gan
+    name: SCUNet 观感去噪
+    provider: restoration
+    tags: [denoise]
+    description: 保持原始分辨率，观感更干净，可能略抹纹理｜SCUNet real-gan（~72 MB）
+    recommended_for: 观感去噪
+    suitable_for: 更干净，可能略抹纹理
+    requires_reference: false
+    size_mb: 72
+    badge: ""
+    weight_filename: scunet_color_real_gan.pth
+    local_path: models/restoration/scunet_color_real_gan.pth
+    display_group: 观感更干净
+    download_url: https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_gan.pth
+    supported_params: {}
+    supports_custom_outscale: false
+    features: [denoise]
+
+  - id: denoise-nafnet-sidd
+    name: NAFNet 相机降噪
+    provider: restoration
+    tags: [denoise]
+    description: 保持原始分辨率，针对手机 / 相机传感器噪声｜NAFNet-SIDD width32（~117 MB）
+    recommended_for: 相机 ISO
+    suitable_for: 手机 / 相机传感器噪声
+    requires_reference: false
+    size_mb: 117
+    badge: ""
+    weight_filename: NAFNet-SIDD-width32.pth
+    local_path: models/restoration/NAFNet-SIDD-width32.pth
+    display_group: 相机 ISO
+    download_url: https://huggingface.co/nyanko7/nafnet-models/resolve/main/NAFNet-SIDD-width32.pth
+    supported_params: {}
+    supports_custom_outscale: false
+    features: [denoise]
+
+  - id: denoise-swinir-jpeg
+    name: SwinIR 去压缩
+    provider: restoration
+    tags: [denoise]
+    description: 保持原始分辨率，去除 JPEG 色块与振铃｜SwinIR color CAR jpeg40（~98 MB）
+    recommended_for: 去压缩伪影
+    suitable_for: JPEG 色块 / 振铃（按常见网图质量 Q≈40）
+    requires_reference: false
+    size_mb: 98
+    badge: ""
+    weight_filename: 006_colorCAR_DFWB_s126w7_SwinIR-M_jpeg40.pth
+    local_path: models/restoration/006_colorCAR_DFWB_s126w7_SwinIR-M_jpeg40.pth
+    display_group: 去压缩伪影
+    download_url: https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/006_colorCAR_DFWB_s126w7_SwinIR-M_jpeg40.pth
+    supported_params: {}
+    supports_custom_outscale: false
+    features: [denoise]
 
   - id: denoise-general
-    name: 通用降噪（推荐）
+    name: 快速清晰化·通用
     provider: realesrgan
     tags: [denoise]
-    description: 保持原始分辨率，去除照片/截图的压缩噪声与颗粒｜复用 realesr-general-x4v3 权重（~5 MB）
-    recommended_for: 图片降噪（照片/截图，不放大）
+    description: 超分权重复用（4x 再缩回），偏锐化，不是专用去噪｜复用 realesr-general-x4v3（~5 MB）
+    recommended_for: 快速清晰化（已有权重）
+    suitable_for: 要锐化或不想再下大模型
     requires_reference: false
     size_mb: 5
-    badge: 推荐
+    badge: ""
     scale: 4
     outscale: 1
     weight_filename: realesr-general-x4v3.pth
     local_path: models/realesrgan/realesr-general-x4v3.pth
     arch: SRVGGNetCompact
     num_conv: 32
-    display_group: 通用降噪
+    display_group: 快速清晰化
     download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth
     supported_params: {}
     supports_custom_outscale: false
     features: [denoise]
 
   - id: denoise-anime
-    name: 动漫/插画降噪
+    name: 快速清晰化·动漫
     provider: realesrgan
     tags: [denoise]
-    description: 保持原始分辨率，针对动漫/插画去噪，线条更干净｜复用 RealESRGAN_x4plus_anime_6B 权重（~18 MB）
-    recommended_for: 图片降噪（动漫/插画，不放大）
+    description: 超分权重复用（4x 再缩回），线条更锐，不是专用去噪｜复用 anime 6B（~18 MB）
+    recommended_for: 快速清晰化（动漫）
+    suitable_for: 动漫线稿锐化
     requires_reference: false
     size_mb: 18
     badge: 动漫
@@ -1144,7 +1218,7 @@ models:
     local_path: models/realesrgan/RealESRGAN_x4plus_anime_6B.pth
     arch: RRDBNet
     num_block: 6
-    display_group: 动漫/插画
+    display_group: 快速清晰化
     download_url: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
     supported_params: {}
     supports_custom_outscale: false
@@ -1315,7 +1389,7 @@ mode_groups:
     icon: droplet
     icon_name: Droplets
     description: 保持原始分辨率，去除压缩噪声与颗粒，支持单张与批量
-    default_model: denoise-general
+    default_model: denoise-scunet-psnr
     needs_reference: false
     needs_roi: false
     needs_prompt: false
