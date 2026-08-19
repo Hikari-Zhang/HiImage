@@ -119,6 +119,7 @@ def resolve_model_cache_path(cfg: dict) -> Path:
     根据 provider 类型，自动定位到正确的缓存子目录：
       - realesrgan  → MODELS_CACHE_DIR / "realesrgan" / weight_filename
       - restormer    → MODELS_CACHE_DIR / "restormer" / weight_filename
+      - restoration  → MODELS_CACHE_DIR / "restoration" / weight_filename
       - gfpgan       → GFPGAN_HOME / weight_filename
       - 其他         → resolve_model_path(local_path)  # 向后兼容
 
@@ -143,6 +144,8 @@ def resolve_model_cache_path(cfg: dict) -> Path:
         return MODELS_CACHE_DIR / "realesrgan" / weight_filename
     elif provider == "restormer":
         return MODELS_CACHE_DIR / "restormer" / weight_filename
+    elif provider == "restoration":
+        return MODELS_CACHE_DIR / "restoration" / weight_filename
     elif provider == "gfpgan":
         return GFPGAN_HOME / weight_filename
     else:

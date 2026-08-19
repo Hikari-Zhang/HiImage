@@ -45,6 +45,7 @@ class Provider:
     # 新增：支持 Restormer 和 NAFNet
     RESTORMER:  ClassVar[str] = "restormer"
     NAFNET:     ClassVar[str] = "nafnet"
+    RESTORATION: ClassVar[str] = "restoration"
 
 
 # ── IOPaint 运行模式 ──────────────────────────────────────────────────────────
