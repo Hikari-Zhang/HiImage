@@ -425,7 +425,7 @@ HiImage 是一款 AI 驱动的图像处理桌面工具，面向设计师、内�
 | M7 | 智能合成 — 7 种合成模式完整实现 | 🔄 进行中 |
 | M8 | 打包发布 — PyInstaller + electron-builder + .dmg | ⏳ 待开始（需 Apple Developer 证书） |
 | M9 | 图片降噪 — 单张 + 批量，复用 Real-ESRGAN 清晰化权重 | ✅ 已完成 |
-| M10 | 降噪专用模型 — SCUNet / NAFNet / SwinIR + 类型标注 | ⏳ 本计划 |
+| M10 | 降噪专用模型 — SCUNet / NAFNet / SwinIR + 类型标注 | ✅ |
 
 ---
 

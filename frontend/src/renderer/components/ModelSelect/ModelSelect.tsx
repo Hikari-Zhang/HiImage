@@ -213,9 +213,9 @@ export default function ModelSelect({
         {/* 名称 */}
         <span className="flex-1 min-w-0">
           <span className="block truncate">{opt.label}</span>
-          {(opt.suitableFor || opt.description) && (
+          {opt.suitableFor && (
             <span className="block truncate text-[10px] text-fg-secondary">
-              {opt.suitableFor || opt.description}
+              {opt.suitableFor}
             </span>
           )}
         </span>

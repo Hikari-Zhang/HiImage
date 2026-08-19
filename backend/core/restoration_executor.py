@@ -9,17 +9,10 @@ import torch
 from core.model_executor import BaseModelExecutor
 from core.paths import resolve_model_cache_path
 
-_EXTRA_ARCHES_INSTALLED = False
-
-
-def _ensure_extra_arches() -> None:
-    global _EXTRA_ARCHES_INSTALLED
-    if _EXTRA_ARCHES_INSTALLED:
-        return
-    import spandrel_extra_arches
-
-    spandrel_extra_arches.install()
-    _EXTRA_ARCHES_INSTALLED = True
+_SPANDREL_INSTALL_HINT = (
+    "专用降噪模型需要 spandrel（Python 3.10+）。"
+    "请执行: pip install 'spandrel>=0.4.0'"
+)
 
 
 def _torch_device(device: str) -> torch.device:
@@ -49,9 +42,11 @@ class RestorationExecutor(BaseModelExecutor):
             raise FileNotFoundError(
                 f"模型权重文件不存在: {weight_path}\n请先在模型管理中下载"
             )
-        from spandrel import ModelLoader
+        try:
+            from spandrel import ModelLoader
+        except ImportError as e:
+            raise RuntimeError(_SPANDREL_INSTALL_HINT) from e
 
-        _ensure_extra_arches()
         self._descriptor = ModelLoader().load_from_file(str(weight_path))
         torch_dev = _torch_device(self.device)
         self._descriptor.eval().to(torch_dev)
@@ -72,7 +67,7 @@ class RestorationExecutor(BaseModelExecutor):
 
         from core.upscaler import Upscaler
 
-        if tile == 0:
+        if tile == 0 and self._tiling_ok():
             tile = Upscaler._auto_tile(image, 1, self.device)
         self._tile = tile
 
@@ -80,9 +75,14 @@ class RestorationExecutor(BaseModelExecutor):
             return self._infer(image, tile)
         except RuntimeError as e:
             msg = str(e).lower()
-            if ("cuda" in str(e) or "mps" in str(e) or "alloc" in msg) and tile > 256:
+            if ("cuda" in msg or "mps" in msg or "alloc" in msg) and tile > 256:
                 return self._infer(image, 256)
             raise RuntimeError(f"复原推理失败（显存不足或设备错误）: {e}") from e
+
+    def _tiling_ok(self) -> bool:
+        tiling = getattr(self._descriptor, "tiling", None)
+        name = getattr(tiling, "name", "") or str(tiling or "")
+        return "DISCOURAGED" not in name.upper()
 
     def _infer(self, image: np.ndarray, tile: int) -> np.ndarray:
         if tile <= 0:

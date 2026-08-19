@@ -195,7 +195,7 @@ def test_single_imwrite_false_raises_original_error(monkeypatch, tmp_path):
         asyncio.run(denoise.denoise_image(request))
 
 
-def test_create_denoise_backend_restoration(monkeypatch):
+def test_create_denoise_backend_restoration():
     from app.routers import denoise
     from core.restoration_executor import RestorationExecutor
 
