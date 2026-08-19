@@ -1,4 +1,4 @@
-"""图片降噪路由：同分辨率 Real-ESRGAN（outscale 由 YAML 锁定为 1）。"""
+"""图片降噪路由：restoration（spandrel）或 realesrgan（outscale 由 YAML 锁定）。"""
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +15,8 @@ from app.logging_manager import log_manager
 router = APIRouter()
 executor = ThreadPoolExecutor(max_workers=1)
 
+_DENOISE_PROVIDERS = frozenset({"restoration", "realesrgan"})
+
 
 def list_denoise_models() -> dict:
     from core.model_registry import get_models_for_mode
@@ -30,6 +32,7 @@ def list_denoise_models() -> dict:
             "name": m.get("name", m["id"]),
             "description": m.get("description", ""),
             "badge": m.get("badge", ""),
+            "suitable_for": m.get("suitable_for", ""),
         })
     return {
         "groups": [
@@ -50,7 +53,8 @@ def _require_denoise_model(model_id: str) -> dict:
             status_code=400,
             detail=f"未知降噪模型: {model_id!r}，可选: {allowed}",
         ) from None
-    if cfg.get("provider") != "realesrgan" or "denoise" not in cfg.get("tags", []):
+    provider = cfg.get("provider")
+    if provider not in _DENOISE_PROVIDERS or "denoise" not in cfg.get("tags", []):
         raise HTTPException(
             status_code=400,
             detail=f"模型 {model_id} 不属于 denoise 模式",
@@ -89,7 +93,7 @@ async def get_denoise_models():
 
 class DenoiseRequest(BaseModel):
     image: str
-    model: str = "denoise-general"
+    model: str = "denoise-scunet-psnr"
     device: str = "mps"
     tile: int | None = None
     output_path: str | None = None
@@ -97,30 +101,74 @@ class DenoiseRequest(BaseModel):
 
 class BatchDenoiseRequest(BaseModel):
     images: list[str]
-    model: str = "denoise-general"
+    model: str = "denoise-scunet-psnr"
     device: str = "mps"
     tile: int | None = None
     output_dir: str | None = None
     is_file_path: bool = False
 
 
-def _run_denoise(image: np.ndarray, model: str, device: str, tile: int) -> np.ndarray:
+class DenoiseBackend:
+    """统一 load / run / close，供单张与批量共用。"""
+
+    def __init__(self, upscaler=None, executor=None, tile: int = 0):
+        self._upscaler = upscaler
+        self._executor = executor
+        self._tile = tile
+
+    def load(self) -> None:
+        if self._upscaler is not None:
+            if self._tile > 0:
+                self._upscaler._current_tile = self._tile
+            self._upscaler._ensure_model_loaded()
+        elif self._executor is not None:
+            self._executor.load_model()
+
+    def run(self, image: np.ndarray) -> np.ndarray:
+        if self._upscaler is not None:
+            return _match_input_size(self._upscaler.upscale(image), image)
+        return _match_input_size(
+            self._executor.execute(image, tile=self._tile), image
+        )
+
+    def close(self) -> None:
+        if self._executor is not None:
+            self._executor.unload_model()
+        self._upscaler = None
+        self._executor = None
+
+
+def create_denoise_backend(model: str, device: str, tile: int) -> DenoiseBackend:
+    from core.model_registry import get_model
+    from core.restoration_executor import RestorationExecutor
     from core.upscaler import Upscaler
 
-    upscaler = Upscaler(model_name=model, device=device, tile=tile)
-    result = upscaler.upscale(image)
-    del upscaler
-    if device == "cuda":
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    return _match_input_size(result, image)
+    cfg = get_model(model)
+    if cfg.get("provider") == "realesrgan":
+        return DenoiseBackend(
+            upscaler=Upscaler(model_name=model, device=device, tile=tile),
+            tile=tile,
+        )
+    return DenoiseBackend(
+        executor=RestorationExecutor(cfg, device),
+        tile=tile,
+    )
+
+
+def _run_denoise(image: np.ndarray, model: str, device: str, tile: int) -> np.ndarray:
+    backend = create_denoise_backend(model, device, tile)
+    try:
+        return backend.run(image)
+    finally:
+        backend.close()
+        if device == "cuda":
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 
 @router.post("/denoise/batch")
 async def denoise_image_batch(req: BatchDenoiseRequest):
-    from core.upscaler import Upscaler
-
     _require_denoise_model(req.model)
     total = len(req.images)
     if total == 0:
@@ -134,11 +182,10 @@ async def denoise_image_batch(req: BatchDenoiseRequest):
         os.makedirs(req.output_dir, exist_ok=True)
 
     tile = req.tile if req.tile is not None else 0
-    shared = Upscaler(model_name=req.model, device=req.device, tile=tile)
+    shared = create_denoise_backend(req.model, req.device, tile)
     if tile > 0:
-        shared._current_tile = tile
         try:
-            shared._ensure_model_loaded()
+            shared.load()
         except Exception as e:
             log_manager.error(f"批量降噪模型加载失败: {e}", source="denoise_batch")
             raise RuntimeError(f"模型加载失败: {e}") from e
@@ -176,9 +223,8 @@ async def denoise_image_batch(req: BatchDenoiseRequest):
         await progress_manager.send_progress(progress, msg)
         log_manager.info(msg, source="denoise_batch")
 
-        def _process(upscaler_instance, img):
-            out = upscaler_instance.upscale(img)
-            return _match_input_size(out, img)
+        def _process(backend, img):
+            return backend.run(img)
 
         loop = asyncio.get_event_loop()
         try:
@@ -231,6 +277,7 @@ async def denoise_image_batch(req: BatchDenoiseRequest):
     log_manager.info(f"批量降噪完成: 成功 {success_count}/{total}", source="denoise_batch")
     await progress_manager.send_complete(f"批量处理完成：{success_count} 成功，{failed_count} 失败")
 
+    shared.close()
     del shared
     if req.device == "cuda":
         import torch

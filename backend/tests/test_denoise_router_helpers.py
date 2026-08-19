@@ -27,11 +27,26 @@ def test_list_denoise_models_groups():
 
     data = list_denoise_models()
     labels = [g["label"] for g in data["groups"]]
-    assert labels == ["通用降噪", "动漫/插画"]
+    assert labels == [
+        "照片 / 截图",
+        "观感更干净",
+        "相机 ISO",
+        "去压缩伪影",
+        "快速清晰化",
+    ]
     ids = [m["id"] for g in data["groups"] for m in g["models"]]
-    assert ids == ["denoise-general", "denoise-anime"]
-    assert "scale" not in data["groups"][0]["models"][0]
-    assert "outscale" not in data["groups"][0]["models"][0]
+    assert ids == [
+        "denoise-scunet-psnr",
+        "denoise-scunet-gan",
+        "denoise-nafnet-sidd",
+        "denoise-swinir-jpeg",
+        "denoise-general",
+        "denoise-anime",
+    ]
+    first = data["groups"][0]["models"][0]
+    assert first["suitable_for"] == "盲去噪（压缩颗粒 + 一般照片噪声，保纹理）"
+    assert "scale" not in first
+    assert "outscale" not in first
 
 
 def test_require_denoise_model_ok():
@@ -39,6 +54,14 @@ def test_require_denoise_model_ok():
 
     cfg = _require_denoise_model("denoise-general")
     assert cfg["id"] == "denoise-general"
+
+
+def test_require_denoise_model_accepts_scunet():
+    from app.routers.denoise import _require_denoise_model
+
+    cfg = _require_denoise_model("denoise-scunet-psnr")
+    assert cfg["id"] == "denoise-scunet-psnr"
+    assert cfg["provider"] == "restoration"
 
 
 def test_require_denoise_model_rejects_upscale_id():
@@ -102,7 +125,9 @@ def test_batch_auto_tile_does_not_preload_before_first_image(monkeypatch):
     monkeypatch.setattr(denoise.progress_manager, "send_progress", noop)
     monkeypatch.setattr(denoise.progress_manager, "send_complete", noop)
 
-    request = denoise.BatchDenoiseRequest(images=["encoded"], tile=None)
+    request = denoise.BatchDenoiseRequest(
+        images=["encoded"], tile=None, model="denoise-general"
+    )
     response = asyncio.run(denoise.denoise_image_batch(request))
 
     assert response["summary"]["success"] == 1
@@ -137,7 +162,7 @@ def test_batch_imwrite_false_marks_item_error(monkeypatch, tmp_path):
     monkeypatch.setattr(denoise.progress_manager, "send_complete", noop)
 
     request = denoise.BatchDenoiseRequest(
-        images=["encoded"], tile=128, output_dir=str(tmp_path)
+        images=["encoded"], tile=128, output_dir=str(tmp_path), model="denoise-general"
     )
     response = asyncio.run(denoise.denoise_image_batch(request))
 
@@ -162,7 +187,27 @@ def test_single_imwrite_false_raises_original_error(monkeypatch, tmp_path):
     monkeypatch.setattr(denoise.progress_manager, "send_error", noop)
 
     request = denoise.DenoiseRequest(
-        image="encoded", output_path=str(tmp_path / "denoised.png")
+        image="encoded",
+        output_path=str(tmp_path / "denoised.png"),
+        model="denoise-general",
     )
     with pytest.raises(RuntimeError, match="写入降噪图片失败"):
         asyncio.run(denoise.denoise_image(request))
+
+
+def test_create_denoise_backend_restoration(monkeypatch):
+    from app.routers import denoise
+    from core.restoration_executor import RestorationExecutor
+
+    backend = denoise.create_denoise_backend(
+        "denoise-scunet-psnr", device="cpu", tile=0
+    )
+    assert isinstance(backend._executor, RestorationExecutor)
+
+
+def test_create_denoise_backend_realesrgan():
+    from app.routers.denoise import create_denoise_backend
+    from core.upscaler import Upscaler
+
+    backend = create_denoise_backend("denoise-general", device="cpu", tile=0)
+    assert isinstance(backend._upscaler, Upscaler)
