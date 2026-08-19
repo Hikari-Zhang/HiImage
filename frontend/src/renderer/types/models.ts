@@ -11,6 +11,8 @@ export interface ModelOption {
   label: string
   /** 模型描述（tooltip 或说明） */
   description?: string
+  /** 适合的噪声 / 场景类型（降噪等） */
+  suitableFor?: string
 }
 
 /** 分组模型选项（用于 Select 组件的 groups prop） */

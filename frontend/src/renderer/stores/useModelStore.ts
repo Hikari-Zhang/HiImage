@@ -100,15 +100,34 @@ const DEFAULT_CUTOUT_GROUPS: ModelGroup[] = [
 
 const DEFAULT_DENOISE_GROUPS: ModelGroup[] = [
   {
-    label: '通用降噪',
+    label: '照片 / 截图',
     options: [
-      { value: 'denoise-general', label: '通用降噪（推荐）', description: '保持原始分辨率，去除照片/截图压缩噪声与颗粒' },
+      { value: 'denoise-scunet-psnr', label: 'SCUNet 盲去噪（推荐）', description: '盲去噪，适合照片与截图', suitableFor: '盲去噪（压缩颗粒 + 一般照片噪声，保纹理）' },
     ],
   },
   {
-    label: '动漫/插画',
+    label: '观感更干净',
     options: [
-      { value: 'denoise-anime', label: '动漫/插画降噪', description: '保持原始分辨率，针对动漫/插画去噪' },
+      { value: 'denoise-scunet-gan', label: 'SCUNet 观感去噪', description: '更干净，可能略抹纹理', suitableFor: '更干净，可能略抹纹理' },
+    ],
+  },
+  {
+    label: '相机 ISO',
+    options: [
+      { value: 'denoise-nafnet-sidd', label: 'NAFNet 相机降噪', description: '手机 / 相机传感器噪声', suitableFor: '手机 / 相机传感器噪声' },
+    ],
+  },
+  {
+    label: '去压缩伪影',
+    options: [
+      { value: 'denoise-swinir-jpeg', label: 'SwinIR 去压缩', description: 'JPEG 色块与振铃', suitableFor: 'JPEG 色块 / 振铃（按常见网图质量 Q≈40）' },
+    ],
+  },
+  {
+    label: '快速清晰化',
+    options: [
+      { value: 'denoise-general', label: '快速清晰化·通用', description: '超分权重复用，偏锐化', suitableFor: '要锐化或不想再下大模型' },
+      { value: 'denoise-anime', label: '快速清晰化·动漫', description: '超分权重复用，线条更锐', suitableFor: '动漫线稿锐化' },
     ],
   },
 ]
@@ -218,12 +237,13 @@ export const useModelStore = create<ModelStoreState>((set) => ({
       let denoiseGroups: ModelGroup[] = DEFAULT_DENOISE_GROUPS
       if (denoiseData?.groups) {
         denoiseGroups = denoiseData.groups.map(
-          (g: { label: string; models: Array<{ id: string; name: string; description: string }> }) => ({
+          (g: { label: string; models: Array<{ id: string; name: string; description: string; suitable_for?: string }> }) => ({
             label: stripDecorators(g.label),
             options: g.models.map((m) => ({
               value: m.id,
               label: m.name,
               description: m.description,
+              suitableFor: m.suitable_for,
             })),
           })
         )

@@ -74,7 +74,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   upscaleModel: 'RealESRGAN_x4plus',
   upscaleEnabled: false,
   upscaleTile: 0,  // 0 = 自动计算
-  denoiseModel: 'denoise-general',
+  denoiseModel: 'denoise-scunet-psnr',
   cutoutModel: 'birefnet',
   serverPort: 51821,
   keepaliveSeconds: 300,
@@ -168,7 +168,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({
         inpaintModel: defaults.watermark_removal ?? 'wm_lama',
         cutoutModel: defaults.cutout ?? 'birefnet',
-        denoiseModel: defaults.denoise ?? 'denoise-general',
+        denoiseModel: defaults.denoise ?? 'denoise-scunet-psnr',
         defaultsLoaded: true,
       })
     } catch (err) {

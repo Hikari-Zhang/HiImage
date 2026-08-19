@@ -22,6 +22,8 @@ export interface ModelOption {
   value: string
   label: string
   description?: string
+  /** 适合的噪声 / 场景类型（降噪等） */
+  suitableFor?: string
   disabled?: boolean
 }
 
@@ -209,7 +211,14 @@ export default function ModelSelect({
         </span>
 
         {/* 名称 */}
-        <span className="flex-1 truncate">{opt.label}</span>
+        <span className="flex-1 min-w-0">
+          <span className="block truncate">{opt.label}</span>
+          {(opt.suitableFor || opt.description) && (
+            <span className="block truncate text-[10px] text-fg-secondary">
+              {opt.suitableFor || opt.description}
+            </span>
+          )}
+        </span>
 
         {/* 右侧信息 */}
         {isDownloading && (
