@@ -146,14 +146,14 @@ HiImage 是一款 AI 驱动的图像处理桌面工具，面向设计师、内�
 
 #### 功能描述
 
-用户加载带压缩噪声或颗粒的图片，选择降噪模型，生成**与输入相同分辨率**的结果。支持单张与批量。底层复用 Real-ESRGAN 清晰化权重（`outscale=1`），不新增权重文件。
+用户加载带压缩噪声或颗粒的图片，选择降噪模型，生成**与输入相同分辨率**的结果。支持单张与批量。默认 SCUNet 盲去噪；另有 NAFNet（相机）、SwinIR（JPEG）、以及 Real-ESRGAN 快速清晰化。
 
 #### 功能点
 
 | # | 功能 | 优先级 | 描述 |
 |---|------|--------|------|
 | D1 | 图片加载 | P0 | 同超分：拖拽 / 文件对话框；单张写入共享工作区 |
-| D2 | 模型选择 | P0 | 通用降噪 / 动漫插画降噪 |
+| D2 | 模型选择 | P0 | 按噪声类型分组：盲去噪 / 观感 / 相机 ISO / 去压缩 / 快速清晰化 |
 | D3 | 单张处理 | P0 | 进度显示；输出尺寸等于输入 |
 | D4 | 批量处理 | P0 | 导入多张，一次请求逐张处理，模型只加载一次 |
 | D5 | 对比预览 | P1 | 拖拽滑块对比处理前后 |
@@ -161,10 +161,13 @@ HiImage 是一款 AI 驱动的图像处理桌面工具，面向设计师、内�
 
 #### 支持的模型
 
-| 类别 | 模型 ID | 特点 | 大小 |
+| 类别 | 模型 ID | 适合 | 大小 |
 |------|---------|------|------|
-| 通用降噪 | denoise-general（推荐） | 保持分辨率，照片/截图去噪，复用 realesr-general-x4v3 | 5MB |
-| 动漫/插画 | denoise-anime | 保持分辨率，复用 anime 6B | 18MB |
+| 照片 / 截图 | denoise-scunet-psnr（推荐） | 盲去噪，保纹理 | 72MB |
+| 观感更干净 | denoise-scunet-gan | 更干净，可能抹纹理 | 72MB |
+| 相机 ISO | denoise-nafnet-sidd | 手机 / 相机噪声 | 117MB |
+| 去压缩伪影 | denoise-swinir-jpeg | JPEG 色块 / 振铃 | 98MB |
+| 快速清晰化 | denoise-general / denoise-anime | 超分权重复用，偏锐化 | 5MB / 18MB |
 
 ---
 
@@ -422,6 +425,7 @@ HiImage 是一款 AI 驱动的图像处理桌面工具，面向设计师、内�
 | M7 | 智能合成 — 7 种合成模式完整实现 | 🔄 进行中 |
 | M8 | 打包发布 — PyInstaller + electron-builder + .dmg | ⏳ 待开始（需 Apple Developer 证书） |
 | M9 | 图片降噪 — 单张 + 批量，复用 Real-ESRGAN 清晰化权重 | ✅ 已完成 |
+| M10 | 降噪专用模型 — SCUNet / NAFNet / SwinIR + 类型标注 | ⏳ 本计划 |
 
 ---
 
@@ -472,7 +476,7 @@ HiImage 是一款 AI 驱动的图像处理桌面工具，面向设计师、内�
 | Super Resolution | 超分辨率，通过 AI 放大图像并增强细节 |
 | IOPaint | 开源图像修复框架，支持多种模型 |
 | Real-ESRGAN | 超分辨率模型，支持 2x/4x 放大 |
-| 图片降噪 | 保持分辨率的 AI 去噪；本产品用 Real-ESRGAN outscale=1 |
+| 图片降噪 | 保持分辨率的 AI 去噪；默认 SCUNet，清晰化档复用 Real-ESRGAN outscale=1 |
 | MPS | Metal Performance Shaders，Apple 芯片 GPU 加速 |
 | Dilation | 遮罩扩张，让遮罩略大于 ROI 确保完全覆盖水印边缘 |
 | 进程组 | macOS/Linux 下相关进程的集合，可一次性批量终止 |

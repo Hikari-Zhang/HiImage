@@ -104,6 +104,7 @@ backend/
     ├── model_executor.py    # Factory（inpaint / cutout 主路径）
     ├── inpainter.py         # IOPaint CLI + HTTP Server
     ├── upscaler.py          # Real-ESRGAN（upscale 路由直接调用）
+    ├── restoration_executor.py  # spandrel（SCUNet / NAFNet / SwinIR）
     ├── synthesizer.py       # 智能合成编排（不走 Factory）
     ├── download_queue.py
     └── model_server.py      # IOPaint 扩散模型保活进程
@@ -113,6 +114,7 @@ backend/
 
 - 去水印、抠图：`ModelExecutorFactory`（provider → Executor）
 - 超分：router / pipeline 直接 `Upscaler`（不走 Factory）
+- 降噪：restoration → RestorationExecutor；realesrgan → Upscaler
 - 合成：`Synthesizer` 按 mode 编排
 
 ### 4.2 图像 I/O
@@ -142,4 +144,4 @@ backend/
 | UI | React 18 + TypeScript + Zustand + Tailwind |
 | 画布 | Canvas 2D + Konva |
 | 后端 | FastAPI + Uvicorn |
-| 推理 | IOPaint / Real-ESRGAN / rembg / diffusers 等 |
+| 推理 | IOPaint / Real-ESRGAN / rembg / diffusers / spandrel 等 |
