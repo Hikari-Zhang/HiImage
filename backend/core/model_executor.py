@@ -98,6 +98,10 @@ class ModelExecutorFactory:
             from .restormer_executor import RestormerExecutor
             return RestormerExecutor(model_config, device)
 
+        elif provider == "restoration":
+            from .restoration_executor import RestorationExecutor
+            return RestorationExecutor(model_config, device)
+
         elif provider == "realesrgan":
             # 复用现有 upscaler 实现
             from .realesrgan_executor import RealESRGANExecutor
@@ -129,4 +133,5 @@ class ModelExecutorFactory:
             "realesrgan",
             "rembg",
             "facexlib",
+            "restoration",
         ]
