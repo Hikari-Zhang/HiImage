@@ -45,7 +45,7 @@ export default function Denoise() {
   const workingImage = useWorkspaceStore(selectWorkingImage)
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { denoise, denoiseBatch } = useBackendAPI()
-  const { device, denoiseModel, upscaleTile, setDevice, setDenoiseModel } = useSettingsStore()
+  const { device, denoiseModel, setDevice, setDenoiseModel } = useSettingsStore()
   const { denoiseGroups } = useModelStore()
   const { options: deviceOptions } = useDeviceOptions()
   const downloadTasks = useDownloadStore((s) => s.tasks)
@@ -260,7 +260,7 @@ export default function Denoise() {
         images,
         model: denoiseModel,
         device,
-        tile: tile ?? (upscaleTile || 0),
+        tile: tile ?? 0,
         output_dir: outputDir,
         is_file_path: useFilePath,
       })
@@ -314,7 +314,7 @@ export default function Denoise() {
         image: workingImage,
         model: denoiseModel,
         device,
-        tile: tile ?? (upscaleTile || 0),
+        tile: tile ?? 0,
         output_path: outputPath,
       })
       if (result.outputPath) {
@@ -530,12 +530,12 @@ export default function Denoise() {
               min={0}
               max={2048}
               step={64}
-              value={tile ?? upscaleTile ?? 0}
+              value={tile ?? 0}
               onChange={(e) => setTile(e.target.value ? Number(e.target.value) : null)}
               className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
             />
             <p className="text-[11px] text-fg-tertiary mt-1">
-              分块处理大小：0 = 自动计算；建议值：256 / 512 / 1024。降低此值可节省显存。
+              仅「快速清晰化」模型使用。SCUNet / NAFNet / SwinIR 始终整图推理，填了也不会分块。
             </p>
           </div>
           {mode === 'single' && (

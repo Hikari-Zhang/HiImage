@@ -1122,6 +1122,7 @@ models:
     local_path: models/restoration/scunet_color_real_psnr.pth
     display_group: 照片 / 截图
     download_url: https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth
+    device_override: cpu   # SCUNet 首层 Conv2d 在 MPS 上触发 convolution_overrideable
     supported_params: {}
     supports_custom_outscale: false
     features: [denoise]
@@ -1140,6 +1141,7 @@ models:
     local_path: models/restoration/scunet_color_real_gan.pth
     display_group: 观感更干净
     download_url: https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_gan.pth
+    device_override: cpu   # SCUNet 首层 Conv2d 在 MPS 上触发 convolution_overrideable
     supported_params: {}
     supports_custom_outscale: false
     features: [denoise]
@@ -1158,6 +1160,7 @@ models:
     local_path: models/restoration/NAFNet-SIDD-width32.pth
     display_group: 相机 ISO
     download_url: https://huggingface.co/nyanko7/nafnet-models/resolve/main/NAFNet-SIDD-width32.pth
+    device_override: cpu   # PixelShuffle 在 MPS 上会产生灯珠格伪影
     supported_params: {}
     supports_custom_outscale: false
     features: [denoise]

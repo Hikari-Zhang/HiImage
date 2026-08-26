@@ -23,15 +23,36 @@ def _torch_device(device: str) -> torch.device:
     return torch.device("cpu")
 
 
+def _effective_device(model_config: dict[str, Any], device: str) -> str:
+    override = model_config.get("device_override")
+    if override:
+        return str(override)
+    return device
+
+
+def _is_unimplemented_backend_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return (
+        isinstance(exc, NotImplementedError)
+        or "convolution_overrideable" in msg
+        or ("not implemented" in msg and "mkldnn" in msg)
+    )
+
+
 class RestorationExecutor(BaseModelExecutor):
     """spandrel ImageModelDescriptor 包装。输入/输出均为 RGB uint8，倍率 1。"""
 
     DEFAULT_TILE_PAD = 16
 
     def __init__(self, model_config: dict[str, Any], device: str):
-        super().__init__(model_config, device)
+        super().__init__(model_config, _effective_device(model_config, device))
         self._descriptor = None
         self._tile = 0
+        if self.device != device:
+            print(
+                f"[Restoration] 模型 {model_config.get('id')} 不支持 {device}，"
+                f"改用 {self.device}"
+            )
 
     def supports_mask(self) -> bool:
         return False
@@ -65,24 +86,30 @@ class RestorationExecutor(BaseModelExecutor):
         if self._descriptor is None:
             self.load_model()
 
-        from core.upscaler import Upscaler
-
-        if tile == 0 and self._tiling_ok():
-            tile = Upscaler._auto_tile(image, 1, self.device)
         self._tile = tile
+        print(
+            f"[Restoration] infer id={self.model_config.get('id')} "
+            f"device={self.device} tile={tile} shape={image.shape[:2]}"
+        )
 
         try:
             return self._infer(image, tile)
         except RuntimeError as e:
+            if self.device == "mps" and _is_unimplemented_backend_error(e):
+                return self._retry_on_cpu(image, tile)
             msg = str(e).lower()
-            if ("cuda" in msg or "mps" in msg or "alloc" in msg) and tile > 256:
+            if ("cuda" in msg or "mps" in msg or "alloc" in msg) and (tile <= 0 or tile > 256):
                 return self._infer(image, 256)
             raise RuntimeError(f"复原推理失败（显存不足或设备错误）: {e}") from e
 
-    def _tiling_ok(self) -> bool:
-        tiling = getattr(self._descriptor, "tiling", None)
-        name = getattr(tiling, "name", "") or str(tiling or "")
-        return "DISCOURAGED" not in name.upper()
+    def _retry_on_cpu(self, image: np.ndarray, tile: int) -> np.ndarray:
+        print(
+            f"[Restoration] {self.model_config.get('id')} 在 MPS 上缺少算子，改用 CPU"
+        )
+        self.device = "cpu"
+        if self._descriptor is not None:
+            self._descriptor.to("cpu")
+        return self._infer(image, tile)
 
     def _infer(self, image: np.ndarray, tile: int) -> np.ndarray:
         if tile <= 0:
@@ -120,8 +147,12 @@ class RestorationExecutor(BaseModelExecutor):
     def _to_numpy(self, tensor: torch.Tensor, hw: tuple[int, int]) -> np.ndarray:
         t = tensor.detach().float().clamp_(0, 1).squeeze(0).permute(1, 2, 0).cpu().numpy()
         out = np.clip(np.rint(t * 255.0), 0, 255).astype(np.uint8)
-        if out.shape[0] != hw[0] or out.shape[1] != hw[1]:
-            import cv2
+        oh, ow = out.shape[:2]
+        th, tw = hw
+        if oh == th and ow == tw:
+            return out
+        if oh >= th and ow >= tw:
+            return out[:th, :tw]
+        import cv2
 
-            out = cv2.resize(out, (hw[1], hw[0]), interpolation=cv2.INTER_AREA)
-        return out
+        return cv2.resize(out, (tw, th), interpolation=cv2.INTER_LINEAR)

@@ -120,3 +120,88 @@ def test_discouraged_tiling_prefers_full_image(monkeypatch):
     out = exe.execute(image, tile=0)
     assert called["auto"] is False
     np.testing.assert_array_equal(out, image)
+
+
+def test_supported_tiling_still_prefers_full_image(monkeypatch):
+    """NAFNet 在 spandrel 里默认 SUPPORTED；不能因此套用超分的 MPS 384 分块。"""
+    from core.restoration_executor import RestorationExecutor
+
+    exe = RestorationExecutor(
+        {"id": "denoise-nafnet-sidd", "provider": "restoration", "weight_filename": "x.pth"},
+        "mps",
+    )
+    exe._descriptor = _IdentityDescriptor()
+    called = {"auto": False}
+
+    def fake_auto(*_args, **_kwargs):
+        called["auto"] = True
+        return 384
+
+    monkeypatch.setattr("core.upscaler.Upscaler._auto_tile", fake_auto)
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    out = exe.execute(image, tile=0)
+    assert called["auto"] is False
+    np.testing.assert_array_equal(out, image)
+
+
+def test_to_numpy_crops_padding_instead_of_area_resize():
+    import torch
+    from core.restoration_executor import RestorationExecutor
+
+    exe = RestorationExecutor(
+        {"id": "denoise-nafnet-sidd", "provider": "restoration", "weight_filename": "x.pth"},
+        "cpu",
+    )
+    tensor = torch.zeros(1, 3, 6, 6)
+    tensor[0, 0, :4, :4] = 1.0
+    out = exe._to_numpy(tensor, (4, 4))
+    assert out.shape == (4, 4, 3)
+    assert int(out[3, 3, 0]) == 255
+
+
+def test_device_override_wins_over_requested_device():
+    from core.restoration_executor import RestorationExecutor
+
+    exe = RestorationExecutor(
+        {
+            "id": "denoise-scunet-psnr",
+            "provider": "restoration",
+            "weight_filename": "x.pth",
+            "device_override": "cpu",
+        },
+        "mps",
+    )
+    assert exe.device == "cpu"
+
+
+class _MpsUnimplementedDescriptor:
+    tiling = type("T", (), {"name": "SUPPORTED"})()
+
+    def __init__(self):
+        self.device = "mps"
+
+    def to(self, device):
+        self.device = str(device)
+        return self
+
+    def __call__(self, tensor):
+        if str(self.device) == "mps":
+            raise NotImplementedError(
+                "convolution_overrideable not implemented. You are likely "
+                "triggering this with tensor backend other than CPU/CUDA/MKLDNN"
+            )
+        return tensor
+
+
+def test_mps_unimplemented_conv_retries_on_cpu():
+    from core.restoration_executor import RestorationExecutor
+
+    exe = RestorationExecutor(
+        {"id": "denoise-nafnet-sidd", "provider": "restoration", "weight_filename": "x.pth"},
+        "mps",
+    )
+    exe._descriptor = _MpsUnimplementedDescriptor()
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    out = exe.execute(image, tile=0)
+    assert exe.device == "cpu"
+    assert out.shape == image.shape

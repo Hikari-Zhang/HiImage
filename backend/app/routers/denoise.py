@@ -64,9 +64,12 @@ def _require_denoise_model(model_id: str) -> dict:
 
 def _match_input_size(result: np.ndarray, src: np.ndarray) -> np.ndarray:
     h, w = src.shape[:2]
-    if result.shape[0] != h or result.shape[1] != w:
-        result = cv2.resize(result, (w, h), interpolation=cv2.INTER_AREA)
-    return result
+    rh, rw = result.shape[:2]
+    if rh == h and rw == w:
+        return result
+    if rh >= h and rw >= w:
+        return result[:h, :w]
+    return cv2.resize(result, (w, h), interpolation=cv2.INTER_LINEAR)
 
 
 def _denoised_output_path(output_dir: str, file_name: str) -> str:
@@ -151,7 +154,7 @@ def create_denoise_backend(model: str, device: str, tile: int) -> DenoiseBackend
         )
     return DenoiseBackend(
         executor=RestorationExecutor(cfg, device),
-        tile=tile,
+        tile=0,
     )
 
 

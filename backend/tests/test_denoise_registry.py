@@ -40,6 +40,19 @@ def test_restoration_denoise_models():
         assert cfg.get("supports_custom_outscale") is False
 
 
+def test_scunet_overrides_mps_to_cpu():
+    from core.model_registry import get_model
+
+    for model_id in ("denoise-scunet-psnr", "denoise-scunet-gan"):
+        assert get_model(model_id).get("device_override") == "cpu"
+
+
+def test_nafnet_overrides_mps_to_cpu():
+    from core.model_registry import get_model
+
+    assert get_model("denoise-nafnet-sidd").get("device_override") == "cpu"
+
+
 def test_clarity_denoise_models_remain_realesrgan():
     from core.model_registry import get_model
 

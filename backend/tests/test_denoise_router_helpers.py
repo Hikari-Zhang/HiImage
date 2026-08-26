@@ -203,6 +203,18 @@ def test_create_denoise_backend_restoration():
         "denoise-scunet-psnr", device="cpu", tile=0
     )
     assert isinstance(backend._executor, RestorationExecutor)
+    assert backend._tile == 0
+
+
+def test_create_denoise_backend_restoration_ignores_client_tile():
+    from app.routers import denoise
+    from core.restoration_executor import RestorationExecutor
+
+    backend = denoise.create_denoise_backend(
+        "denoise-nafnet-sidd", device="cpu", tile=384
+    )
+    assert isinstance(backend._executor, RestorationExecutor)
+    assert backend._tile == 0
 
 
 def test_create_denoise_backend_realesrgan():
