@@ -13,6 +13,7 @@ from app.routers.inpaint import decode_image, encode_image, check_image_size
 from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
+from core.image_io import write_image
 
 router = APIRouter()
 
@@ -178,7 +179,7 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
                 base_name = os.path.splitext(file_name)[0]
                 out_path = os.path.join(req.output_dir, f"{base_name}_upscaled.png")
                 result_bgr = cv2.cvtColor(result_rgb, cv2.COLOR_RGB2BGR)
-                cv2.imwrite(out_path, result_bgr)
+                write_image(out_path, result_bgr)
                 # 释放 result
                 del result_rgb
                 results.append({
@@ -291,7 +292,7 @@ async def upscale_image(req: UpscaleRequest):
             out_dir = os.path.dirname(req.output_path) or "."
             os.makedirs(out_dir, exist_ok=True)
             result_bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(req.output_path, result_bgr)
+            write_image(req.output_path, result_bgr)
             # 释放 result
             del result
             if req.device == 'cuda':
