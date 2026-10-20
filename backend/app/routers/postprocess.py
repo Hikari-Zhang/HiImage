@@ -20,6 +20,7 @@ from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.config import get
 from core.model_registry import get_default_model
+from core.utils import resolve_default_device
 
 router = APIRouter()
 
@@ -34,7 +35,7 @@ class PostprocessRequest(BaseModel):
     inpainted_image: str        # inpainting 输出图像 base64
     mask: str                   # 水印掩码 base64
     method: str = "poisson"     # poisson / gfpgan / lama_refine
-    device: str = "mps"
+    device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     task_id: str = ""           # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 
@@ -46,7 +47,7 @@ class PipelineRequest(BaseModel):
 
     # Inpaint 参数
     inpaint_model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
-    device: str = "mps"
+    device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     dilation: int = 10
     disable_nsfw: bool = False
 

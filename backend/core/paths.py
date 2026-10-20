@@ -12,21 +12,75 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 # ──────────────────────────────────────────────────────────────
 # 项目根目录
 # ──────────────────────────────────────────────────────────────
-# backend/ 的上级目录（即 PROJECT_ROOT）
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# backend/ 的上级目录（即 PROJECT_ROOT）；容器可用环境变量明确指定。
+_SOURCE_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(os.environ.get("HIIMAGE_PROJECT_ROOT", str(_SOURCE_ROOT))).expanduser()
+
+
+@dataclass(frozen=True)
+class RuntimePaths:
+    """运行时目录集合。所有目录都可通过环境变量覆盖。"""
+
+    project_root: Path
+    config_dir: Path
+    cache_dir: Path
+    tmp_dir: Path
+    output_dir: Path
+    models_dir: Path
+
+
+def paths_from_env(env: Optional[dict[str, str]] = None) -> RuntimePaths:
+    """根据环境变量解析目录；传入 env 便于测试且不需要 reload 模块。"""
+    values = os.environ if env is None else env
+    project_root = Path(values.get("HIIMAGE_PROJECT_ROOT", str(PROJECT_ROOT))).expanduser()
+    return RuntimePaths(
+        project_root=project_root,
+        config_dir=Path(values.get("HIIMAGE_CONFIG_DIR", str(project_root / "config"))).expanduser(),
+        cache_dir=Path(values.get("HIIMAGE_CACHE", str(Path.home() / ".cache"))).expanduser(),
+        tmp_dir=Path(values.get("HIIMAGE_TMP_DIR", str(project_root / "tmp"))).expanduser(),
+        output_dir=Path(values.get("HIIMAGE_OUTPUT_DIR", str(project_root / "output"))).expanduser(),
+        models_dir=Path(values.get("HIIMAGE_MODELS_DIR", str(project_root / "models"))).expanduser(),
+    )
+
+
+def cache_dirs_from_env(env: Optional[dict[str, str]] = None) -> dict[str, Path]:
+    """解析模型缓存目录；专用变量优先于 HIIMAGE_CACHE。"""
+    values = os.environ if env is None else env
+    cache = Path(values.get("HIIMAGE_CACHE", str(Path.home() / ".cache"))).expanduser()
+    u2net_default = cache / "u2net" if "HIIMAGE_CACHE" in values else Path.home() / ".u2net"
+    defaults = {
+        "HF_HOME": cache / "huggingface",
+        "TORCH_HOME": cache / "torch",
+        "GFPGAN_HOME": cache / "gfpgan",
+        "REALESRGAN_HOME": cache / "realesrgan",
+        "RESTORMER_HOME": cache / "restormer",
+        "U2NET_HOME": u2net_default,
+    }
+    return {
+        name: Path(values.get(name, str(default))).expanduser()
+        for name, default in defaults.items()
+    }
+
+
+_RUNTIME_PATHS = paths_from_env()
+CONFIG_DIR = _RUNTIME_PATHS.config_dir
+CONFIG_PATH = CONFIG_DIR / "settings.json"
+TMP_DIR = _RUNTIME_PATHS.tmp_dir
+OUTPUT_DIR = _RUNTIME_PATHS.output_dir
 
 # ──────────────────────────────────────────────────────────────
 # 默认缓存根目录：~/.cache/
 # 可通过环境变量 HIIMAGE_CACHE 自定义（默认值已从 hiimage/ 移除）
 # ──────────────────────────────────────────────────────────────
 _DEFAULT_CACHE_ROOT = Path.home() / ".cache"
-CACHE_ROOT = Path(os.environ.get("HIIMAGE_CACHE", str(_DEFAULT_CACHE_ROOT)))
+CACHE_ROOT = _RUNTIME_PATHS.cache_dir
 
 # ──────────────────────────────────────────────────────────────
 # 各类型模型缓存目录
@@ -35,35 +89,42 @@ CACHE_ROOT = Path(os.environ.get("HIIMAGE_CACHE", str(_DEFAULT_CACHE_ROOT)))
 # HuggingFace 模型缓存
 # 默认使用 huggingface_hub 官方路径 ~/.cache/huggingface
 # 可通过环境变量 HF_HOME 覆盖（与 huggingface_hub 保持一致）
-HF_HOME = Path(os.environ.get("HF_HOME", str(Path.home() / ".cache" / "huggingface")))
+HF_HOME = cache_dirs_from_env()["HF_HOME"]
 
 # Torch 模型缓存
 # 可通过环境变量 TORCH_HOME 覆盖（与 torch.hub 保持一致）
-TORCH_HOME = Path(os.environ.get("TORCH_HOME", str(CACHE_ROOT / "torch")))
+TORCH_HOME = cache_dirs_from_env()["TORCH_HOME"]
 
 # GFPGAN 权重缓存
 # 可通过环境变量 GFPGAN_HOME 覆盖
-GFPGAN_HOME = Path(os.environ.get("GFPGAN_HOME", str(Path.home() / ".cache" / "gfpgan")))
+GFPGAN_HOME = cache_dirs_from_env()["GFPGAN_HOME"]
 
 # Real-ESRGAN 权重缓存
 # 可通过环境变量 REALESRGAN_HOME 覆盖
-REALESRGAN_HOME = Path(os.environ.get("REALESRGAN_HOME", str(Path.home() / ".cache" / "realesrgan")))
+REALESRGAN_HOME = cache_dirs_from_env()["REALESRGAN_HOME"]
 
 # Restormer 权重缓存
 # 可通过环境变量 RESTORMER_HOME 覆盖
-RESTORMER_HOME = Path(os.environ.get("RESTORMER_HOME", str(Path.home() / ".cache" / "restormer")))
+RESTORMER_HOME = cache_dirs_from_env()["RESTORMER_HOME"]
 
 # rembg / U2NET 模型缓存
 # 可通过环境变量 U2NET_HOME 覆盖（与 rembg 保持一致）
-U2NET_HOME = Path(os.environ.get("U2NET_HOME", str(Path.home() / ".u2net")))
+U2NET_HOME = cache_dirs_from_env()["U2NET_HOME"]
 
 # 项目 models/ 目录（向后兼容旧代码）
 # ⚠️  已废弃：新代码请使用 MODELS_CACHE_DIR（~/.cache/models）；此变量仅作向后兼容保留。
-MODELS_DIR = PROJECT_ROOT / "models"
+MODELS_DIR = _RUNTIME_PATHS.models_dir
 
 # 模型缓存目录（默认下载位置）：~/.cache/hiimage/models/
 # 可通过环境变量 HIIMAGE_CACHE 自定义（会自动附加 /models）
 MODELS_CACHE_DIR = CACHE_ROOT / "models"
+
+
+def ensure_runtime_dirs() -> RuntimePaths:
+    """创建配置、缓存、临时和输出目录，并返回目录集合。"""
+    for path in (CONFIG_DIR, CACHE_ROOT, TMP_DIR, OUTPUT_DIR):
+        path.mkdir(parents=True, exist_ok=True)
+    return _RUNTIME_PATHS
 
 # ──────────────────────────────────────────────────────────────
 # 辅助函数

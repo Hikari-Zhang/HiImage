@@ -15,12 +15,14 @@ import cv2
 import numpy as np
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.routers.inpaint import decode_image, encode_image, check_image_size, ensure_model_ready_with_progress
 from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
+from app.config import get
+from core.utils import resolve_default_device
 
 router = APIRouter()
 
@@ -60,7 +62,7 @@ class CutoutRequest(BaseModel):
     """抠图请求"""
     image: str              # Base64 原图
     model: str = "birefnet" # 模型 ID
-    device: str = "mps"     # 推理设备
+    device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))     # 推理设备
     task_id: str = ""       # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 
 

@@ -1,64 +1,130 @@
-version: "3.9"
+x-backend-environment: &backend-environment
+  PYTHONUNBUFFERED: "1"
+  HIIMAGE_PROJECT_ROOT: /app
+  HIIMAGE_CONFIG_DIR: /app/config
+  HIIMAGE_CACHE: /app/cache
+  HIIMAGE_TMP_DIR: /app/tmp
+  HIIMAGE_OUTPUT_DIR: /app/output
+  HIIMAGE_MODELS_DIR: /app/models
+  HF_HOME: /app/cache/huggingface
+  TORCH_HOME: /app/cache/torch
+  GFPGAN_HOME: /app/cache/gfpgan
+  REALESRGAN_HOME: /app/cache/realesrgan
+  RESTORMER_HOME: /app/cache/restormer
+  U2NET_HOME: /app/cache/u2net
+  HIIMAGE_CORS_ORIGINS: ""
+
+x-backend-healthcheck: &backend-healthcheck
+  test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 120s
+
+x-web-healthcheck: &web-healthcheck
+  test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+  interval: 10s
+  timeout: 3s
+  retries: 5
 
 services:
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: hiimage-backend
-    ports:
-      - "${BACKEND_PORT:-8787}:8787"
-    volumes:
-      # 持久化模型（避免每次重新下载）
-      - ./models:/app/models
-      # 配置文件
-      - ./config:/app/config
-      # 临时文件
-      - ./tmp:/app/tmp
-      # 处理结果持久化（防止容器销毁后丢失）
-      - ./output:/app/output
+      context: .
+      dockerfile: backend/Dockerfile
+    image: hiimage-backend:cpu
+    expose:
+      - "8787"
     environment:
-      - PYTHONUNBUFFERED=1
-      - HF_HOME=/app/models/huggingface
-      - TORCH_HOME=/app/models/torch
+      <<: *backend-environment
+      HIIMAGE_DEFAULT_DEVICE: cpu
+    volumes:
+      - cpu_config:/app/config
+      - cpu_cache:/app/cache
+      - cpu_tmp:/app/tmp
+      - cpu_output:/app/output
+      - cpu_models:/app/models
+    networks:
+      cpu:
+        aliases:
+          - backend
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8787/api/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+    healthcheck: *backend-healthcheck
 
-  # GPU 版本（NVIDIA GPU）
-  # 取消注释下面的配置来使用 GPU 加速
-  # backend-gpu:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   container_name: hiimage-backend-gpu
-  #   ports:
-  #     - "${BACKEND_PORT:-8787}:8787"
-  #   volumes:
-  #     - ./models:/app/models
-  #     - ./config:/app/config
-  #     - ./tmp:/app/tmp
-  #     - ./output:/app/output
-  #   environment:
-  #     - PYTHONUNBUFFERED=1
-  #     - HF_HOME=/app/models/huggingface
-  #     - TORCH_HOME=/app/models/torch
-  #     - NVIDIA_VISIBLE_DEVICES=all
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: 1
-  #             capabilities: [gpu]
-  #   restart: unless-stopped
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:8787/api/health"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 3
-  #     start_period: 60s
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: hiimage-web:local
+    ports:
+      - "${WEB_HOST:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    networks:
+      - cpu
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck: *web-healthcheck
+
+  backend-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.cuda
+    image: hiimage-backend:cuda
+    expose:
+      - "8787"
+    environment:
+      <<: *backend-environment
+      HIIMAGE_DEFAULT_DEVICE: cuda
+    volumes:
+      - gpu_config:/app/config
+      - gpu_cache:/app/cache
+      - gpu_tmp:/app/tmp
+      - gpu_output:/app/output
+      - gpu_models:/app/models
+    networks:
+      gpu:
+        aliases:
+          - backend
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck: *backend-healthcheck
+
+  web-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: hiimage-web:local
+    ports:
+      - "${WEB_HOST:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    networks:
+      - gpu
+    depends_on:
+      backend-gpu:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck: *web-healthcheck
+
+networks:
+  cpu:
+  gpu:
+
+volumes:
+  cpu_config:
+  cpu_cache:
+  cpu_tmp:
+  cpu_output:
+  cpu_models:
+  gpu_config:
+  gpu_cache:
+  gpu_tmp:
+  gpu_output:
+  gpu_models:

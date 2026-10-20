@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.config import get_all, save
+from core.utils import default_device_for_platform
 
 router = APIRouter()
 
@@ -35,7 +36,7 @@ async def get_settings():
     """获取全部设置"""
     all_settings = get_all()
     return {
-        "device": all_settings.get("inpaint.default_device", "mps"),
+        "device": all_settings.get("inpaint.default_device", default_device_for_platform()),
         "server_port": all_settings.get("server.port", 51821),
         "server_keepalive": all_settings.get("server.keepalive_seconds", 300),
         "server_startup_timeout": all_settings.get("server.startup_timeout", 1800),

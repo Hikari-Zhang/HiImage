@@ -14,11 +14,18 @@ import sys
 import uuid
 import re
 import shutil
+import tempfile
 from pathlib import Path
 
 from core.model_server import is_diffusion_model, inpaint_via_server
 from core.paths import detect_iopaint_path
-from core.utils import resolve_effective_device
+from core.utils import resolve_effective_device, default_device_for_platform
+from core.paths import TMP_DIR
+
+
+def create_iopaint_temp_dir(base_dir: Path | str = TMP_DIR) -> Path:
+    """创建单次 IOPaint CLI 请求的唯一临时目录。"""
+    return Path(tempfile.mkdtemp(prefix="iopaint_", dir=str(base_dir)))
 
 
 def _build_model_groups() -> list:
@@ -109,7 +116,7 @@ class Inpainter:
     MODEL_GROUPS = MODEL_GROUPS
     AVAILABLE_MODELS = AVAILABLE_MODELS
 
-    def __init__(self, model_name='wm_lama', iopaint_path=None, device='mps', dilation=10, disable_nsfw=False,
+    def __init__(self, model_name='wm_lama', iopaint_path=None, device=None, dilation=10, disable_nsfw=False,
                  prompt: str = '', negative_prompt: str = '',
                  sd_steps: int = 50, sd_guidance_scale: float = 7.5, sd_seed: int = 42,
                  progress_callback=None,
@@ -147,7 +154,9 @@ class Inpainter:
             pass
         self.iopaint_path = iopaint_path or detect_iopaint_path()
         # 读取 models.yaml 中的 device_override，覆盖用户传入的 device
-        self.device = resolve_effective_device(self.model_name, device)
+        self.device = resolve_effective_device(
+            self.model_name, device or default_device_for_platform()
+        )
         self.dilation = dilation
         self.disable_nsfw = disable_nsfw
         self.prompt = prompt
@@ -158,9 +167,7 @@ class Inpainter:
         self.progress_callback = progress_callback
         # CLI 模式超时：快速模型 5 分钟，扩散模型 30 分钟（首次下载时 CLI 也用得上）
         self._timeout = 1800 if self._use_server_mode else 300
-        self._project_tmp = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'tmp'
-        )
+        self._project_tmp = str(TMP_DIR)
         self._cleanup_old_tmp()
         # 新增：最大边长限制（超过此尺寸会自动缩放）
         self.max_size = max_size
@@ -270,8 +277,7 @@ class Inpainter:
         temp_dir = None
         try:
             os.makedirs(self._project_tmp, exist_ok=True)
-            temp_dir = os.path.join(self._project_tmp, f'iopaint_{uuid.uuid4().hex}')
-            os.makedirs(temp_dir, exist_ok=True)
+            temp_dir = str(create_iopaint_temp_dir(self._project_tmp))
 
             print(f"临时目录: {temp_dir}")
 
@@ -289,13 +295,11 @@ class Inpainter:
             print(f"输出目录: {output_dir}")
 
             result_rgb = self._run_iopaint_cli(image_path, mask_path, output_dir)
-            shutil.rmtree(temp_dir, ignore_errors=True)
             return result_rgb
 
-        except Exception:
+        finally:
             if temp_dir and os.path.exists(temp_dir):
-                print(f"⚠️ 临时文件已保留用于调试: {temp_dir}")
-            raise
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _run_iopaint_cli(self, image_path: str, mask_path: str, output_dir: str) -> np.ndarray:
         """

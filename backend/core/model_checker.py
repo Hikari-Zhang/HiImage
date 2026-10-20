@@ -25,6 +25,7 @@ from typing import Literal, Optional
 # 使用统一路径管理器
 from core.paths import (
     PROJECT_ROOT as _PR,
+    MODELS_DIR as _MODELS_DIR,
     HF_HOME as _HF_HOME,
     U2NET_HOME as _U2NET_HOME,
     resolve_hf_model_path as _resolve_hf,
@@ -102,7 +103,7 @@ class ModelChecker:
     def __init__(self, project_root: Optional[Path] = None):
         # 使用 paths.py 中定义的 PROJECT_ROOT（单一数据源）
         self.project_root = project_root or _PR
-        self.models_dir = self.project_root / "models"
+        self.models_dir = _MODELS_DIR if project_root is None else self.project_root / "models"
 
         # HF 缓存目录：使用 paths.py 中的定义
         self.hf_cache_dir = _HF_HOME / "hub"

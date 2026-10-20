@@ -15,13 +15,32 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from core.paths import PROJECT_ROOT, MODELS_DIR, apply_default_env_vars
 except ImportError:
-    from app.config import PROJECT_ROOT, MODELS_DIR  # type: ignore[assignment]
+    from core.paths import PROJECT_ROOT, MODELS_DIR  # type: ignore[assignment]
     def apply_default_env_vars(): pass  # type: ignore[misc]
 
 from app.config import get
 from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, cutout, models as models_router_module
 from app.websocket.progress import router as ws_router
 from app.logging_manager import log_manager, setup_logging
+
+
+def parse_cors_origins(value: str | None) -> list[str]:
+    """解析逗号分隔的 CORS 来源；空值表示生产同源部署。"""
+    if value is None:
+        return ["http://127.0.0.1:5173", "http://localhost:5173"]
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
+
+
+def cors_middleware_options(value: str | None) -> dict:
+    """生成 CORS 中间件配置，通配来源时禁止凭据。"""
+    origins = parse_cors_origins(value)
+    wildcard = "*" in origins
+    return {
+        "allow_origins": origins,
+        "allow_credentials": bool(origins) and not wildcard,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
 
 
 @asynccontextmanager
@@ -88,13 +107,9 @@ app = FastAPI(
 )
 
 # CORS 中间件（允许 Electron renderer 访问）
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, **cors_middleware_options(
+    os.environ.get("HIIMAGE_CORS_ORIGINS")
+))
 
 # 注册路由
 app.include_router(system.router, prefix="/api", tags=["system"])

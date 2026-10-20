@@ -1,7 +1,17 @@
 """
 系统路由 - 健康检查、设备检测
 """
+import platform
+import tempfile
+from pathlib import Path
+from typing import Any
+
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+
+from app.config import get
+from core.paths import CONFIG_DIR, CACHE_ROOT, TMP_DIR, OUTPUT_DIR
+from core.utils import default_device_for_platform
 
 router = APIRouter()
 
@@ -9,6 +19,92 @@ router = APIRouter()
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "version": "2.0.0"}
+
+
+def get_runtime_paths() -> dict[str, Path]:
+    return {
+        "config": CONFIG_DIR,
+        "cache": CACHE_ROOT,
+        "tmp": TMP_DIR,
+        "output": OUTPUT_DIR,
+    }
+
+
+def _directory_status(path: Path) -> dict:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=path, prefix=".ready-", delete=True):
+            pass
+        return {"path": str(path), "writable": True}
+    except OSError as exc:
+        return {"path": str(path), "writable": False, "error": str(exc)}
+
+
+def device_availability(
+    device: str,
+    torch_module: Any | None = None,
+) -> tuple[bool, str]:
+    """检查指定计算设备是否可用于推理，并返回不可用原因。"""
+    normalized = device.lower()
+    if normalized == "cpu":
+        return True, ""
+    if normalized not in {"cuda", "mps"}:
+        return False, f"未知计算设备: {device}"
+    if torch_module is None:
+        try:
+            import torch as torch_module
+        except Exception as exc:
+            return (
+                False,
+                f"{normalized.upper()} 不可用：torch 加载失败：{exc}",
+            )
+    try:
+        if normalized == "cuda":
+            available = bool(
+                hasattr(torch_module, "cuda")
+                and torch_module.cuda.is_available()
+            )
+            return (
+                (True, "")
+                if available
+                else (False, "CUDA 不可用：未检测到可用的 NVIDIA GPU")
+            )
+        available = bool(
+            hasattr(torch_module, "backends")
+            and hasattr(torch_module.backends, "mps")
+            and torch_module.backends.mps.is_available()
+        )
+        return (
+            (True, "")
+            if available
+            else (False, "MPS 不可用：需要 Apple Silicon 与可用的 MPS 后端")
+        )
+    except Exception as exc:
+        return False, f"{normalized.upper()} 探测失败：{exc}"
+
+
+@router.get("/ready")
+async def readiness_check():
+    paths = {name: _directory_status(path) for name, path in get_runtime_paths().items()}
+    available = {name: info["writable"] for name, info in paths.items()}
+    default_device = default_device_for_platform()
+    configured_device = str(
+        get("inpaint.default_device", default_device) or default_device
+    ).lower()
+    device_available, device_reason = device_availability(configured_device)
+    ready = all(available.values()) and device_available
+    body = {
+        "status": "ready" if ready else "not_ready",
+        "paths": paths,
+        "platform": platform.system(),
+        "device": {
+            "configured": configured_device,
+            "default": default_device,
+            "available": device_available,
+            "reason": device_reason,
+        },
+    }
+    return JSONResponse(status_code=200 if ready else 503, content=body)
 
 
 @router.get("/devices")

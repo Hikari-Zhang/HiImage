@@ -1,5 +1,7 @@
 # HiImage 系统设计分析与优化建议
 
+> 历史文档：本文审查旧版架构，不描述当前 Web 产品；当前设计见 [系统架构](SYSTEM_ARCHITECTURE.md)。
+>
 > 基于 `SYSTEM_ARCHITECTURE.md` 与 `SCRIPTS_REFERENCE.md` 及核心源码分析。  
 > 文档版本：1.2 · 2026-05-29（在 1.1 基础上追加第二轮审查结果）
 
@@ -493,7 +495,7 @@ executor = ThreadPoolExecutor(max_workers=1)
 2. 解码后的字节数组（原始大小）  
 3. `numpy` 数组（RGB，原始大小 × 3）  
 
-一张 10 MB 的图像在单次请求中峰值内存可超过 50 MB。
+一张 10 MB 的图像在单次请求中峰值内存可超过 20 MB。
 
 **建议：**  
 - 对超过阈值（如 5 MB）的图像改用**文件路径传输**：前端将图像写入临时文件，后端读取文件路径  

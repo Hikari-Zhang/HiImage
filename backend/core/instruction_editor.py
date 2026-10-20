@@ -16,6 +16,7 @@ import cv2
 from typing import Optional
 
 from core.model_checker import resolve_hf_model_path
+from core.utils import resolve_default_device
 
 # 模型 ID 常量
 _MODEL_IDS = {
@@ -42,13 +43,13 @@ class InstructionEditor:
     :param device:    推理设备（'mps' / 'cuda' / 'cpu'）
     """
 
-    def __init__(self, model_key: str = "instruct_pix2pix", device: str = "mps"):
+    def __init__(self, model_key: str = "instruct_pix2pix", device: str | None = None):
         if model_key not in _MODEL_IDS:
             raise ValueError(
                 f"不支持的模型：{model_key}，可选：{list(_MODEL_IDS.keys())}"
             )
         self.model_key = model_key
-        self.device = device
+        self.device = resolve_default_device(device)
         self._pipe = None
 
     # ------------------------------------------------------------------

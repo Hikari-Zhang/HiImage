@@ -5,6 +5,7 @@
 现提取到此处，消除重复代码和反向依赖。
 """
 import asyncio
+import platform
 from typing import Callable
 
 
@@ -26,6 +27,26 @@ def fmt_size(total_bytes: int) -> str:
     elif total_bytes >= 1024:
         return f"{total_bytes / 1024:.0f} KB"
     return f"{total_bytes} B"
+
+
+def default_device_for_platform(
+    system: str | None = None,
+    machine: str | None = None,
+) -> str:
+    """返回平台默认设备：仅 Apple Silicon macOS 默认 MPS。"""
+    current_system = system if system is not None else platform.system()
+    current_machine = machine if machine is not None else platform.machine()
+    is_apple_silicon = current_machine.lower() in {"arm64", "aarch64"}
+    return "mps" if current_system == "Darwin" and is_apple_silicon else "cpu"
+
+
+def resolve_default_device(
+    explicit: str | None = None,
+    system: str | None = None,
+    machine: str | None = None,
+) -> str:
+    """显式设置优先，否则使用平台默认设备。"""
+    return explicit or default_device_for_platform(system, machine)
 
 
 def resolve_effective_device(model_name: str, device: str) -> str:

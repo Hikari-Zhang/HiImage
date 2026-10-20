@@ -13,6 +13,7 @@ import sys
 import numpy as np
 import cv2
 from typing import Optional, Literal
+from core.utils import resolve_default_device
 
 PostMethod = Literal["poisson", "gfpgan", "lama_refine", "none"]
 
@@ -52,7 +53,7 @@ def fix_background(
     inpainted_rgb: np.ndarray,
     mask: np.ndarray,
     method: PostMethod = "poisson",
-    device: str = "mps",
+    device: str | None = None,
 ) -> np.ndarray:
     """
     对 inpainting 结果做后处理修复。
@@ -65,6 +66,7 @@ def fix_background(
     :param iopaint_path:  iopaint 可执行路径（lama_refine 模式使用）
     :return:              处理后的 RGB numpy array
     """
+    device = resolve_default_device(device)
     if method == "none" or method is None:
         return inpainted_rgb
 
@@ -131,7 +133,7 @@ def _poisson_blend(
 
 def _gfpgan_enhance(
     image_rgb: np.ndarray,
-    device: str = "mps",
+    device: str | None = None,
 ) -> np.ndarray:
     """
     使用 GFPGAN 修复整图中的人脸区域。
@@ -224,7 +226,7 @@ def _lama_refine(
     original_rgb: np.ndarray,
     inpainted_rgb: np.ndarray,
     mask: np.ndarray,
-    device: str = "mps",
+    device: str | None = None,
 ) -> np.ndarray:
     """
     用 LaMa 对 inpainting 结果做二次精修：

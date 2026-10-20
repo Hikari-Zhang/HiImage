@@ -11,13 +11,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.routers.inpaint import decode_image, encode_image, check_image_size, ensure_model_ready_with_progress
 from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
-from core.utils import make_progress_callback
+from core.utils import make_progress_callback, resolve_default_device
+from app.config import get
 
 router = APIRouter()
 
@@ -33,7 +34,7 @@ class SynthesisRequest(BaseModel):
     rois: Optional[List[List[int]]] = None # [[x1,y1,x2,y2],...]；None = 全图处理
     mode: str = "background_replace"       # 合成模式 ID
     model_id: str = "rmbg"                 # 模型 ID
-    device: str = "mps"
+    device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     prompt: str = ""                       # SD 系列模型的文字引导（可选）
     task_id: str = ""                      # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
 

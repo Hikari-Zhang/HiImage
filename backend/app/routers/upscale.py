@@ -6,16 +6,53 @@ import os
 
 import cv2
 import numpy as np
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from app.routers.inpaint import decode_image, encode_image, check_image_size
 from app.shared_executor import executor
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from core.image_io import write_image
+from app.config import get
+from core.utils import resolve_default_device
 
 router = APIRouter()
+
+
+def _output_scale(model_name: str, outscale: int | None) -> float:
+    """解析请求实际输出倍率。"""
+    if outscale is not None:
+        return max(1.0, float(outscale))
+    try:
+        from core.model_registry import get_model
+
+        model = get_model(model_name)
+        return max(1.0, float(model.get("outscale", model.get("scale", 4))))
+    except (KeyError, TypeError, ValueError):
+        return 4.0
+
+
+def enforce_output_pixel_budget(
+    image: np.ndarray,
+    model_name: str,
+    outscale: int | None,
+) -> None:
+    """在推理前按输出 RGBA 像素量执行硬限制。"""
+    height, width = image.shape[:2]
+    scale = _output_scale(model_name, outscale)
+    output_bytes = width * height * scale * scale * 4
+    max_mb = int(get("image.max_output_mb", 256))
+    max_bytes = max_mb * 1024 * 1024
+    if output_bytes > max_bytes:
+        estimated_mb = output_bytes / 1024 / 1024
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"预计输出 RGBA {estimated_mb:.1f} MB，超过 {max_mb} MB 限制；"
+                "请降低倍率或使用更小的图片"
+            ),
+        )
 
 
 @router.get("/models/upscale")
@@ -66,7 +103,7 @@ class UpscaleRequest(BaseModel):
     """单张超分辨率请求"""
     image: str  # Base64 encoded
     model: str = "RealESRGAN_x4plus"
-    device: str = "mps"
+    device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     outscale: int | None = None  # 前端覆盖倍率；None 则使用模型默认值
     tile: int | None = None     # 分块大小；0 = 自动计算；None = 使用默认值
     output_path: str | None = None  # 非空时直接保存文件，不返回 base64
@@ -77,7 +114,7 @@ class BatchUpscaleRequest(BaseModel):
     """批量超分辨率请求"""
     images: list[str]  # Base64 编码图片列表，或文件路径列表（当 is_file_path=True 时）
     model: str = "RealESRGAN_x4plus"
-    device: str = "mps"
+    device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     outscale: int | None = None
     tile: int | None = None
     output_dir: str | None = None  # 非空时直接保存文件，返回文件路径而非 base64
@@ -99,6 +136,52 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
     total = len(req.images)
     if total == 0:
         return {"results": [], "summary": {"total": 0, "success": 0, "failed": 0}}
+
+    def _error_message(error: Exception) -> str:
+        if isinstance(error, HTTPException):
+            return str(error.detail)
+        return str(error)
+
+    def _read_item(img_data: str) -> tuple[np.ndarray, str]:
+        if req.is_file_path:
+            file_name = os.path.basename(img_data)
+            image_bgr = cv2.imread(img_data)
+            if image_bgr is None:
+                raise ValueError(f"无法读取图片: {img_data}")
+            return cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB), file_name
+        if check_image_size(img_data):
+            raise ValueError("图像超出大小限制，请压缩后重试")
+        return decode_image(img_data), ""
+
+    # 在加载模型和执行任何推理前预检全部图片，避免高压缩大尺寸图片绕过限制。
+    results_by_index: list[dict | None] = [None] * total
+    valid_indices: list[int] = []
+    for idx, img_data in enumerate(req.images):
+        file_name = os.path.basename(img_data) if req.is_file_path else f"image_{idx + 1}.png"
+        preflight_image = None
+        try:
+            preflight_image, read_file_name = _read_item(img_data)
+            if read_file_name:
+                file_name = read_file_name
+            enforce_output_pixel_budget(preflight_image, req.model, req.outscale)
+            valid_indices.append(idx)
+        except Exception as error:
+            results_by_index[idx] = {
+                "index": idx,
+                "status": "error",
+                "error": f"预检失败: {_error_message(error)}",
+                "fileName": file_name,
+            }
+        finally:
+            if preflight_image is not None:
+                del preflight_image
+
+    failed_count = total - len(valid_indices)
+    if not valid_indices:
+        return {
+            "results": [result for result in results_by_index if result is not None],
+            "summary": {"total": total, "success": 0, "failed": failed_count},
+        }
 
     log_manager.info(
         f"开始批量超分辨率: 共 {total} 张, model={req.model}, device={req.device}",
@@ -124,36 +207,29 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
         log_manager.error(f"批量超分模型加载失败: {e}", source="upscale_batch")
         raise RuntimeError(f"模型加载失败: {e}")
 
-    results = []
     success_count = 0
-    failed_count = 0
 
-    for idx, img_data in enumerate(req.images):
+    for idx in valid_indices:
+        img_data = req.images[idx]
         current = idx + 1
         file_name = f"image_{current}.png"  # 默认值
-        # 读取图片
+        image = None
+        # 正式处理仍独立读取并校验；所有异常只影响当前项。
         try:
-            if req.is_file_path:
-                # Electron 模式：直接读取文件
-                file_path = img_data
-                file_name = os.path.basename(file_path)
-                img_bgr = cv2.imread(file_path)
-                if img_bgr is None:
-                    raise ValueError(f"无法读取图片: {file_path}")
-                image = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            else:
-                # Web 模式：Base64 解码（先做尺寸预检）
-                if check_image_size(img_data):
-                    raise ValueError("图像超出大小限制，请压缩后重试")
-                image = decode_image(img_data)
-        except Exception as e:
+            image, read_file_name = _read_item(img_data)
+            if read_file_name:
+                file_name = read_file_name
+            enforce_output_pixel_budget(image, req.model, req.outscale)
+        except Exception as error:
             failed_count += 1
-            results.append({
+            results_by_index[idx] = {
                 "index": idx,
                 "status": "error",
-                "error": f"读取图片失败: {str(e)}",
+                "error": f"读取图片失败: {_error_message(error)}",
                 "fileName": file_name,
-            })
+            }
+            if image is not None:
+                del image
             continue
 
         h_in, w_in = image.shape[:2]
@@ -182,34 +258,34 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
                 write_image(out_path, result_bgr)
                 # 释放 result
                 del result_rgb
-                results.append({
+                results_by_index[idx] = {
                     "index": idx,
                     "status": "success",
                     "outputPath": out_path,
                     "width": w_out,
                     "height": h_out,
                     "fileName": file_name,
-                })
+                }
             else:
-                results.append({
+                results_by_index[idx] = {
                     "index": idx,
                     "status": "success",
                     "image": encode_image(result_rgb),
                     "width": w_out,
                     "height": h_out,
                     "fileName": file_name,
-                })
+                }
                 # 释放 result
                 del result_rgb
             success_count += 1
         except Exception as e:
             failed_count += 1
-            results.append({
+            results_by_index[idx] = {
                 "index": idx,
                 "status": "error",
                 "error": str(e),
                 "fileName": file_name,
-            })
+            }
             # 异常时也释放 image
             if 'image' in locals():
                 del image
@@ -229,7 +305,7 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
     log_manager.info(f"批量超分完成，已释放模型显存", source="upscale_batch")
 
     return {
-        "results": results,
+        "results": [result for result in results_by_index if result is not None],
         "summary": {
             "total": total,
             "success": success_count,
@@ -247,6 +323,7 @@ async def upscale_image(req: UpscaleRequest):
         return err
 
     image = decode_image(req.image)
+    enforce_output_pixel_budget(image, req.model, req.outscale)
     h_in, w_in = image.shape[:2]
     log_manager.info(
         f"开始超分辨率: model={req.model}, device={req.device}, outscale={req.outscale}, input={w_in}x{h_in}",

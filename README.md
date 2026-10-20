@@ -1,205 +1,126 @@
 # HiImage
 
-AI 驱动的图像处理桌面工具，基于 Electron + React + FastAPI 构建。
+HiImage 是面向浏览器的 AI 图像处理 Web 应用，提供去水印、超分辨率、抠图、智能合成、模型管理和实时日志。React/Vite 前端通过 HTTP、WebSocket 与 SSE 访问 FastAPI；生产环境由 Nginx 提供静态资源并把 `/api/` 同源代理到后端。
 
-## 功能一览
+## 运行边界
 
-| 功能 | 说明 |
-|------|------|
-| **去水印** | 框选水印区域，AI 修复，支持 30+ 模型（快速模型无需下载，扩散模型首次自动下载） |
-| **超分辨率** | Real-ESRGAN 2x/4x 放大，支持通用/精细化/动漫三类模型，**支持批量处理** |
-| **智能合成** | 7 种模式：换背景 / 换装 / 换脸 / 虚拟试穿 / 精准替换 / 智能定位 / 自由编辑 |
-| **批量处理** | 一次性导入多张图片，逐张处理，实时显示进度，支持 Electron 直接读取本地文件 |
+- 当前部署目标是可信局域网内的单用户实例，不含账号和租户隔离。
+- 本地开发与 Docker 默认只监听 `127.0.0.1`。
+- 暴露到公网前必须另行配置身份认证、TLS、请求限流、上传策略和审计；不要直接映射现有服务。
+- 浏览器批量队列最多 100 张图片，单文件最多 20 MB、输入总量最多 128 MB；前后端按 `宽 × 高 × 倍率² × 4` 限制预计输出 RGBA 为 256 MB，浏览器累计结果也限制为 256 MB。ZIP 另设 64 MB 上限，每个成功结果均可逐张下载。后端单请求解码后限制为 30 MB。图片解码、Base64、预览、结果与 ZIP 会产生额外内存，不提供流式 ZIP。
 
----
+## 环境要求
 
-## 快速开始
+- Node.js 22（容器构建使用 `node:22-alpine`）
+- Python 3.10+，推荐 3.11/3.12
+- npm
+- 可选：Docker + Docker Compose v2
+- 可选：NVIDIA 驱动与 NVIDIA Container Toolkit（GPU 容器）
 
-### 环境要求
+MPS 仅适用于直接在 Apple Silicon macOS 上本地运行后端，并只在该平台默认启用；Intel Mac 默认使用 CPU，Linux 容器不提供 MPS。
 
-- **Python** 3.9+（推荐 3.11）
-- **Node.js** v18+（推荐 v24，nvm 管理）
-- **操作系统** macOS / Windows / Linux
-- **加速**（可选）：Apple Silicon MPS / NVIDIA CUDA
-
-### 安装
+## 本地开发
 
 ```bash
-git clone <repo-url> HiImage
-cd HiImage
-
-# 后端依赖
-cd backend
-pip install -r requirements-locked.txt
-
-# 前端依赖
-cd ../frontend
-npm install
-```
-
-### 开发模式
-
-```bash
-cd frontend
+npm run setup
 npm run dev
-# → Vite dev server @ http://localhost:5173
-# → FastAPI backend 自动管理生命周期
 ```
 
-### 生产构建
+`setup` 安装根目录、前端和 Python 环境依赖；`dev` 启动 FastAPI（默认 `127.0.0.1:8787`）与 Vite（默认 `127.0.0.1:5173`）。浏览器开发请求通过 Vite 代理访问后端。
+
+常用命令：
 
 ```bash
-cd frontend
-npm run build     # 输出 frontend/dist/
-npm run package   # 打包 Electron 应用（.dmg / .exe）
+npm run dev:check       # 只检查环境和启动命令，不启动服务
+npm run backend:dev     # 只启动后端
+npm run frontend:dev    # 只启动 Vite
+npm run typecheck
+npm test
 ```
 
-> **注**：macOS 打包需要 Apple Developer Program 证书（$99/年），否则无法分发给他人的。
-> 开发模式下无需签名，直接 `npm run dev` 即可使用全部功能。
+## 构建与预览
 
----
-
-## 使用指南
-
-### 去水印
-
-1. 打开图片（拖拽或文件对话框，支持 PNG/JPG/BMP/WebP/TIFF）
-2. 在画布上框选水印区域（支持多个 ROI，可缩放/平移画布）
-3. 选择模型（快速模型推荐 LaMa；文字水印用 AnyText）
-4. 点击「开始处理」，实时查看进度
-5. 对比原图与结果，保存为 PNG/JPG
-
-**快速模型（无需下载）**：LaMa（推荐通用）/ MiGAN / ZITS / FCF / MAT / LDM / Manga / CV2
-
-**扩散模型（首次自动下载）**：AnyText / PowerPaint V1 / SD 1.5 Inpainting / Realistic Vision / DreamShaper / Anything V4 / SDXL Inpainting
-
-### 超分辨率
-
-#### 单张处理
-
-1. 打开图片
-2. 选择放大倍率（2x / 4x）和模型
-3. 点击「开始处理」
-4. 预览对比结果并保存
-
-#### 批量处理
-
-1. 切换到「批量模式」
-2. 点击「添加」或拖拽文件夹，一次性导入多张图片
-3. 选择输出目录
-4. 点击「开始批量处理」
-5. 实时查看每张图片的处理进度，完成后结果保存在输出目录
-
-> 批量模式支持虚拟滚动，导入 10,000+ 张图片也不会卡死。
-
-**模型选择建议：**
-
-| 类别 | 推荐模型 | 适用场景 |
-|------|----------|----------|
-| 通用 | RealESRGAN_x4plus | 通用照片 |
-| 精细化增强 | realesr-general-x4v3 | 去噪+去模糊+放大（仅 17MB） |
-| 动漫/插画 | RealESRGAN_x4plus_anime_6B | 线条锐利（仅 18MB） |
-
-### 智能合成
-
-支持 7 种模式：
-
-| 模式 | 说明 |
-|------|------|
-| 换背景 | 上传背景图，自动抠图合成 |
-| 换装模拟 | 上传服装图，试穿效果 |
-| 换脸模拟 | 上传目标脸，合成到原图 |
-| 虚拟试穿 | 综合换装 + 换背景 |
-| 精准替换 | 框选 ROI + 文字描述，按描述重绘 |
-| 智能定位编辑 | 输入中文指令（如"将上衣换成红色"） |
-| 自由编辑 | 自然语言指令全图语义编辑 |
-
-### 设置页
-
-- **连接方式**：本地启动（自动管理后端进程）/ 远程连接（输入 IP + 端口）
-- **计算设备**：CPU / MPS（Apple Silicon）/ CUDA（NVIDIA）
-- **内存优化**：低内存模式（推荐开启）、CPU 显存卸载、Text Encoder CPU 运行
-- **网络**：HuggingFace Endpoint（国内填 `https://hf-mirror.com` 加速）、HF Token
-
----
-
-## 技术架构
-
-```
-HiImage/
-├── backend/                  # Python FastAPI 后端
-│   ├── app/
-│   │   ├── main.py          # FastAPI 入口
-│   │   ├── routers/         # API 路由（inpaint / upscale / synthesis / settings / logs / system）
-│   │   └── websocket/      # 进度推送 WebSocket
-│   └── core/               # AI 推理核心
-│       ├── inpainter.py     # IOPaint 调用封装
-│       ├── upscaler.py      # Real-ESRGAN 超分辨率
-│       ├── synthesizer.py    # 智能合成核心
-│       └── model_registry.py # 模型注册表（models.yaml 驱动）
-├── frontend/                # Electron + React 前端
-│   ├── src/
-│   │   ├── main/           # Electron 主进程（后端进程管理）
-│   │   ├── preload/        # IPC 桥接
-│   │   └── renderer/       # React 渲染进程
-│   │       ├── pages/       # 页面组件
-│   │       ├── components/  # 复用组件
-│   │       ├── stores/      # Zustand 状态管理
-│   │       └── hooks/       # 自定义 Hooks
-│   └── electron.vite.config.ts
-├── config/settings.json     # 用户配置（不在 git 中）
-├── models/                 # AI 模型文件（自动下载，.gitignore）
-├── output/                 # 处理结果输出目录
-└── docs/PRD.md            # 产品需求文档
+```bash
+npm run build           # 生成 frontend/dist
+npm run preview         # 构建后启动本地后端与 Vite preview
 ```
 
-| 层级 | 技术栈 |
-|------|----------|
-| 前端 | Electron + React 18 + TypeScript + Vite |
-| 状态管理 | Zustand |
-| UI | Tailwind CSS（暗色主题）+ Lucide React 图标 |
-| 画布 | Konva.js（ROI 区域绘制） |
-| 后端 | FastAPI + Uvicorn |
-| AI 推理 | IOPaint / Real-ESRGAN / rembg / GFPGAN |
-| 打包 | electron-builder |
+`npm start` 与 `npm run preview` 使用同一预览模式。生产部署应使用 Nginx 容器，不把 Vite preview 当作生产服务器。
 
----
+## Docker
 
-## 硬件要求
+CPU 是默认栈：
 
-| 场景 | 最低配置 | 推荐配置 |
-|------|----------|----------|
-| 快速模型（LaMa 等） | 2GB 内存 | 4GB 内存 |
-| 扩散模型（SD 等） | 8GB 内存 | 16GB 内存（开启低内存模式可减半） |
-| Real-ESRGAN 4x | 4GB 内存 | 8GB 内存 |
+```bash
+docker compose up --build
+```
 
-### Apple Silicon Mac 优化
+访问 <http://127.0.0.1:8080>。GPU 栈必须明确选择 profile 和服务，避免同时启动 CPU 栈：
 
-- 选择 MPS 设备可获得显著加速
-- 开启「低内存模式」可大幅降低统一内存占用
+```bash
+docker compose --profile gpu up --build backend-gpu web-gpu
+```
 
----
+更改本地绑定可设置：
 
-## 常见问题
+```bash
+WEB_HOST=192.168.1.10 WEB_PORT=8080 docker compose up --build
+```
 
-**Q：模型下载速度慢？**
+Windows PowerShell：
 
-A：在设置页将 `network.hf_endpoint` 修改为 `https://hf-mirror.com`。
+```powershell
+$env:WEB_HOST="192.168.1.10"
+$env:WEB_PORT="8080"
+docker compose up --build
+```
 
-**Q：处理时出现 "Out of Memory" 错误？**
+仅应绑定可信局域网地址。后端不发布主机端口，只通过 Nginx 同源代理访问。
 
-A：开启设置页的「低内存模式」，或进一步开启「CPU 显存卸载」。
+### 卷与环境变量
 
-**Q：后端启动失败，提示 "Address already in use"？**
+CPU 与 GPU 栈使用彼此独立的命名卷，分别持久化：
 
-A：端口 8787 被占用。在设置页修改 IOPaint 端口，或手动清理占用进程。
+- `/app/config`：设置
+- `/app/cache`：Hugging Face、PyTorch 等缓存
+- `/app/tmp`：临时文件
+- `/app/output`：处理结果
+- `/app/models`：模型权重
 
----
+后端容器设置 `HIIMAGE_PROJECT_ROOT`、`HIIMAGE_CONFIG_DIR`、`HIIMAGE_CACHE`、`HIIMAGE_TMP_DIR`、`HIIMAGE_OUTPUT_DIR`、`HIIMAGE_MODELS_DIR`。`HIIMAGE_CORS_ORIGINS` 默认为空，表示生产同源部署不开放跨域。
+
+## 验证
+
+```bash
+npm test
+npm run typecheck
+npm run build
+python scripts/check_docker_config.py --static-only
+python scripts/check_docs.py
+python scripts/smoke_web.py --check
+```
+
+Docker 可用时执行规范化 Compose 验证：
+
+```bash
+python scripts/check_docker_config.py
+```
+
+对已运行的 Web 服务执行真实 smoke（检查首页、健康接口、SPA 回退和 WebSocket 代理）：
+
+```bash
+python scripts/smoke_web.py --url http://127.0.0.1:8080
+```
+
+`--check` 只校验 smoke 参数与目标，不接触服务，不能代表运行态通过。Docker 不可用时只能报告静态检查结果。
+
+## 架构与文档
+
+- [系统架构](docs/SYSTEM_ARCHITECTURE.md)
+- [系统设计](docs/system-design.md)
+- [产品需求](docs/PRD.md)
+- [脚本参考](docs/SCRIPTS_REFERENCE.md)
 
 ## 许可证
 
-MIT License
-
----
-
-Made with ❤️ by Hikari
+MIT

@@ -18,6 +18,7 @@
 2026-05-14: 临时禁用 image_restoration 模式（Restormer 架构通道不匹配问题待修复）
 """
 from __future__ import annotations
+from core.utils import resolve_default_device
 
 import cv2
 import numpy as np
@@ -53,13 +54,13 @@ class Synthesizer:
         self,
         mode: str,
         model_id: str,
-        device: str = "mps",
+        device: str | None = None,
         prompt: str = "",
         progress_callback=None,
     ):
         self.mode = mode
         self.model_id = model_id
-        self.device = device
+        self.device = resolve_default_device(device)
         self.prompt = prompt
         self.progress_callback = progress_callback
 

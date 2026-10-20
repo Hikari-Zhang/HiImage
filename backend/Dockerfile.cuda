@@ -1,0 +1,61 @@
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+ARG FLUX_DIFFUSERS_VERSION=0.32.2
+ARG FLUX_TRANSFORMERS_VERSION=4.47.1
+ARG FLUX_HUGGINGFACE_HUB_VERSION=0.27.1
+ARG FLUX_PEFT_VERSION=0.14.0
+ARG TORCH_CONSTRAINT=torch==2.5.1
+ARG TORCHVISION_CONSTRAINT=torchvision==0.20.1
+ARG TORCHAUDIO_CONSTRAINT=torchaudio==2.5.1
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HIIMAGE_PROJECT_ROOT=/app \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+WORKDIR /app/backend
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The official runtime already contains the CUDA-matched torch stack.
+COPY backend/requirements.txt /tmp/requirements.txt
+RUN printf '%s\n' \
+        "${TORCH_CONSTRAINT}" \
+        "${TORCHVISION_CONSTRAINT}" \
+        "${TORCHAUDIO_CONSTRAINT}" \
+        > /tmp/constraints.txt \
+    && python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install -c /tmp/constraints.txt -r /tmp/requirements.txt \
+    && python -m pip install --no-deps \
+        "diffusers==${FLUX_DIFFUSERS_VERSION}" \
+        "transformers==${FLUX_TRANSFORMERS_VERSION}" \
+        "huggingface-hub==${FLUX_HUGGINGFACE_HUB_VERSION}" \
+        "peft==${FLUX_PEFT_VERSION}"
+
+COPY scripts/post_install.py /app/scripts/post_install.py
+RUN python /app/scripts/post_install.py
+
+COPY backend/ /app/backend/
+
+RUN groupadd --gid 10001 hiimage \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin hiimage \
+    && mkdir -p /app/config /app/cache /app/tmp /app/output /app/models \
+    && chown -R hiimage:hiimage /app /home/hiimage
+
+USER hiimage
+
+EXPOSE 8787
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=120s \
+    CMD curl -fsS http://127.0.0.1:8787/api/health || exit 1
+
+CMD ["python", "run.py", "--host", "0.0.0.0", "--port", "8787"]

@@ -1,7 +1,7 @@
 # ==============================================================
 # HiImage Backend - Fully Pinned Requirements (macOS ARM64 / MPS)
 #
-# Platform: macOS ARM64 (Apple Silicon), Python 3.9
+# Platform: macOS ARM64 (Apple Silicon), Python 3.10+
 # Device:   Apple MPS
 #
 # Install:

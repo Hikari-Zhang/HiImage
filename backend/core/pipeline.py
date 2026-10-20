@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, fields
 from typing import List, Optional, Tuple
 
 from core.model_registry import get_default_model
+from core.utils import default_device_for_platform
 
 
 # ──────────────────────────────────────────────────────────────
@@ -28,7 +29,7 @@ from core.model_registry import get_default_model
 @dataclass
 class InpaintStep:
     model: str = field(default_factory=lambda: get_default_model("watermark_removal"))
-    device: str = "mps"
+    device: str = field(default_factory=default_device_for_platform)
     dilation: int = 10
     disable_nsfw: bool = False
 
@@ -36,14 +37,14 @@ class InpaintStep:
 @dataclass
 class PostprocessStep:
     method: str = "none"       # none / poisson / gfpgan / lama_refine
-    device: str = "mps"
+    device: str = field(default_factory=default_device_for_platform)
     enabled: bool = True
 
 
 @dataclass
 class UpscaleStep:
     model: str = "RealESRGAN_x4plus"
-    device: str = "mps"
+    device: str = field(default_factory=default_device_for_platform)
     enabled: bool = False
 
 

@@ -8,9 +8,20 @@ from typing import Any
 
 # 项目根目录（backend/ 的上级）
 # 使用 core.paths 中的定义（单一数据源）
-from core.paths import PROJECT_ROOT, MODELS_DIR
+from core.paths import CONFIG_DIR, CONFIG_PATH
+from core.utils import default_device_for_platform
 
-CONFIG_PATH = os.path.join(PROJECT_ROOT, "config", "settings.json")
+
+def configured_default_device(
+    system: str | None = None,
+    machine: str | None = None,
+) -> str:
+    """优先读取有效环境默认设备，否则使用平台默认值。"""
+    environment_device = os.getenv("HIIMAGE_DEFAULT_DEVICE", "").strip().lower()
+    if environment_device in {"cpu", "cuda", "mps"}:
+        return environment_device
+    return default_device_for_platform(system, machine)
+
 
 # 默认值
 DEFAULTS = {
@@ -21,7 +32,8 @@ DEFAULTS = {
     "server.cpu_offload": False,
     "server.cpu_textencoder": False,
     "inpaint.default_dilation": 10,
-    "inpaint.default_device": "mps",
+    "inpaint.default_device": configured_default_device(),
+    "image.max_output_mb": 256,
     "network.hf_endpoint": "https://huggingface.com",
     "network.hf_token": "",
     "download.max_concurrent": 3,
@@ -88,7 +100,7 @@ def save(settings: dict) -> None:
         else:
             nested[key] = value
 
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+    os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(nested, f, indent=2, ensure_ascii=False)
 
