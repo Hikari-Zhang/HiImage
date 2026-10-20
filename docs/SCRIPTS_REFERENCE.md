@@ -86,7 +86,7 @@ node scripts/python.js -m pytest tests backend/tests
 
 ### `scripts/check_docker_config.py`
 
-验证 Dockerfile、Nginx 和 Compose 不变量。Docker 不可用时只运行静态检查：
+验证 Dockerfile、Nginx 和 Compose 不变量。静态检查同时要求 `.env.example` 与 Compose 将 `HIIMAGE_MAX_PENDING_INFERENCE` 设为默认 `4`（允许范围由后端限制为 `0-32`）、将 `HIIMAGE_WS_ORIGINS` 设为空值同源模式；`.env.example` 中 `HIIMAGE_TRUST_PROXY_HEADERS=false`，Docker 后端设为 `true`，且 Nginx 必须覆盖转发头。Docker 不可用时只运行静态检查：
 
 ```bash
 python scripts/check_docker_config.py --static-only
@@ -102,7 +102,13 @@ python scripts/check_docker_config.py
 
 ### `scripts/check_docs.py`
 
-检查活跃文档的本地链接、`npm run` 命令和 Web 产品定位：
+检查活跃文档的本地链接、`npm run` 命令、Web 产品定位和第一阶段安全契约。它会拒绝服务器路径模式、全局匿名进度、HF token 明文读取和无界执行器等旧描述，并要求文档保留以下事实：
+
+- 浏览器仅上传内容，推理请求 `task_id` 必填且按任务订阅进度；
+- HF token GET 脱敏、非空替换、`clear_hf_token` 显式清除；
+- WebSocket Origin 的未设置/空值/逗号白名单三态语义；
+- 单进程 1 执行 + 默认 4 等待、满载 `429` 和 `/api/ready` 快照；
+- LAN 无用户认证，第一阶段不等价于公网安全。
 
 ```bash
 python scripts/check_docs.py

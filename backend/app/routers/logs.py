@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 from app.logging_manager import log_manager
+from app.websocket.origin import require_websocket_origin
 
 router = APIRouter()
 
@@ -40,9 +41,13 @@ async def clear_logs():
 @router.websocket("/ws/logs")
 async def websocket_logs(ws: WebSocket):
     """WebSocket 实时日志推送"""
+    if not await require_websocket_origin(ws):
+        return
     await log_manager.ws_connect(ws)
     try:
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         log_manager.ws_disconnect(ws)

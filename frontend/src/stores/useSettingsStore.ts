@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createApiClient } from '../services/apiClient'
-import { saveSettingsRequest } from '../services/settingsService'
+import { clearHfTokenRequest, saveSettingsRequest } from '../services/settingsService'
 
 interface SettingsState {
   // Global
@@ -37,6 +37,7 @@ interface SettingsState {
   // Network
   hfEndpoint: string
   hfToken: string
+  hfTokenConfigured: boolean
   githubMirror: string
 
   // Download
@@ -60,6 +61,7 @@ interface SettingsState {
   setSettings: (settings: Partial<SettingsState>) => void
   loadSettings: (backendURL: string) => Promise<void>
   saveSettings: (backendURL: string) => Promise<void>
+  clearHfToken: (backendURL: string) => Promise<void>
   loadDefaults: (backendURL: string) => Promise<void>  // 从后端加载默认模型配置
 }
 
@@ -83,6 +85,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   cpuTextencoder: false,
   hfEndpoint: 'https://huggingface.com',
   hfToken: '',
+  hfTokenConfigured: false,
   githubMirror: '',
   downloadMaxConcurrent: 3,
   isLoading: false,
@@ -124,7 +127,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         keepaliveSeconds: data.server_keepalive ?? 300,
         startupTimeout: data.server_startup_timeout ?? 1800,
         hfEndpoint: data.hf_endpoint ?? 'https://huggingface.com',
-        hfToken: data.hf_token ?? '',
+        hfToken: '',
+        hfTokenConfigured: data.hf_token_configured ?? false,
         githubMirror: data.github_mirror ?? '',
         defaultDilation: data.default_dilation ?? 10,
         disableNsfw: data.disable_nsfw ?? true,
@@ -145,13 +149,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   saveSettings: async (backendURL) => {
     const state = get()
     try {
-      await saveSettingsRequest(createApiClient(backendURL), {
+      const payload: Record<string, unknown> = {
           device: state.device,
           server_port: state.serverPort,
           server_keepalive: state.keepaliveSeconds,
           server_startup_timeout: state.startupTimeout,
           hf_endpoint: state.hfEndpoint,
-          hf_token: state.hfToken,
           github_mirror: state.githubMirror,
           default_dilation: state.defaultDilation,
           disable_nsfw: state.disableNsfw,
@@ -160,9 +163,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           cpu_textencoder: state.cpuTextencoder,
           download_max_concurrent: state.downloadMaxConcurrent,
           upscale_tile: state.upscaleTile,
-      })
+      }
+      if (state.hfToken.trim()) payload.hf_token = state.hfToken.trim()
+      await saveSettingsRequest(createApiClient(backendURL), payload)
+      if (state.hfToken.trim()) {
+        set({ hfToken: '', hfTokenConfigured: true })
+      }
     } catch (err) {
       console.error('Failed to save settings:', err)
+      throw err
+    }
+  },
+
+  clearHfToken: async (backendURL) => {
+    try {
+      await clearHfTokenRequest(createApiClient(backendURL))
+      set({ hfToken: '', hfTokenConfigured: false })
+    } catch (err) {
+      console.error('Failed to clear HuggingFace token:', err)
       throw err
     }
   },

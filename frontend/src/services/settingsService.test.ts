@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { saveSettingsRequest } from './settingsService'
+import { clearHfTokenRequest, saveSettingsRequest } from './settingsService'
 
 describe('saveSettingsRequest', () => {
   it('throws the backend error when the response is not successful', async () => {
@@ -11,5 +11,19 @@ describe('saveSettingsRequest', () => {
     }
 
     await expect(saveSettingsRequest(client, { device: 'bad' })).rejects.toThrow('设备配置无效')
+  })
+
+  it('uses the explicit clear flag when deleting a configured token', async () => {
+    let body = ''
+    const client = {
+      fetch: async (_path: string, init?: RequestInit) => {
+        body = String(init?.body)
+        return new Response(JSON.stringify({ status: 'ok' }))
+      },
+    }
+
+    await clearHfTokenRequest(client)
+
+    expect(JSON.parse(body)).toEqual({ clear_hf_token: true })
   })
 })

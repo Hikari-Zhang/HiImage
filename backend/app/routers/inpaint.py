@@ -8,12 +8,13 @@ from typing import List, Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import get
-from app.shared_executor import executor
+from app.shared_executor import inference_admission, inference_scheduler
+from app.task_id import TaskId
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from core.model_registry import get_default_model
@@ -25,7 +26,7 @@ router = APIRouter()
 # ============ 模型检查辅助函数 ============
 
 async def ensure_model_ready_with_progress(
-    model_id: str, operation_name: str, task_id: str = "", source: str = "inpaint"
+    model_id: str, operation_name: str, task_id: TaskId, source: str = "inpaint"
 ) -> tuple[bool, str]:
     """
     检查并确保模型已下载，支持进度推送。
@@ -69,6 +70,7 @@ async def ensure_model_ready_with_progress(
 class DetectRequest(BaseModel):
     image: str  # Base64 encoded PNG/JPG
     sensitivity: float = 0.5
+    task_id: TaskId
 
 
 class InpaintRequest(BaseModel):
@@ -78,7 +80,7 @@ class InpaintRequest(BaseModel):
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     dilation: int = 10
     disable_nsfw: bool = False
-    task_id: str = ""  # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
+    task_id: TaskId
 
 
 class InpaintWithMaskRequest(BaseModel):
@@ -88,7 +90,7 @@ class InpaintWithMaskRequest(BaseModel):
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     dilation: int = 10
     disable_nsfw: bool = False
-    task_id: str = ""  # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
+    task_id: TaskId
 
 
 # ============ Helper Functions ============
@@ -209,7 +211,7 @@ async def get_inpaint_models():
     }
 
 
-@router.post("/detect")
+@router.post("/detect", dependencies=[Depends(inference_admission)])
 async def detect_watermark(req: DetectRequest):
     """自动检测水印区域"""
     from core.watermark_detector import WatermarkDetector
@@ -224,8 +226,7 @@ async def detect_watermark(req: DetectRequest):
         detector = WatermarkDetector(sensitivity=req.sensitivity)
         return detector.detect(image)
 
-    loop = asyncio.get_running_loop()
-    regions = await loop.run_in_executor(executor, _detect)
+    regions = await inference_scheduler.run_blocking(_detect)
 
     log_manager.info(f"水印检测完成，发现 {len(regions)} 个区域", source="inpaint")
     return {
@@ -233,7 +234,7 @@ async def detect_watermark(req: DetectRequest):
     }
 
 
-@router.post("/inpaint")
+@router.post("/inpaint", dependencies=[Depends(inference_admission)])
 async def inpaint_with_rois(req: InpaintRequest):
     """使用 ROI 列表去除水印"""
     if (err := check_image_size(req.image)):
@@ -285,7 +286,7 @@ async def inpaint_with_rois(req: InpaintRequest):
     await progress_manager.send_progress(20, "正在处理...", task_id=req.task_id)
 
     try:
-        result = await loop.run_in_executor(executor, _process)
+        result = await inference_scheduler.run_blocking(_process)
         await progress_manager.send_complete(task_id=req.task_id)
         log_manager.info("水印去除完成", source="inpaint")
         return {"image": encode_image(result)}
@@ -297,7 +298,7 @@ async def inpaint_with_rois(req: InpaintRequest):
         return JSONResponse(status_code=422, content={"detail": err_str, "message": first_line})
 
 
-@router.post("/inpaint/with-mask")
+@router.post("/inpaint/with-mask", dependencies=[Depends(inference_admission)])
 async def inpaint_with_mask(req: InpaintWithMaskRequest):
     """使用自定义掩码去除水印"""
     if (err := check_image_size(req.image)):
@@ -341,7 +342,7 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
     await progress_manager.send_progress(20, "正在处理...", task_id=req.task_id)
 
     try:
-        result = await loop.run_in_executor(executor, _process)
+        result = await inference_scheduler.run_blocking(_process)
         await progress_manager.send_complete(task_id=req.task_id)
         log_manager.info("掩码修复完成", source="inpaint")
         return {"image": encode_image(result)}

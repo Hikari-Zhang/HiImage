@@ -13,7 +13,7 @@ import ModelSelect from '../components/ModelSelect/ModelSelect'
 import PageHeader from '../components/layout/PageHeader'
 import { useCutoutStore } from '../stores/useCutoutStore'
 import type { CutoutBrushMode } from '../stores/useCutoutStore'
-import { useProcessStore } from '../stores/useProcessStore'
+import { isCurrentTask, useProcessStore } from '../stores/useProcessStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
@@ -26,6 +26,8 @@ import type { ModelGroup } from '../components/ModelSelect/ModelSelect'
 import type { MaskStroke } from '../types/mask'
 import { POINT_SAMPLE_RATIO } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
+import { createTaskId } from '../services/taskId'
+import { createTaskProgressSession } from '../services/taskProgress'
 
 // ── 棋盘格背景样式 ────────────────────────────────────────────────────────
 const CHECKERBOARD_STYLE = {
@@ -367,21 +369,26 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       startDownload(cutoutModel)
       return
     }
-    startProcess(cutoutModel)
+    const taskId = createTaskId()
+    const session = createTaskProgressSession(taskId)
+    startProcess(cutoutModel, taskId)
     setCompositeResult(null)
     clearBrushStrokes()
 
     try {
-      const result = await cutout({
+      const result = await session.run((requestTaskId) => cutout({
         image: sourceImage,
         model: cutoutModel,
         device,
-      })
+        task_id: requestTaskId,
+      }))
+      if (!isCurrentTask(taskId)) return
       setResult(result.image, result.mask)
-      finishProcess('抠图完成')
+      finishProcess(taskId, '抠图完成')
       showToast('success', '抠图完成！')
     } catch (err: any) {
-      setError(err.message || '抠图失败')
+      if (!isCurrentTask(taskId)) return
+      setError(taskId, err.message || '抠图失败')
       showToast('error', err.message || '抠图失败')
     }
   }, [sourceImage, cutoutModel, device, modelReady, startDownload, cutout, setResult, startProcess, finishProcess, setError, clearBrushStrokes])
@@ -390,30 +397,36 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
   const handleRefine = useCallback(async () => {
     if (!resultMask || !sourceImage) return
 
-    startProcess('refine')
+    const taskId = createTaskId()
+    const session = createTaskProgressSession(taskId)
+    startProcess('refine', taskId)
     try {
-      const addMask = generateBrushMask(
-        brushStrokes.filter(s => s.tool === 'add_fg'),
-        imageWidth, imageHeight,
-      )
-      const removeMask = generateBrushMask(
-        brushStrokes.filter(s => s.tool === 'remove_fg'),
-        imageWidth, imageHeight,
-      )
-
-      const result = await cutoutRefine({
-        mask: resultMask,
-        original_image: sourceImage,
-        feather,
-        dilate,
-        brush_add: addMask || undefined,
-        brush_remove: removeMask || undefined,
+      const result = await session.run((requestTaskId) => {
+        const addMask = generateBrushMask(
+          brushStrokes.filter(s => s.tool === 'add_fg'),
+          imageWidth, imageHeight,
+        )
+        const removeMask = generateBrushMask(
+          brushStrokes.filter(s => s.tool === 'remove_fg'),
+          imageWidth, imageHeight,
+        )
+        return cutoutRefine({
+          mask: resultMask,
+          original_image: sourceImage,
+          feather,
+          dilate,
+          brush_add: addMask || undefined,
+          brush_remove: removeMask || undefined,
+          task_id: requestTaskId,
+        })
       })
+      if (!isCurrentTask(taskId)) return
       setResult(result.image, result.mask)
-      finishProcess('精修完成')
+      finishProcess(taskId, '精修完成')
       showToast('success', '边缘精修完成！')
     } catch (err: any) {
-      setError(err.message || '精修失败')
+      if (!isCurrentTask(taskId)) return
+      setError(taskId, err.message || '精修失败')
       showToast('error', err.message || '精修失败')
     }
   }, [resultMask, sourceImage, feather, dilate, brushStrokes, imageWidth, imageHeight, cutoutRefine, setResult, startProcess, finishProcess, setError])
@@ -421,17 +434,25 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
   // ── 合成到背景色 ──
   const handleComposite = useCallback(async () => {
     if (!resultImage) return
+    const taskId = createTaskId()
+    const session = createTaskProgressSession(taskId)
+    startProcess('composite', taskId)
     try {
-      const result = await cutoutComposite({
+      const result = await session.run((requestTaskId) => cutoutComposite({
         image: resultImage,
         background_color: bgColor,
-      })
+        task_id: requestTaskId,
+      }))
+      if (!isCurrentTask(taskId)) return
       setCompositeResult(result.image)
+      finishProcess(taskId, '合成完成')
       showToast('success', '合成完成！')
     } catch (err: any) {
+      if (!isCurrentTask(taskId)) return
+      setError(taskId, err.message || '合成失败')
       showToast('error', err.message || '合成失败')
     }
-  }, [resultImage, bgColor, cutoutComposite])
+  }, [resultImage, bgColor, cutoutComposite, startProcess, finishProcess, setError])
 
   // ── 保存图片 ──
   const handleSave = useCallback(async () => {

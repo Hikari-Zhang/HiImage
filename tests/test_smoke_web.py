@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+import base64
+import hashlib
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -13,7 +15,11 @@ def test_build_probe_urls_keeps_web_prefix_and_uses_matching_websocket_scheme() 
     assert probes.root == "https://example.test/hiimage/"
     assert probes.health == "https://example.test/hiimage/api/health"
     assert probes.spa_fallback.startswith("https://example.test/hiimage/__smoke__/route-")
-    assert probes.websocket == "wss://example.test/hiimage/api/ws/progress"
+    websocket = urlsplit(probes.websocket)
+    assert websocket.scheme == "wss"
+    assert websocket.netloc == "example.test"
+    assert websocket.path == "/hiimage/api/ws/progress"
+    assert parse_qs(websocket.query)["task_id"][0]
     assert urlsplit(probes.spa_fallback).path != "/hiimage/"
 
 
@@ -51,3 +57,40 @@ def test_validate_response_rejects_false_positive_smoke_results(
 ) -> None:
     with pytest.raises(smoke_web.SmokeFailure, match=message):
         smoke_web.validate_response(kind, status, content_type, body)
+
+
+def test_websocket_probe_sends_same_origin_header(monkeypatch) -> None:
+    class Socket:
+        request = ""
+
+        def sendall(self, data: bytes) -> None:
+            self.request = data.decode("ascii")
+
+        def recv(self, _size: int) -> bytes:
+            key = next(
+                line.split(":", 1)[1].strip()
+                for line in self.request.splitlines()
+                if line.lower().startswith("sec-websocket-key:")
+            )
+            accept = base64.b64encode(
+                hashlib.sha1(
+                    f"{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11".encode("ascii")
+                ).digest()
+            ).decode("ascii")
+            return (
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
+            ).encode("ascii")
+
+        def close(self) -> None:
+            pass
+
+    socket = Socket()
+    monkeypatch.setattr(smoke_web.socket, "create_connection", lambda *_args, **_kwargs: socket)
+
+    smoke_web.probe_websocket(
+        "ws://images.example:8080/api/ws/progress?task_id=abc",
+        1,
+    )
+
+    assert "Origin: http://images.example:8080\r\n" in socket.request

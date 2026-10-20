@@ -74,7 +74,7 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
       setKeepalive(String(s.keepaliveSeconds))
       setStartupTimeout(String(s.startupTimeout))
       setHfEndpoint(s.hfEndpoint)
-      setHfToken(s.hfToken)
+      setHfToken('')
       setGithubMirror(s.githubMirror)
       setDilation(String(s.defaultDilation))
       setDisableNsfw(s.disableNsfw)
@@ -130,11 +130,23 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
       })
       // 再持久化到后端
       await useSettingsStore.getState().saveSettings(backendURL)
+      if (hfToken.trim()) setHfToken('')
       showToast('success', '设置已保存')
     } catch (err: any) {
       showToast('error', `保存失败: ${err.message}`)
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  const handleClearHfToken = async () => {
+    if (!window.confirm('确定要清除已配置的 HuggingFace Token 吗？')) return
+    try {
+      await store.clearHfToken(backendURL)
+      setHfToken('')
+      showToast('success', 'HuggingFace Token 已清除')
+    } catch (err: any) {
+      showToast('error', `清除失败: ${err.message}`)
     }
   }
 
@@ -472,14 +484,29 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
               />
             </div>
             <div>
-              <label className="text-xs text-fg-secondary mb-1 block">HuggingFace Token</label>
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="hf-token" className="text-xs text-fg-secondary">HuggingFace Token</label>
+                {store.hfTokenConfigured && (
+                  <span className="text-[11px] text-status-success">Token 已配置</span>
+                )}
+              </div>
               <input
+                id="hf-token"
                 type="password"
                 value={hfToken}
                 onChange={(e) => setHfToken(e.target.value)}
-                placeholder="hf_xxxx..."
+                placeholder={store.hfTokenConfigured ? '输入新 Token 以替换' : 'hf_xxxx...'}
                 className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
               />
+              {store.hfTokenConfigured && (
+                <button
+                  type="button"
+                  onClick={handleClearHfToken}
+                  className="mt-2 text-xs text-status-error hover:underline"
+                >
+                  清除已配置 Token
+                </button>
+              )}
             </div>
             <div>
               <label className="text-xs text-fg-secondary mb-1 block">

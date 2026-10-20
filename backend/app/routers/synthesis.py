@@ -9,12 +9,13 @@
 import asyncio
 from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.routers.inpaint import decode_image, encode_image, check_image_size, ensure_model_ready_with_progress
-from app.shared_executor import executor
+from app.shared_executor import inference_admission, inference_scheduler
+from app.task_id import TaskId
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from core.utils import make_progress_callback, resolve_default_device
@@ -36,7 +37,7 @@ class SynthesisRequest(BaseModel):
     model_id: str = "rmbg"                 # 模型 ID
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     prompt: str = ""                       # SD 系列模型的文字引导（可选）
-    task_id: str = ""                      # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
+    task_id: TaskId
 
 
 # ──────────────────────────────────────────────────────────────
@@ -57,7 +58,7 @@ async def list_synthesis_models():
     return {"models": SYNTHESIS_MODELS}
 
 
-@router.post("/synthesis/run")
+@router.post("/synthesis/run", dependencies=[Depends(inference_admission)])
 async def run_synthesis(req: SynthesisRequest):
     """执行智能合成处理"""
     if (err := check_image_size(req.source_image)):
@@ -107,7 +108,7 @@ async def run_synthesis(req: SynthesisRequest):
     await progress_manager.send_progress(20, "正在处理中...", task_id=req.task_id)
 
     try:
-        result = await loop.run_in_executor(executor, _process)
+        result = await inference_scheduler.run_blocking(_process)
         h, w = result.shape[:2]
         await progress_manager.send_complete("合成完成", task_id=req.task_id)
         log_manager.info(f"智能合成完成: output={w}x{h}", source="synthesis")

@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from app.config import get
+from app.shared_executor import inference_scheduler
 from core.paths import CONFIG_DIR, CACHE_ROOT, TMP_DIR, OUTPUT_DIR
 from core.utils import default_device_for_platform
 
@@ -92,7 +93,12 @@ async def readiness_check():
         get("inpaint.default_device", default_device) or default_device
     ).lower()
     device_available, device_reason = device_availability(configured_device)
-    ready = all(available.values()) and device_available
+    inference_queue = inference_scheduler.snapshot()
+    ready = (
+        all(available.values())
+        and device_available
+        and bool(inference_queue["accepting"])
+    )
     body = {
         "status": "ready" if ready else "not_ready",
         "paths": paths,
@@ -103,6 +109,7 @@ async def readiness_check():
             "available": device_available,
             "reason": device_reason,
         },
+        "inference_queue": inference_queue,
     }
     return JSONResponse(status_code=200 if ready else 503, content=body)
 

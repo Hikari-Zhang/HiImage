@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 import numpy as np
 import httpx
-from concurrent.futures import Future
 from fastapi import FastAPI, HTTPException
 
 
@@ -172,7 +171,12 @@ def test_upscale_endpoint_rejects_pixel_budget_before_upscaler_is_created(
     monkeypatch.setattr(upscale, "decode_image", lambda _image: image)
     monkeypatch.setattr(upscale, "get", lambda key, default=None: 256)
 
-    request = upscale.UpscaleRequest(image="tiny-compressed", outscale=2, device="cpu")
+    request = upscale.UpscaleRequest(
+        image="tiny-compressed",
+        outscale=2,
+        device="cpu",
+        task_id="pixel-budget-test",
+    )
     with pytest.raises(HTTPException) as error:
         awaitable_result(upscale.upscale_image(request))
 
@@ -195,14 +199,12 @@ def _install_batch_upscale_test_doubles(monkeypatch, upscale):
             processed.append(image.shape)
             return image
 
-    class InlineExecutor:
-        def submit(self, function, *args, **kwargs):
-            future = Future()
-            try:
-                future.set_result(function(*args, **kwargs))
-            except Exception as error:
-                future.set_exception(error)
-            return future
+        def close(self):
+            return None
+
+    class InlineScheduler:
+        async def run_blocking(self, function, *args, **kwargs):
+            return function(*args, **kwargs)
 
     class ProgressManager:
         async def send_progress(self, *args, **kwargs):
@@ -216,7 +218,7 @@ def _install_batch_upscale_test_doubles(monkeypatch, upscale):
         "core.upscaler",
         SimpleNamespace(Upscaler=FakeUpscaler),
     )
-    monkeypatch.setattr(upscale, "executor", InlineExecutor())
+    monkeypatch.setattr(upscale, "inference_scheduler", InlineScheduler())
     monkeypatch.setattr(upscale, "progress_manager", ProgressManager())
     monkeypatch.setattr(upscale, "check_image_size", lambda _image: None)
     monkeypatch.setattr(upscale, "encode_image", lambda _image: "encoded")
@@ -251,6 +253,7 @@ def test_batch_upscale_records_invalid_item_and_processes_valid_item(monkeypatch
         "images": ["invalid-base64", "valid-base64"],
         "device": "cpu",
         "outscale": 1,
+        "task_id": "mixed-batch-test",
     }))
 
     assert response.status_code == 200
@@ -277,6 +280,7 @@ def test_batch_upscale_all_invalid_does_not_load_model(monkeypatch):
         "images": ["bad-1", "bad-2"],
         "device": "cpu",
         "outscale": 1,
+        "task_id": "invalid-batch-test",
     }))
 
     assert response.status_code == 200

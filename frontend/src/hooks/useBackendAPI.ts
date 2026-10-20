@@ -11,11 +11,11 @@ export function useBackendAPI() {
   /**
    * 水印检测
    */
-  const detectWatermark = async (imageBase64: string, sensitivity: number) => {
+  const detectWatermark = async (imageBase64: string, sensitivity: number, taskId: string) => {
     const res = await client.fetch('/api/detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: imageBase64, sensitivity }),
+      body: JSON.stringify({ image: imageBase64, sensitivity, task_id: taskId }),
     })
     if (!res.ok) throw new Error(`检测失败: ${res.statusText}`)
     return res.json() as Promise<{ regions: number[][] }>
@@ -31,6 +31,7 @@ export function useBackendAPI() {
     device: string
     dilation: number
     disable_nsfw: boolean
+    task_id: string
   }) => {
     const res = await client.fetch('/api/inpaint', {
       method: 'POST',
@@ -62,6 +63,7 @@ export function useBackendAPI() {
     device: string
     dilation: number
     disable_nsfw: boolean
+    task_id: string
   }) => {
     const res = await client.fetch('/api/inpaint/with-mask', {
       method: 'POST',
@@ -91,6 +93,7 @@ export function useBackendAPI() {
     device: string
     outscale?: number
     tile?: number
+    task_id: string
   }) => {
     const res = await client.fetch('/api/upscale', {
       method: 'POST',
@@ -101,6 +104,7 @@ export function useBackendAPI() {
         device: params.device,
         outscale: params.outscale,
         tile: params.tile,
+        task_id: params.task_id,
       }),
     })
     if (!res.ok) {
@@ -111,32 +115,6 @@ export function useBackendAPI() {
       image: string
       width: number
       height: number
-    }>
-  }
-
-  /**
-   * 超分辨率 - 批量处理
-   * 支持批量传入 base64 图像或后端可访问的文件路径
-   */
-  const upscaleBatch = async (params: {
-    images: string[]  // base64 数组或文件路径数组
-    model: string
-    device: string
-    outscale?: number
-    tile?: number
-  }) => {
-    const res = await client.fetch('/api/upscale/batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    })
-    if (!res.ok) {
-      const err = await res.text()
-      throw new Error(`批量超分辨率失败: ${err}`)
-    }
-    return res.json() as Promise<{
-      results: { index: number; status: 'success' | 'error'; image?: string; width?: number; height?: number; error?: string; fileName?: string }[]
-      summary: { total: number; success: number; failed: number }
     }>
   }
 
@@ -168,6 +146,7 @@ export function useBackendAPI() {
     postprocess_enabled: boolean
     upscale_enabled: boolean
     upscale_model: string
+    task_id: string
   }) => {
     const res = await client.fetch('/api/pipeline/run', {
       method: 'POST',
@@ -224,6 +203,7 @@ export function useBackendAPI() {
     model_id: string
     device: string
     prompt?: string
+    task_id: string
   }) => {
     const res = await client.fetch('/api/synthesis/run', {
       method: 'POST',
@@ -264,6 +244,7 @@ export function useBackendAPI() {
     image: string
     model: string
     device: string
+    task_id: string
   }) => {
     const res = await client.fetch('/api/cutout', {
       method: 'POST',
@@ -294,6 +275,7 @@ export function useBackendAPI() {
     dilate: number
     brush_add?: string
     brush_remove?: string
+    task_id: string
   }) => {
     const res = await client.fetch('/api/cutout/refine', {
       method: 'POST',
@@ -320,6 +302,7 @@ export function useBackendAPI() {
   const cutoutComposite = async (params: {
     image: string
     background_color: string
+    task_id: string
   }) => {
     const res = await client.fetch('/api/cutout/composite', {
       method: 'POST',
@@ -349,7 +332,7 @@ export function useBackendAPI() {
   }
 
   return {
-    detectWatermark, inpaint, inpaintWithMask, upscale, upscaleBatch, runPipeline,
+    detectWatermark, inpaint, inpaintWithMask, upscale, runPipeline,
     getPostprocessMethods, getInpaintModels, getUpscaleModels,
     getSynthesisModes, getSynthesisModels, runSynthesis, getDevices,
     cutout, cutoutRefine, cutoutComposite, getCutoutModels,

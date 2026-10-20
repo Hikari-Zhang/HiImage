@@ -6,16 +6,16 @@
   POST /api/postprocess/fix         对已有图像做后处理修复
   POST /api/pipeline/run            一次性执行完整 inpaint→postprocess→upscale 流程
 """
-import asyncio
 from typing import List, Optional
 
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.routers.inpaint import decode_image, decode_mask, encode_image, check_image_size
-from app.shared_executor import executor
+from app.shared_executor import inference_admission, inference_scheduler
+from app.task_id import TaskId
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.config import get
@@ -36,7 +36,7 @@ class PostprocessRequest(BaseModel):
     mask: str                   # 水印掩码 base64
     method: str = "poisson"     # poisson / gfpgan / lama_refine
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
-    task_id: str = ""           # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
+    task_id: TaskId
 
 
 class PipelineRequest(BaseModel):
@@ -59,7 +59,7 @@ class PipelineRequest(BaseModel):
     upscale_enabled: bool = False
     upscale_model: str = "RealESRGAN_x4plus"
 
-    task_id: str = ""  # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
+    task_id: TaskId
 
 
 # ──────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ async def list_postprocess_methods():
     return {"groups": result}
 
 
-@router.post("/postprocess/fix")
+@router.post("/postprocess/fix", dependencies=[Depends(inference_admission)])
 async def postprocess_fix(req: PostprocessRequest):
     """对已有 inpainting 结果做后处理修复"""
     for img_b64 in (req.original_image, req.inpainted_image):
@@ -107,9 +107,8 @@ async def postprocess_fix(req: PostprocessRequest):
             device=req.device,
         )
 
-    loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(executor, _process)
+        result = await inference_scheduler.run_blocking(_process)
         await progress_manager.send_complete("后处理完成", task_id=req.task_id)
         log_manager.info("后处理修复完成", source="postprocess")
         return {"image": encode_image(result)}
@@ -121,7 +120,7 @@ async def postprocess_fix(req: PostprocessRequest):
         return JSONResponse(status_code=422, content={"detail": err_str, "message": first_line})
 
 
-@router.post("/pipeline/run")
+@router.post("/pipeline/run", dependencies=[Depends(inference_admission)])
 async def run_pipeline(req: PipelineRequest):
     """完整处理 Pipeline：inpaint → postprocess → upscale"""
     if (err := check_image_size(req.image)):
@@ -173,11 +172,10 @@ async def run_pipeline(req: PipelineRequest):
             progress_callback=_cb,
         )
 
-    loop = asyncio.get_running_loop()
     await progress_manager.send_progress(15, "正在处理...", task_id=req.task_id)
 
     try:
-        result = await loop.run_in_executor(executor, _process)
+        result = await inference_scheduler.run_blocking(_process)
         h, w = result.shape[:2]
         await progress_manager.send_complete("Pipeline 处理完成", task_id=req.task_id)
         log_manager.info(f"Pipeline 完成: output={w}x{h}", source="pipeline")

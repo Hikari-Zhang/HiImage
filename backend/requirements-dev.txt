@@ -1,1 +1,3 @@
 pytest>=8.0,<10.0
+# Starlette 0.32 TestClient 仍向 httpx.Client 传递 app=。
+httpx>=0.27,<0.28

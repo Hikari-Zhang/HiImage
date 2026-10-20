@@ -5,11 +5,12 @@ interface ProcessState {
   progress: number // 0-100, -1 for indeterminate
   statusMessage: string
   currentModel: string
+  currentTaskId: string | null
 
-  startProcess: (model: string) => void
-  updateProgress: (percent: number, message?: string) => void
-  finishProcess: (message?: string) => void
-  setError: (message: string) => void
+  startProcess: (model: string, taskId: string) => void
+  updateProgress: (taskId: string, percent: number, message?: string) => void
+  finishProcess: (taskId: string, message?: string) => void
+  setError: (taskId: string, message: string) => void
   reset: () => void
 }
 
@@ -18,34 +19,38 @@ export const useProcessStore = create<ProcessState>((set) => ({
   progress: 0,
   statusMessage: '',
   currentModel: '',
+  currentTaskId: null,
 
-  startProcess: (model) =>
+  startProcess: (model, taskId) =>
     set({
       isProcessing: true,
       progress: 0,
       statusMessage: '正在初始化...',
       currentModel: model,
+      currentTaskId: taskId,
     }),
 
-  updateProgress: (percent, message) =>
-    set((state) => ({
+  updateProgress: (taskId, percent, message) =>
+    set((state) => state.currentTaskId === taskId ? {
       progress: percent,
       statusMessage: message || state.statusMessage,
-    })),
+    } : state),
 
-  finishProcess: (message) =>
-    set({
+  finishProcess: (taskId, message) =>
+    set((state) => state.currentTaskId === taskId ? {
       isProcessing: false,
       progress: 100,
       statusMessage: message || '处理完成',
-    }),
+      currentTaskId: null,
+    } : state),
 
-  setError: (message) =>
-    set({
+  setError: (taskId, message) =>
+    set((state) => state.currentTaskId === taskId ? {
       isProcessing: false,
       progress: -1,
       statusMessage: `错误: ${message}`,
-    }),
+      currentTaskId: null,
+    } : state),
 
   reset: () =>
     set({
@@ -53,5 +58,10 @@ export const useProcessStore = create<ProcessState>((set) => ({
       progress: 0,
       statusMessage: '',
       currentModel: '',
+      currentTaskId: null,
     }),
 }))
+
+export function isCurrentTask(taskId: string): boolean {
+  return useProcessStore.getState().currentTaskId === taskId
+}

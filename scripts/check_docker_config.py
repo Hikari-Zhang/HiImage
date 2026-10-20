@@ -166,6 +166,9 @@ def validate_nginx_config(content: str) -> None:
         "proxy_pass http://backend:8787",
         "proxy_set_header Upgrade $http_upgrade",
         "proxy_set_header Connection $connection_upgrade",
+        "proxy_set_header X-Forwarded-For $remote_addr",
+        "proxy_set_header X-Forwarded-Proto $scheme",
+        "proxy_set_header X-Forwarded-Host $http_host",
         "proxy_buffering off",
         "proxy_cache off",
         "add_header X-Accel-Buffering no always",
@@ -396,6 +399,28 @@ def parse_compose_yaml(content: str) -> dict[str, Any]:
     return document
 
 
+def validate_env_example(content: str) -> None:
+    """Require documented, safe defaults for phase-one backend controls."""
+    values = {
+        key.strip(): value.strip()
+        for raw_line in content.splitlines()
+        if raw_line.strip() and not raw_line.lstrip().startswith("#") and "=" in raw_line
+        for key, value in [raw_line.split("=", 1)]
+    }
+    require(
+        values.get("HIIMAGE_MAX_PENDING_INFERENCE") == "4",
+        ".env.example HIIMAGE_MAX_PENDING_INFERENCE must default to 4",
+    )
+    require(
+        "HIIMAGE_WS_ORIGINS" in values and values["HIIMAGE_WS_ORIGINS"] == "",
+        ".env.example HIIMAGE_WS_ORIGINS must default to empty same-origin mode",
+    )
+    require(
+        values.get("HIIMAGE_TRUST_PROXY_HEADERS") == "false",
+        ".env.example HIIMAGE_TRUST_PROXY_HEADERS must default to false",
+    )
+
+
 def compose_json(*extra_args: str) -> dict[str, Any]:
     """Render normalized Compose JSON using Docker Compose."""
     command = [
@@ -557,6 +582,18 @@ def validate_backend_service(
         f"{name} path environment mismatch",
     )
     require(environment.get("HIIMAGE_CORS_ORIGINS") == "", f"{name} CORS must be same-origin")
+    require(
+        environment.get("HIIMAGE_WS_ORIGINS") == "",
+        f"{name} HIIMAGE_WS_ORIGINS must use same-origin mode",
+    )
+    require(
+        str(environment.get("HIIMAGE_TRUST_PROXY_HEADERS")).lower() == "true",
+        f"{name} HIIMAGE_TRUST_PROXY_HEADERS must be true behind Nginx",
+    )
+    require(
+        str(environment.get("HIIMAGE_MAX_PENDING_INFERENCE")) == "4",
+        f"{name} HIIMAGE_MAX_PENDING_INFERENCE must default to 4",
+    )
     expected_device = "cuda" if name == "backend-gpu" else "cpu"
     require(
         environment.get("HIIMAGE_DEFAULT_DEVICE") == expected_device,
@@ -649,6 +686,7 @@ def validate_static_files() -> None:
     for ignored in ("node_modules", "dist", "venv", "models", "cache", "output"):
         require(ignored in dockerignore, f".dockerignore missing {ignored}")
     require("scripts" not in dockerignore, ".dockerignore must preserve build scripts")
+    validate_env_example(read(".env.example"))
 
 
 def validate_normalized_compose(

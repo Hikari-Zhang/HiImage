@@ -22,7 +22,7 @@ HiImage 以 Web 方式交付本地 AI 图像能力。设计优先级是：
 - 显式 HTTP(S) 基址：本地调试或受控跨域环境。
 - WebSocket：从 HTTP(S) 映射到 WS(S)，相对地址使用当前页面 host。
 
-文件处理只使用 Web API。导入结果由 `File`/`Blob` 表示；保存使用浏览器下载，不依赖服务器看到客户端文件路径。
+文件处理只使用 Web API。Web API 已无服务器路径读写参数：浏览器仅上传内容，导入结果由 `File`/`Blob` 表示；保存使用浏览器下载。
 
 ### 2.2 批量队列
 
@@ -50,11 +50,19 @@ API 层负责输入模型、错误响应和任务调度；`backend/core/` 负责
 
 ### 2.4 实时通道
 
-- WebSocket：处理百分比、完成、失败和日志。
+- WebSocket：处理百分比、完成、失败和日志；所有握手先校验 Origin。
 - SSE：模型下载状态，适合服务器单向推送。
 - HTTP：配置、模型清单和处理请求/结果。
 
-Nginx 对 `/api/` 禁用代理缓冲和缓存，并传递 WebSocket 升级头。客户端断开后，订阅逻辑负责清理连接。
+所有推理请求模型都要求 1-128 字符的 `task_id`，进度 WebSocket 以相同 ID 建立每任务频道，不存在全局匿名进度订阅。Nginx 对 `/api/` 禁用代理缓冲和缓存，传递 WebSocket 升级头，并覆盖客户端提供的 `X-Forwarded-*`。客户端断开后，订阅逻辑负责清理连接。
+
+### 2.5 设置与调度
+
+设置读取按响应白名单组装，HF token 只显示 `hf_token_configured`。更新时，省略或空白 `hf_token` 保留旧值，非空值替换；`clear_hf_token=true` 才清除持久值和运行时环境。
+
+推理调度器在每个后端进程内固定 1 个执行槽。`HIIMAGE_MAX_PENDING_INFERENCE` 默认 `4`、范围 `0-32`，满载返回结构化 `429`。`GET /api/ready` 返回队列 `running`、`pending`、`capacity`、`accepting` 快照。队列不跨进程共享，因此当前只支持单 worker GPU 调度边界。
+
+关闭时调度器先停止接纳并排空任务，之后才停止 IOPaint model server，最后幂等关闭工作线程；清理异常会记录且后续步骤仍执行。
 
 ## 3. 开发运行
 
@@ -122,11 +130,11 @@ GPU：`gpu_config`、`gpu_cache`、`gpu_tmp`、`gpu_output`、`gpu_models`。
 
 ## 6. 网络与安全设计
 
-生产页面和 API 同源，因此 Compose 将 `HIIMAGE_CORS_ORIGINS` 设为空。未设置该变量的本地开发后端只允许两个 Vite localhost 来源。通配 CORS 不允许凭据。
+生产页面和 API 同源，因此 Compose 将 `HIIMAGE_CORS_ORIGINS` 和 `HIIMAGE_WS_ORIGINS` 都设为空。对 WebSocket，`HIIMAGE_WS_ORIGINS` 未设置时允许同源和两个默认 Vite 开发源，空值仅同源，非空值是替代默认开发源的逗号分隔显式白名单。`HIIMAGE_TRUST_PROXY_HEADERS` 默认 `false`，仅 `1`/`true` 启用；Docker 后端在会覆盖转发头的 Nginx 后设为 `true`。通配 CORS 不允许凭据。
 
 系统仅面向可信局域网单用户。默认绑定 `127.0.0.1`。若把 `WEB_HOST` 改为局域网地址，应确认主机防火墙和访问者范围。
 
-当前实现不能直接安全暴露公网。公网入口至少需要认证、TLS、限流、上传检查和审计，并应评估模型下载接口与计算资源滥用风险。
+LAN 部署仍没有内建用户认证。第一阶段仅关闭服务器路径读写、凭据泄露和跨站 WebSocket，不等价于公网安全。公网入口至少需要认证、TLS、限流、上传检查和审计，并应评估模型下载接口与计算资源滥用风险。
 
 ## 7. 测试策略
 
@@ -143,6 +151,8 @@ npm test
 - 超分倍率；
 - 批量串行、100 张、20 MB 单文件及输入/结果总预算限制；
 - 设置读取、保存与错误反馈；
+- HF token 脱敏、保留、替换和显式清除；
+- 所有推理请求的 `task_id`、所有 WebSocket 的 Origin 校验，以及所有 AI 路由的 admission 矩阵；
 - 关键设置 UI 流程。
 
 后端覆盖路径、配置、CORS、readiness 和 Docker 配置变异。静态与运行态命令：

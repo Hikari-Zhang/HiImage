@@ -8,7 +8,7 @@ import ModelSelect from '../components/ModelSelect/ModelSelect'
 import BatchImageQueue, { type ImageQueueItem } from '../components/BatchImageQueue'
 import BatchProgress from '../components/BatchProgress'
 import { useImageStore } from '../stores/useImageStore'
-import { useProcessStore } from '../stores/useProcessStore'
+import { isCurrentTask, useProcessStore } from '../stores/useProcessStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
@@ -39,6 +39,8 @@ import {
 } from '../services/imageDimensions'
 import { uniqueOutputName } from '../services/batchExport'
 import { batchFileKey, prepareBatchFiles } from '../services/batchImport'
+import { createTaskId } from '../services/taskId'
+import { createTaskProgressSession } from '../services/taskProgress'
 
 export default function SuperResolution() {
   const {
@@ -236,31 +238,45 @@ export default function SuperResolution() {
     // 用 setTimeout 拆到下一个 task，React 会在 task 边界刷新 UI
     await new Promise(resolve => setTimeout(resolve, 0))
 
-    try {
-      // 获取图片数据
-      let imageBase64: string
-      const item = items[index]
-      const { dataUrl, file } = item
-      if (dataUrl) {
-        imageBase64 = dataUrl
-      } else if (file) {
-        imageBase64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload = () => resolve(reader.result as string)
-          reader.onerror = () => reject(reader.error)
-          reader.readAsDataURL(file)
-        })
-      } else {
-        throw new Error('无图片数据')
-      }
+    const taskId = createTaskId()
+    const session = createTaskProgressSession(taskId)
+    startProcess(upscaleModel, taskId)
+    const stopStaleBatch = () => {
+      setIsBatchProcessing(false)
+      setBatchCurrentIndex(null)
+    }
 
-      const result = await upscale({
-        image: imageBase64,
-        model: upscaleModel,
-        device,
-        outscale: currentScale,
-        tile: tile ?? (upscaleTile || 0),
+    try {
+      const result = await session.run(async (requestTaskId) => {
+        let imageBase64: string
+        const item = items[index]
+        const { dataUrl, file } = item
+        if (dataUrl) {
+          imageBase64 = dataUrl
+        } else if (file) {
+          imageBase64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result as string)
+            reader.onerror = () => reject(reader.error)
+            reader.readAsDataURL(file)
+          })
+        } else {
+          throw new Error('无图片数据')
+        }
+        if (!isCurrentTask(requestTaskId)) throw new Error('任务已被新任务替代')
+        return upscale({
+          image: imageBase64,
+          model: upscaleModel,
+          device,
+          outscale: currentScale,
+          tile: tile ?? (upscaleTile || 0),
+          task_id: requestTaskId,
+        })
       })
+      if (!isCurrentTask(taskId)) {
+        stopStaleBatch()
+        return
+      }
 
       // 保存结果
       if (result.image) {
@@ -276,6 +292,7 @@ export default function SuperResolution() {
           setBatchItems([...items])
           setIsBatchProcessing(false)
           setBatchCurrentIndex(null)
+          setError(taskId, items[index].error!)
           showToast('error', items[index].error!)
           return
         }
@@ -287,8 +304,14 @@ export default function SuperResolution() {
       } else {
         throw new Error('处理失败：无返回结果')
       }
+      finishProcess(taskId, `第 ${index + 1} 张处理完成`)
     } catch (err: any) {
+      if (!isCurrentTask(taskId)) {
+        stopStaleBatch()
+        return
+      }
       items[index] = { ...items[index], status: 'error', error: err.message }
+      setError(taskId, err.message)
     }
 
     setBatchItems([...items])
@@ -367,32 +390,37 @@ export default function SuperResolution() {
       return
     }
 
+    const taskId = createTaskId()
+    const session = createTaskProgressSession(taskId)
     try {
+      startProcess(upscaleModel, taskId)
       const dimensions = imageWidth > 0 && imageHeight > 0
         ? { width: imageWidth, height: imageHeight }
         : await readImageDimensions(sourceImage)
       if (estimateOutputRgbaBytes(dimensions, currentScale) > MAX_OUTPUT_RGBA_BYTES) {
         const message = '预计输出 RGBA 超过 256 MB，请降低倍率或使用更小的图片'
-        setError(message)
+        setError(taskId, message)
         showToast('error', message)
         return
       }
-      startProcess(upscaleModel)
-      const result = await upscale({
+      const result = await session.run((requestTaskId) => upscale({
         image: sourceImage,
         model: upscaleModel,
         device,
         outscale: currentScale,
         tile: tile ?? (upscaleTile || 0),
-      })
+        task_id: requestTaskId,
+      }))
 
+      if (!isCurrentTask(taskId)) return
       setResultImage(`data:image/png;base64,${result.image}`)
 
       setOutputSize({ w: result.width, h: result.height })
-      finishProcess('超分辨率处理完成')
+      finishProcess(taskId, '超分辨率处理完成')
       showToast('success', `超分辨率完成: ${result.width}x${result.height}`)
     } catch (err: any) {
-      setError(err.message)
+      if (!isCurrentTask(taskId)) return
+      setError(taskId, err.message)
       showToast('error', err.message)
     }
   }

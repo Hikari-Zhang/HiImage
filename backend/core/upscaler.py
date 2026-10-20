@@ -262,6 +262,21 @@ class Upscaler:
 
         return cv2.cvtColor(output_bgr, cv2.COLOR_BGR2RGB)
 
+    def close(self) -> None:
+        """显式释放模型引用，并清理未使用的 CUDA 显存。"""
+        upsampler = self._upsampler
+        self._upsampler = None
+        if upsampler is not None and hasattr(upsampler, "model"):
+            upsampler.model = None
+        if self.device == "cuda":
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    def unload(self) -> None:
+        """``close`` 的语义化别名。"""
+        self.close()
+
     # ------------------------------------------------------------------
     # 内部方法
     # ------------------------------------------------------------------

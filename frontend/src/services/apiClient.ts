@@ -6,6 +6,22 @@ export type ApiClient = {
   fetch: (path: string, init?: RequestInit) => Promise<Response>
 }
 
+export class ApiError extends Error {
+  readonly status: number
+  readonly code?: string
+  readonly retryable: boolean
+
+  constructor(message: string, status: number, code?: string, retryable = false) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+    this.retryable = retryable
+  }
+}
+
+const QUEUE_FULL_MESSAGE = '服务器任务队列已满，请稍后重试'
+
 function trim(value: string): string {
   return value.replace(/\/+$/, '')
 }
@@ -24,7 +40,24 @@ export function createApiClient(baseUrl?: string): ApiClient {
     }
     return `ws://localhost${absolute}`
   }
-  return { baseUrl: base, url, sseUrl, websocketUrl, fetch: (path, init) => fetch(url(path), init) }
+  const request = async (path: string, init?: RequestInit): Promise<Response> => {
+    const response = await fetch(url(path), init)
+    if (response.status !== 429) return response
+
+    let body: { code?: string; retryable?: boolean } = {}
+    try {
+      body = await response.json()
+    } catch {
+      // 429 即使响应体损坏，也使用统一的可恢复错误。
+    }
+    throw new ApiError(
+      QUEUE_FULL_MESSAGE,
+      response.status,
+      body.code,
+      body.retryable ?? true,
+    )
+  }
+  return { baseUrl: base, url, sseUrl, websocketUrl, fetch: request }
 }
 
 export const apiClient = createApiClient()

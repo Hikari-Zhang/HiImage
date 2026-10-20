@@ -14,7 +14,7 @@ import PageHeader from '../components/layout/PageHeader'
 import { Button, Select, Progress, showToast } from '../components/ui'
 import { useImageStore } from '../stores/useImageStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
-import { useProcessStore } from '../stores/useProcessStore'
+import { isCurrentTask, useProcessStore } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useFirstVisible } from '../hooks/useFirstVisible'
@@ -25,6 +25,8 @@ import { DownloadStatus, ModelStatus } from '../constants'
 import type { SynthesisTagValue } from '../constants'
 import type { ROI } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
+import { createTaskId } from '../services/taskId'
+import { createTaskProgressSession } from '../services/taskProgress'
 
 type CanvasTool = 'draw' | 'pan'
 
@@ -301,41 +303,44 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
       return
     }
 
+    const taskId = createTaskId()
+    const session = createTaskProgressSession(taskId)
     try {
-      startProcess(selectedModel)
+      startProcess(selectedModel, taskId)
 
-      // 使用合并遮罩模式（支持画笔遮罩 + ROI 矩形）
-      let result
-      if (maskStrokes.length > 0 || rois.length > 0) {
-        // 导出合并遮罩为 base64（画笔遮罩 + ROI 矩形）
-        const maskDataURL = await exportCombinedMask(maskStrokes, rois, imageWidth, imageHeight)
-        result = await runSynthesis({
+      const result = await session.run(async (requestTaskId) => {
+        if (maskStrokes.length > 0 || rois.length > 0) {
+          const maskDataURL = await exportCombinedMask(maskStrokes, rois, imageWidth, imageHeight)
+          return runSynthesis({
+            source_image: sourceImage,
+            reference_image: referenceImage ?? undefined,
+            mask: maskDataURL,
+            mode: activeMode,
+            model_id: selectedModel,
+            device,
+            prompt,
+            task_id: requestTaskId,
+          })
+        }
+        return runSynthesis({
           source_image: sourceImage,
           reference_image: referenceImage ?? undefined,
-          mask: maskDataURL,
           mode: activeMode,
           model_id: selectedModel,
           device,
           prompt,
+          task_id: requestTaskId,
         })
-      } else {
-        // 无遮罩模式
-        result = await runSynthesis({
-          source_image: sourceImage,
-          reference_image: referenceImage ?? undefined,
-          mode: activeMode,
-          model_id: selectedModel,
-          device,
-          prompt,
-        })
-      }
+      })
 
+      if (!isCurrentTask(taskId)) return
       setResultImage(`data:image/png;base64,${result.image}`)
       setShowResult(true)
-      finishProcess('合成完成')
+      finishProcess(taskId, '合成完成')
       showToast('success', `智能合成完成 (${result.width}×${result.height})`)
     } catch (err: any) {
-      setError(err.message)
+      if (!isCurrentTask(taskId)) return
+      setError(taskId, err.message)
       showToast('error', err.message)
     }
   }

@@ -173,6 +173,9 @@ def test_backend_dockerfile_rejects_invalid_runtime_instruction(
         "proxy_pass http://backend:8787;",
         "proxy_set_header Upgrade $http_upgrade;",
         "proxy_set_header Connection $connection_upgrade;",
+        "proxy_set_header X-Forwarded-For $remote_addr;",
+        "proxy_set_header X-Forwarded-Proto $scheme;",
+        "proxy_set_header X-Forwarded-Host $http_host;",
         "proxy_buffering off;",
         "proxy_cache off;",
         "add_header X-Accel-Buffering no always;",
@@ -265,6 +268,46 @@ def test_static_compose_requires_profile_specific_default_devices() -> None:
     gpu_mutation["services"]["backend-gpu"]["environment"]["HIIMAGE_DEFAULT_DEVICE"] = "cpu"
     with pytest.raises(AssertionError, match="default device"):
         checker.validate_static_compose(gpu_mutation)
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("HIIMAGE_MAX_PENDING_INFERENCE", "4"),
+        ("HIIMAGE_WS_ORIGINS", ""),
+        ("HIIMAGE_TRUST_PROXY_HEADERS", "true"),
+    ],
+)
+def test_static_compose_requires_phase1_backend_environment(
+    variable: str,
+    value: str,
+) -> None:
+    document = checker.parse_compose_yaml(read("docker-compose.yml"))
+    checker.validate_static_compose(document)
+
+    mutated = deepcopy(document)
+    mutated["services"]["backend"]["environment"][variable] = "wrong"
+    with pytest.raises(AssertionError, match=variable):
+        checker.validate_static_compose(mutated)
+
+    assert document["services"]["backend"]["environment"][variable] == value
+    assert document["services"]["backend-gpu"]["environment"][variable] == value
+
+
+def test_env_example_requires_phase1_backend_defaults() -> None:
+    content = read(".env.example")
+    checker.validate_env_example(content)
+
+    with pytest.raises(AssertionError, match="HIIMAGE_MAX_PENDING_INFERENCE"):
+        checker.validate_env_example(
+            content.replace("HIIMAGE_MAX_PENDING_INFERENCE=4", "")
+        )
+    with pytest.raises(AssertionError, match="HIIMAGE_WS_ORIGINS"):
+        checker.validate_env_example(content.replace("HIIMAGE_WS_ORIGINS=", ""))
+    with pytest.raises(AssertionError, match="HIIMAGE_TRUST_PROXY_HEADERS"):
+        checker.validate_env_example(
+            content.replace("HIIMAGE_TRUST_PROXY_HEADERS=false", "")
+        )
 
 
 @pytest.mark.parametrize(

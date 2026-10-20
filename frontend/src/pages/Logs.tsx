@@ -3,6 +3,7 @@ import { Trash2, ArrowDown, Filter, CircleAlert, Info, AlertTriangle, Bug } from
 import { clsx } from 'clsx'
 import { useFirstVisible } from '../hooks/useFirstVisible'
 import { apiClient } from '../services/apiClient'
+import { ManagedWebSocket } from '../services/managedWebSocket'
 
 interface LogEntry {
   timestamp: string
@@ -23,7 +24,6 @@ export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
   const [filter, setFilter] = useState<string>('ALL')
   const [autoScroll, setAutoScroll] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
-  const wsRef = useRef<WebSocket | null>(null)
   const ready = useFirstVisible(isVisible)
 
   // Fetch initial logs
@@ -44,30 +44,19 @@ export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
   // WebSocket for real-time logs
   useEffect(() => {
     if (!ready) return
-    const connectWS = async () => {
-      const wsURL = apiClient.websocketUrl('/api/ws/logs')
-
-      const ws = new WebSocket(wsURL)
-      ws.onmessage = (event) => {
+    const connection = new ManagedWebSocket(apiClient.websocketUrl('/api/ws/logs'), {
+      onMessage: (event) => {
         const msg = JSON.parse(event.data)
         if (msg.type === 'log' && msg.data) {
           setLogs((prev) => [...prev.slice(-499), msg.data])
         }
-      }
-      ws.onerror = () => {
+      },
+      onError: () => {
         console.error('Log WebSocket error')
-      }
-      ws.onclose = () => {
-        // Reconnect after 3s
-        setTimeout(connectWS, 3000)
-      }
-      wsRef.current = ws
-    }
-
-    connectWS()
-    return () => {
-      wsRef.current?.close()
-    }
+      },
+    })
+    connection.start()
+    return () => connection.dispose()
   }, [ready])
 
   // Auto scroll to bottom

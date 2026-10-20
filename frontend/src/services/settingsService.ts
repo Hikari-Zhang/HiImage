@@ -18,3 +18,7 @@ export async function saveSettingsRequest(client: Pick<ApiClient, 'fetch'>, payl
   }
   throw new Error(message)
 }
+
+export async function clearHfTokenRequest(client: Pick<ApiClient, 'fetch'>): Promise<void> {
+  await saveSettingsRequest(client, { clear_hf_token: true })
+}

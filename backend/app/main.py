@@ -1,9 +1,11 @@
 """
 HiImage FastAPI 应用
 """
+import asyncio
 import os
 import sys
 from contextlib import asynccontextmanager
+from typing import Awaitable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +24,10 @@ from app.config import get
 from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, cutout, models as models_router_module
 from app.websocket.progress import router as ws_router
 from app.logging_manager import log_manager, setup_logging
+from app.shared_executor import (
+    inference_scheduler,
+    install_inference_queue_handler,
+)
 
 
 def parse_cors_origins(value: str | None) -> list[str]:
@@ -43,11 +49,78 @@ def cors_middleware_options(value: str | None) -> dict:
     }
 
 
+async def _run_cleanup_resilient(
+    operation: Awaitable[None],
+    label: str,
+) -> tuple[bool, BaseException | None]:
+    """在独立任务中完成清理，记录外层取消并延迟传播。"""
+    task = asyncio.create_task(operation, name=f"hiimage-shutdown-{label}")
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                break
+            cancelled = True
+            log_manager.warning(
+                f"关闭期间收到取消，继续等待: {label}",
+                source="backend",
+            )
+        except BaseException:
+            break
+    try:
+        task.result()
+    except BaseException as error:
+        return cancelled, error
+    return cancelled, None
+
+
+async def _shutdown_runtime() -> None:
+    """完整清理调度器与 IOPaint，最后恢复调用者取消语义。"""
+    stop_accepting = getattr(inference_scheduler, "stop_accepting", None)
+    if stop_accepting is not None:
+        stop_accepting()
+    cancelled, scheduler_error = await _run_cleanup_resilient(
+        inference_scheduler.shutdown(),
+        "inference_scheduler",
+    )
+    if scheduler_error is not None:
+        log_manager.error(
+            f"推理调度器关闭失败: {scheduler_error}",
+            source="backend",
+        )
+        close_cancelled, close_error = await _run_cleanup_resilient(
+            asyncio.to_thread(inference_scheduler.close_executor),
+            "inference_executor",
+        )
+        cancelled = cancelled or close_cancelled
+        if close_error is not None:
+            log_manager.error(
+                f"推理工作线程关闭失败: {close_error}",
+                source="backend",
+            )
+
+    try:
+        from core.model_server import get_server
+
+        server = get_server()
+        if server:
+            server.stop()
+    except BaseException as error:
+        log_manager.error(
+            f"IOPaint Server 关闭失败: {error}",
+            source="backend",
+        )
+
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 初始化日志系统
-    import asyncio
     setup_logging()
     log_manager.set_loop(asyncio.get_running_loop())
 
@@ -89,14 +162,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: 停止 IOPaint Server（如果在运行）
-    try:
-        from core.model_server import get_server
-        server = get_server()
-        if server:
-            server.stop()
-    except Exception:
-        pass
+    # Shutdown: 先排空已接纳推理，再停止 IOPaint Server。
+    await _shutdown_runtime()
     print("[Backend] HiImage API 关闭")
 
 
@@ -105,6 +172,7 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+install_inference_queue_handler(app)
 
 # CORS 中间件（允许 Electron renderer 访问）
 app.add_middleware(CORSMiddleware, **cors_middleware_options(

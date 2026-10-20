@@ -13,6 +13,9 @@ x-backend-environment: &backend-environment
   RESTORMER_HOME: /app/cache/restormer
   U2NET_HOME: /app/cache/u2net
   HIIMAGE_CORS_ORIGINS: ""
+  HIIMAGE_WS_ORIGINS: ""
+  HIIMAGE_TRUST_PROXY_HEADERS: "true"
+  HIIMAGE_MAX_PENDING_INFERENCE: "4"
 
 x-backend-healthcheck: &backend-healthcheck
   test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]

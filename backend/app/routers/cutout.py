@@ -7,18 +7,19 @@
   POST /api/cutout/refine       遮罩精细化（羽化/膨胀/腐蚀/画笔编辑）
   POST /api/cutout/composite    合成到自定义背景色
 """
-import asyncio
 import base64
 from typing import List, Optional
 
+import anyio
 import cv2
 import numpy as np
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.routers.inpaint import decode_image, encode_image, check_image_size, ensure_model_ready_with_progress
-from app.shared_executor import executor
+from app.shared_executor import inference_admission, inference_scheduler
+from app.task_id import TaskId
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.config import get
@@ -63,7 +64,7 @@ class CutoutRequest(BaseModel):
     image: str              # Base64 原图
     model: str = "birefnet" # 模型 ID
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))     # 推理设备
-    task_id: str = ""       # WebSocket 隔离频道 ID（客户端生成，空=全局广播）
+    task_id: TaskId
 
 
 class RefineRequest(BaseModel):
@@ -74,12 +75,14 @@ class RefineRequest(BaseModel):
     dilate: int = 0                     # 膨胀(正)/腐蚀(负)像素 -20~20
     brush_add: Optional[str] = None     # Base64 画笔添加区域(白=添加前景)
     brush_remove: Optional[str] = None  # Base64 画笔擦除区域(白=擦除前景)
+    task_id: TaskId
 
 
 class CompositeRequest(BaseModel):
     """合成到自定义背景色请求"""
     image: str          # Base64 RGBA 结果图
     background_color: str = "#FFFFFF"  # 十六进制背景色
+    task_id: TaskId
 
 
 # ──────────────────────────────────────────────────────────────
@@ -132,7 +135,7 @@ async def get_cutout_models():
     return {"groups": groups, "default_model": default_model}
 
 
-@router.post("/cutout")
+@router.post("/cutout", dependencies=[Depends(inference_admission)])
 async def run_cutout(req: CutoutRequest):
     """执行抠图，返回 RGBA 结果图 + alpha mask"""
     if (err := check_image_size(req.image)):
@@ -158,8 +161,6 @@ async def run_cutout(req: CutoutRequest):
 
     await progress_manager.send_progress(10, "正在初始化抠图模型...", task_id=req.task_id)
 
-    loop = asyncio.get_running_loop()
-
     def _process():
         from core.model_executor import ModelExecutorFactory
         from core.model_registry import get_model
@@ -183,7 +184,7 @@ async def run_cutout(req: CutoutRequest):
     await progress_manager.send_progress(20, "正在抠图处理...", task_id=req.task_id)
 
     try:
-        result_rgba = await loop.run_in_executor(executor, _process)
+        result_rgba = await inference_scheduler.run_blocking(_process)
         h, w = result_rgba.shape[:2]
 
         # 提取 alpha mask
@@ -278,7 +279,7 @@ async def refine_mask(req: RefineRequest):
         return result_rgba, mask
 
     try:
-        result_rgba, refined_mask = _process()
+        result_rgba, refined_mask = await anyio.to_thread.run_sync(_process)
         h, w = result_rgba.shape[:2]
 
         log_manager.info(f"遮罩精修完成: output={w}x{h}", source="cutout")
@@ -347,7 +348,7 @@ async def composite_cutout(req: CompositeRequest):
         return result_rgb
 
     try:
-        result = _process()
+        result = await anyio.to_thread.run_sync(_process)
         h, w = result.shape[:2]
 
         return {

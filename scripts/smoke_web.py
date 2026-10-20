@@ -51,7 +51,7 @@ def build_probe_urls(base_url: str) -> ProbeUrls:
         health=child("api/health"),
         spa_fallback=child(f"__smoke__/route-{token}"),
         websocket=child(
-            "api/ws/progress",
+            f"api/ws/progress?task_id={uuid.uuid4().hex}",
             "wss" if parsed.scheme == "https" else "ws",
         ),
     )
@@ -104,6 +104,8 @@ def probe_websocket(url: str, timeout: float) -> None:
     if host is None:
         raise SmokeFailure("WebSocket URL has no host")
     port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    origin_scheme = "https" if parsed.scheme == "wss" else "http"
+    origin = f"{origin_scheme}://{parsed.netloc}"
     key = base64.b64encode(os.urandom(16)).decode("ascii")
     expected_accept = base64.b64encode(
         hashlib.sha1(
@@ -123,6 +125,7 @@ def probe_websocket(url: str, timeout: float) -> None:
         request = (
             f"GET {path} HTTP/1.1\r\n"
             f"Host: {parsed.netloc}\r\n"
+            f"Origin: {origin}\r\n"
             "Upgrade: websocket\r\n"
             "Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"

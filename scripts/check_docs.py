@@ -22,6 +22,39 @@ ACTIVE_DOCS = (
 LINK_PATTERN = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 NPM_RUN_PATTERN = re.compile(r"\bnpm run ([a-zA-Z0-9:_-]+)")
 DESKTOP_PATTERN = re.compile(r"\bElectron\b|electron-|电子桌面|桌面(?:应用|工具|客户端)")
+LEGACY_PHASE1_PATTERNS = (
+    (re.compile(r"\b(?:input|output|file)_path\b|\boutput_dir\b|\bis_file_path\b", re.I), "server path"),
+    (re.compile(r"全局匿名\s*progress", re.I), "global progress"),
+    (re.compile(r"GET\s+settings\s+returns\s+hf_token", re.I), "plaintext token"),
+    (re.compile(r"unbounded\s+executor", re.I), "unbounded executor"),
+)
+REQUIRED_PHASE1_TERMS = (
+    "浏览器仅上传内容",
+    "hf_token_configured",
+    "clear_hf_token",
+    "task_id",
+    "HIIMAGE_WS_ORIGINS",
+    "HIIMAGE_TRUST_PROXY_HEADERS",
+    "HIIMAGE_MAX_PENDING_INFERENCE",
+    "0-32",
+    "429",
+    "/api/ready",
+    "不等价于公网安全",
+)
+REQUIRED_ENVIRONMENT_DEFAULTS = (
+    (
+        "`HIIMAGE_MAX_PENDING_INFERENCE` 设为默认 `4`",
+        "active docs must document HIIMAGE_MAX_PENDING_INFERENCE default 4",
+    ),
+    (
+        "`HIIMAGE_WS_ORIGINS` 设为空值同源模式",
+        "active docs must document HIIMAGE_WS_ORIGINS empty same-origin default",
+    ),
+    (
+        "`HIIMAGE_TRUST_PROXY_HEADERS` 默认 `false`",
+        "active docs must document HIIMAGE_TRUST_PROXY_HEADERS default false",
+    ),
+)
 
 
 def load_scripts(root: Path) -> set[str]:
@@ -80,6 +113,26 @@ def validate_active_docs(root: Path, relative_paths: tuple[str, ...]) -> None:
             )
 
 
+def validate_phase1_contract(root: Path, relative_paths: tuple[str, ...]) -> None:
+    """Reject legacy claims and require the phase-one contract in active docs."""
+    documents = {
+        relative_path: (root / relative_path).read_text(encoding="utf-8")
+        for relative_path in relative_paths
+    }
+    for relative_path, content in documents.items():
+        for pattern, message in LEGACY_PHASE1_PATTERNS:
+            match = pattern.search(content)
+            assert match is None, (
+                f"{relative_path} contains legacy {message} claim: {match.group(0)}"
+            )
+
+    corpus = "\n".join(documents.values())
+    for term in REQUIRED_PHASE1_TERMS:
+        assert term in corpus, f"active docs missing phase-one contract term: {term}"
+    for phrase, message in REQUIRED_ENVIRONMENT_DEFAULTS:
+        assert phrase in corpus, message
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -90,7 +143,9 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        validate_active_docs(ROOT, tuple(args.documents))
+        documents = tuple(args.documents)
+        validate_active_docs(ROOT, documents)
+        validate_phase1_contract(ROOT, documents)
     except (AssertionError, json.JSONDecodeError) as error:
         print(f"[FAIL] {error}", file=sys.stderr)
         return 1

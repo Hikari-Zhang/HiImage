@@ -11,7 +11,7 @@ import ModelSelect from '../components/ModelSelect/ModelSelect'
 import { useImageStore } from '../stores/useImageStore'
 import { useSettingsStore } from '../stores/useSettingsStore'
 import { useModelStore } from '../stores/useModelStore'
-import { useProcessStore } from '../stores/useProcessStore'
+import { isCurrentTask, useProcessStore } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
@@ -21,7 +21,8 @@ import { PostprocessMethod, DownloadStatus, ModelStatus } from '../constants'
 import type { MaskTool } from '../types/mask'
 import type { ROI } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
-import { apiClient } from '../services/apiClient'
+import { createTaskId } from '../services/taskId'
+import { createTaskProgressSession } from '../services/taskProgress'
 
 type CanvasTool = 'draw' | 'pan'
 
@@ -42,7 +43,7 @@ export default function WatermarkRemoval() {
     addMaskStroke, undoMaskStroke, clearMaskStrokes, setCanvasTool, setBrushSettings,
   } = useImageStore()
 
-  const { isProcessing, progress, statusMessage, startProcess, updateProgress, finishProcess, setError, reset } = useProcessStore()
+  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
   const { detectWatermark, inpaint, inpaintWithMask, runPipeline } = useBackendAPI()
   const {
     device, inpaintModel, defaultDilation, sensitivity, disableNsfw,
@@ -62,49 +63,6 @@ export default function WatermarkRemoval() {
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const wsRef = useRef<WebSocket | null>(null)
-
-  // WebSocket listener for progress updates
-  useEffect(() => {
-    const connectProgressWS = async () => {
-      try {
-        const wsURL = apiClient.websocketUrl('/api/ws/progress')
-
-        const ws = new WebSocket(wsURL)
-        ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data)
-            if (msg.type === 'progress' && typeof msg.percent === 'number') {
-              updateProgress(msg.percent, msg.message || '')
-            } else if (msg.type === 'complete') {
-              finishProcess(msg.message || '处理完成')
-            } else if (msg.type === 'error') {
-              setError(msg.message || '处理出错')
-            }
-          } catch (err) {
-            console.error('Failed to parse progress message:', err)
-          }
-        }
-        ws.onerror = () => {
-          console.error('Progress WebSocket error')
-        }
-        ws.onclose = () => {
-          // Reconnect after 3s
-          setTimeout(connectProgressWS, 3000)
-        }
-        wsRef.current = ws
-      } catch (err) {
-        console.error('Failed to connect progress WebSocket:', err)
-        setTimeout(connectProgressWS, 3000)
-      }
-    }
-
-    connectProgressWS()
-    return () => {
-      wsRef.current?.close()
-    }
-  }, [updateProgress, finishProcess, setError])
-
 
   // Open file
   const handleOpenFile = async () => {
@@ -154,18 +112,24 @@ export default function WatermarkRemoval() {
   // Auto detect
   const handleAutoDetect = async () => {
     if (!sourceImage) return
+    const taskId = createTaskId()
+    const session = createTaskProgressSession(taskId)
     try {
-      startProcess('detect')
-      const result = await detectWatermark(sourceImage, sensitivity / 100)
+      startProcess('detect', taskId)
+      const result = await session.run(
+        (requestTaskId) => detectWatermark(sourceImage, sensitivity / 100, requestTaskId),
+      )
+      if (!isCurrentTask(taskId)) return
       result.regions.forEach(([x1, y1, x2, y2]) => {
         addROI({ x1, y1, x2, y2 })
       })
-      finishProcess(`检测到 ${result.regions.length} 个区域`)
+      finishProcess(taskId, `检测到 ${result.regions.length} 个区域`)
       if (result.regions.length === 0) {
         showToast('info', '未检测到水印区域，请尝试调整敏感度或手动绘制')
       }
     } catch (err: any) {
-      setError(err.message)
+      if (!isCurrentTask(taskId)) return
+      setError(taskId, err.message)
       showToast('error', err.message)
     }
   }
@@ -188,16 +152,15 @@ export default function WatermarkRemoval() {
       return
     }
 
+    const taskId = createTaskId()
+    const session = createTaskProgressSession(taskId)
     try {
-      startProcess(inpaintModel)
-
+      startProcess(inpaintModel, taskId)
       const usePipeline = postprocessEnabled || upscaleEnabled
-      let resultBase64: string
-
-      // 使用合并遮罩模式（支持画笔遮罩 + ROI 矩形）
-      if (maskStrokes.length > 0 || rois.length > 0) {
+      const resultBase64 = await session.run(async (requestTaskId) => {
         // 导出合并遮罩为 base64（画笔遮罩 + ROI 矩形）
         const maskDataURL = await exportCombinedMask(maskStrokes, rois, imageWidth, imageHeight)
+        if (!isCurrentTask(requestTaskId)) throw new Error('任务已被新任务替代')
 
         if (usePipeline) {
           // 走完整 Pipeline（带遮罩）
@@ -212,8 +175,9 @@ export default function WatermarkRemoval() {
             postprocess_enabled: postprocessEnabled,
             upscale_enabled: upscaleEnabled,
             upscale_model: upscaleModel,
+            task_id: requestTaskId,
           })
-          resultBase64 = result.image
+          return result.image
         } else {
           // 仅去水印（遮罩模式）
           const result = await inpaintWithMask({
@@ -223,20 +187,20 @@ export default function WatermarkRemoval() {
             device,
             dilation: defaultDilation,
             disable_nsfw: disableNsfw,
+            task_id: requestTaskId,
           })
-          resultBase64 = result.image
+          return result.image
         }
-      } else {
-        showToast('error', '请先绘制遮罩区域或框选 ROI 区域')
-        return
-      }
+      })
 
+      if (!isCurrentTask(taskId)) return
       setResultImage(`data:image/png;base64,${resultBase64}`)
       setShowResult(true)
-      finishProcess('处理完成')
+      finishProcess(taskId, '处理完成')
       showToast('success', usePipeline ? 'Pipeline 处理完成' : '水印去除完成')
     } catch (err: any) {
-      setError(err.message)
+      if (!isCurrentTask(taskId)) return
+      setError(taskId, err.message)
       showToast('error', err.message)
     }
   }
