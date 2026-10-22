@@ -15,7 +15,7 @@ import { useDownloadStore } from '../stores/useDownloadStore'
 import { showToast } from '../components/ui'
 import { DownloadStatus, ModelStatus, ApiPath } from '../constants'
 import type { DownloadTask } from '../stores/useDownloadStore'
-import { createApiClient } from '../services/apiClient'
+import { createApiClient, readApiResponse, ensureApiSuccess } from '../services/apiClient'
 
 // ── 模块级单例（跨组件共享，整个应用生命周期只有一份） ─────────────────────────
 
@@ -134,8 +134,7 @@ async function _syncOne(modelId: string) {
   try {
     const client = createApiClient(useBackendStore.getState().backendURL)
     const res = await client.fetch(`${ApiPath.MODELS_HEALTH}/${encodeURIComponent(modelId)}`)
-    if (!res.ok) return
-    const data = await res.json() as { status: string; name?: string }
+    const data = await readApiResponse<{ status: string; name?: string }>(res, '读取模型状态失败')
     useDownloadStore.getState().setTask(modelId, {
       status: data.status === ModelStatus.OK ? ModelStatus.OK : ModelStatus.MISSING,
       speed: '', downloaded: '', totalSize: '', message: '',
@@ -158,10 +157,9 @@ export function useDownloadManager() {
     const client = getClient()
     try {
       const res = await client.fetch(ApiPath.MODELS_LIST)
-      if (!res.ok) return
-      const data = await res.json() as {
+      const data = await readApiResponse<{
         models?: Array<{ id: string; name: string; status: string }>
-      }
+      }>(res, '读取模型状态失败')
       // 用 getState() 避免订阅 store 导致 re-render
       const { getTask, setTask } = useDownloadStore.getState()
       for (const m of data.models ?? []) {
@@ -223,11 +221,7 @@ export function useDownloadManager() {
         _cancelledSet.delete(modelId)
         return
       }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as Record<string, unknown>
-        throw new Error((body.detail as string) || `提交下载失败 (${res.status})`)
-      }
-      const task = await res.json() as Record<string, unknown>
+      const task = await readApiResponse<Record<string, unknown>>(res, '提交下载失败')
       console.log(`[startDownload] POST 响应:`, task)
       // 再次检查（json 解析也是异步的）
       if (_cancelledSet.has(modelId)) {
@@ -269,9 +263,9 @@ export function useDownloadManager() {
     // 再通知后端取消
     const client = getClient()
     try {
-      await client.fetch(`${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, {
+      await ensureApiSuccess(await client.fetch(`${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, {
         method: 'DELETE',
-      })
+      }), '取消下载失败')
     } catch {
       // 忽略
     }
@@ -283,11 +277,7 @@ export function useDownloadManager() {
     const client = getClient()
     try {
       const res = await client.fetch(`${ApiPath.MODELS_DOWNLOAD}/bulk`, { method: 'POST' })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as Record<string, unknown>
-        throw new Error((body.detail as string) || `一键下载提交失败 (${res.status})`)
-      }
-      const data = await res.json() as { submitted: number; tasks: Record<string, unknown>[] }
+      const data = await readApiResponse<{ submitted: number; tasks: Record<string, unknown>[] }>(res, '一键下载提交失败')
 
       if (data.submitted === 0) {
         showToast('success', '所有模型均已下载，无需重复下载')

@@ -1,4 +1,5 @@
 import type { ApiClient } from './apiClient'
+import { ensureApiSuccess } from './apiClient'
 
 export async function saveSettingsRequest(client: Pick<ApiClient, 'fetch'>, payload: unknown): Promise<void> {
   const response = await client.fetch('/api/settings', {
@@ -6,17 +7,7 @@ export async function saveSettingsRequest(client: Pick<ApiClient, 'fetch'>, payl
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  if (response.ok) return
-
-  let message = `保存设置失败 (${response.status})`
-  try {
-    const data = await response.json() as { detail?: string; message?: string }
-    message = data.detail || data.message || message
-  } catch {
-    const text = await response.text().catch(() => '')
-    if (text) message = text
-  }
-  throw new Error(message)
+  await ensureApiSuccess(response, '保存设置失败')
 }
 
 export async function clearHfTokenRequest(client: Pick<ApiClient, 'fetch'>): Promise<void> {

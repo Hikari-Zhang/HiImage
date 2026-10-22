@@ -41,8 +41,10 @@ class RealESRGANExecutor(BaseModelExecutor):
     def unload_model(self) -> None:
         """卸载模型，释放显存"""
         if self._upscaler is not None:
-            # Upscaler 内部会处理模型卸载
-            self._upscaler = None
+            try:
+                self._upscaler.close()
+            finally:
+                self._upscaler = None
 
     def supports_mask(self) -> bool:
         """Real-ESRGAN 不需要 mask"""

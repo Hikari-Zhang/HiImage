@@ -18,6 +18,8 @@
 2026-05-14: 临时禁用 image_restoration 模式（Restormer 架构通道不匹配问题待修复）
 """
 from __future__ import annotations
+from core.model_session import model_session
+from core.model_executor import ModelExecutorFactory
 from core.utils import resolve_default_device
 
 import cv2
@@ -244,8 +246,8 @@ class Synthesizer:
         executor = ModelExecutorFactory.create_executor(model_config, self.device)
         
         # flux_fill 由 DiffusersExecutor 处理，无需特殊处理
-        result = executor.execute(base_rgb, mask=mask)
-        executor.unload_model()
+        with model_session(executor):
+            result = executor.execute(base_rgb, mask=mask)
 
         # 人脸模式：使用 GFPGAN 进一步增强脸部细节
         if hint == "face" and self.model_id == "gfpgan":
@@ -335,8 +337,8 @@ class Synthesizer:
         
         model_config = get_model(self.model_id)
         executor = ModelExecutorFactory.create_executor(model_config, self.device)
-        result = executor.execute(source_rgb, mask=mask, prompt=self.prompt)
-        executor.unload_model()
+        with model_session(executor):
+            result = executor.execute(source_rgb, mask=mask, prompt=self.prompt)
         return result
 
     # ------------------------------------------------------------------
@@ -410,8 +412,8 @@ class Synthesizer:
                 
                 model_config = get_model("sdxl")
                 executor = ModelExecutorFactory.create_executor(model_config, self.device)
-                result = executor.execute(source_rgb, mask=mask, prompt=inpaint_prompt)
-                executor.unload_model()
+                with model_session(executor):
+                    result = executor.execute(source_rgb, mask=mask, prompt=inpaint_prompt)
                 return result
 
         elif intent.action == "color_change" and use_sd:
@@ -421,8 +423,8 @@ class Synthesizer:
             
             model_config = get_model("sd15")
             executor = ModelExecutorFactory.create_executor(model_config, self.device)
-            result = executor.execute(source_rgb, mask=mask, prompt=sd_prompt)
-            executor.unload_model()
+            with model_session(executor):
+                result = executor.execute(source_rgb, mask=mask, prompt=sd_prompt)
             return result
 
         elif intent.action == "style_change":
@@ -432,8 +434,8 @@ class Synthesizer:
             
             model_config = get_model("sd15")
             executor = ModelExecutorFactory.create_executor(model_config, self.device)
-            result = executor.execute(source_rgb, mask=mask, prompt=sd_prompt)
-            executor.unload_model()
+            with model_session(executor):
+                result = executor.execute(source_rgb, mask=mask, prompt=sd_prompt)
             return result
 
         else:

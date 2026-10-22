@@ -1,5 +1,6 @@
+import { getSettingsDraftStore } from '../stores/useSettingsDraft'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ToastContainer from '../components/ui/Toast'
 import { useBackendStore } from '../stores/useBackendStore'
@@ -19,6 +20,7 @@ describe('Settings', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     useBackendStore.setState({ backendURL: '', isConnected: false, wsConnected: false })
     useSettingsStore.setState({ device: 'cpu', serverPort: 51821, isLoading: false })
+    getSettingsDraftStore('').getState().reset()
   })
 
   afterEach(() => {
@@ -129,5 +131,44 @@ describe('Settings', () => {
     await waitFor(() => expect(savedBodies).toContainEqual({ clear_hf_token: true }))
     expect(window.confirm).toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByText('Token 已配置')).not.toBeInTheDocument())
+  })
+
+  it('卸载再进入后保留未保存的输入，并延迟加载模型管理', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/api/devices')) return jsonResponse({ devices: [] })
+      if (String(input).endsWith('/api/health')) return jsonResponse({ status: 'ok' })
+      return jsonResponse({ device: 'cpu', server_port: 51821 })
+    }))
+    const first = render(<Settings isVisible />)
+    await waitFor(() => expect(useSettingsStore.getState().isLoading).toBe(false))
+    expect(screen.queryByText('模型管理内容')).not.toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText('HuggingFace Token'), 'unsaved-token')
+    first.unmount()
+    render(<Settings isVisible />)
+    await waitFor(() => expect(useSettingsStore.getState().isLoading).toBe(false))
+    expect(screen.getByLabelText('HuggingFace Token')).toHaveValue('unsaved-token')
+    await userEvent.click(screen.getByRole('button', { name: '模型管理' }))
+    expect(await screen.findByText('模型管理内容')).toBeInTheDocument()
+  })
+
+  it('保存中卸载再进入不会重复提交，原保存完成后恢复按钮', async () => {
+    let finishSave!: (response: Response) => void
+    const pendingSave = new Promise<Response>((resolve) => { finishSave = resolve })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'PUT') return pendingSave
+      if (String(input).endsWith('/api/devices')) return jsonResponse({ devices: [] })
+      if (String(input).endsWith('/api/health')) return jsonResponse({ status: 'ok' })
+      return jsonResponse({ device: 'cpu', server_port: 51821 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const first = render(<Settings isVisible />)
+    await waitFor(() => expect(useSettingsStore.getState().isLoading).toBe(false))
+    await userEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    first.unmount()
+    render(<Settings isVisible />)
+    expect(screen.getByRole('button', { name: '保存中...' })).toBeDisabled()
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(1)
+    await act(async () => { finishSave(jsonResponse({ ok: true })) })
+    expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled()
   })
 })

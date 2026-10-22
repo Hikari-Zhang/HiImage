@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { clearHfTokenRequest, saveSettingsRequest } from './settingsService'
 
 describe('saveSettingsRequest', () => {
+  it('preserves a plain-text server error instead of consuming the body twice', async () => {
+    const client = { fetch: async () => new Response('磁盘空间不足', { status: 500 }) }
+    await expect(saveSettingsRequest(client, {})).rejects.toThrow('磁盘空间不足')
+  })
   it('throws the backend error when the response is not successful', async () => {
     const client = {
       fetch: async () => new Response(JSON.stringify({ detail: '设备配置无效' }), {

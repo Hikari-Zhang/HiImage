@@ -11,7 +11,7 @@ import { useDownloadManager } from '../hooks/useDownloadManager'
 import { ModelStatus, DownloadStatus, Provider, IOPaintMode, ApiPath } from '../constants'
 import type { DownloadTask } from '../stores/useDownloadStore'
 import type { ModelStatusValue } from '../constants'
-import { createApiClient } from '../services/apiClient'
+import { createApiClient, readApiResponse } from '../services/apiClient'
 
 // ── 类型 ──────────────────────────────────────────────────────────────────────
 
@@ -91,24 +91,25 @@ export default function ModelManager() {
 
   const downloadListRef = useRef<HTMLDivElement>(null)
   const loadModelsRef = useRef<() => Promise<void>>(async () => {})
-  const loadingRef = useRef(false)  // 防止并发调用堆积
+  const controllerRef = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
 
   // ── 加载模型列表 ────────────────────────────────────────────────────────────
 
   const loadModels = useCallback(async () => {
-    if (loadingRef.current) return  // 已在加载中，跳过
-    loadingRef.current = true
+    if (!mountedRef.current || controllerRef.current) return
     setLoading(true)
     const controller = new AbortController()
+    controllerRef.current = controller
     const timer = setTimeout(() => controller.abort(), 15000)  // 15s 超时
     try {
       const res = await client.fetch(ApiPath.MODELS_LIST, { signal: controller.signal })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json() as { models?: ModelEntry[]; mode_groups?: ModeGroup[] }
+      const data = await readApiResponse<{ models?: ModelEntry[]; mode_groups?: ModeGroup[] }>(res, '读取模型列表失败')
+      if (controller.signal.aborted) return
       setModels(data.models ?? [])
       setModeGroups(data.mode_groups ?? [])
     } catch (e: unknown) {
-      if (e instanceof Error && e.name === 'AbortError') {
+      if (controller.signal.aborted || (e instanceof Error && e.name === 'AbortError')) {
         // 超时静默处理，不弹 Toast，loading 会在 finally 里清掉
       } else {
         const msg = e instanceof Error ? e.message : String(e)
@@ -116,18 +117,25 @@ export default function ModelManager() {
       }
     } finally {
       clearTimeout(timer)
-      loadingRef.current = false
-      setLoading(false)
+      if (controllerRef.current === controller) {
+        controllerRef.current = null
+        setLoading(false)
+      }
     }
   }, [backendURL])
 
   // 始终保持 ref 指向最新的 loadModels 闭包
   useEffect(() => { loadModelsRef.current = loadModels }, [loadModels])
 
-  // 挂载时无条件执行一次
   useEffect(() => {
-    loadModelsRef.current()
-  }, [])
+    mountedRef.current = true
+    loadModels()
+    return () => {
+      mountedRef.current = false
+      controllerRef.current?.abort()
+      controllerRef.current = null
+    }
+  }, [loadModels])
 
   // 监听下载完成（done → ok 转换），触发模型列表刷新
   useEffect(() => {
@@ -192,7 +200,7 @@ export default function ModelManager() {
     setDeletingId(model.id)
     try {
       const res = await client.fetch(`/api/models/${model.id}/files`, { method: 'DELETE' })
-      const data = await res.json() as { ok: boolean; message?: string }
+      const data = await readApiResponse<{ ok: boolean; message?: string }>(res, '删除模型文件失败')
       if (data.ok) {
         showToast('success', data.message ?? '删除成功')
         // 更新 downloadStore：删除后状态变为 missing，功能页面模型选择器立即同步

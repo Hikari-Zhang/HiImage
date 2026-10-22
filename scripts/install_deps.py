@@ -21,10 +21,9 @@ REQUIREMENTS = PROJECT_ROOT / "backend" / "requirements.txt"
 
 # 与 iopaint 1.6.0 冲突、需要 --no-deps 单独安装的包
 CONFLICT_PACKAGES = [
-    "diffusers>=0.32.0",
-    "transformers>=4.47.0,<5.0",
-    "huggingface-hub>=0.27.0,<1.0",
-    "peft>=0.9.0",
+    line.split("#", 1)[0].strip()
+    for line in (PROJECT_ROOT / "backend" / "requirements-inference.txt").read_text(encoding="utf-8").splitlines()
+    if line.split("#", 1)[0].strip()
 ]
 
 pip = [sys.executable, "-m", "pip"]

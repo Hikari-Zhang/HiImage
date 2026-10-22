@@ -34,6 +34,8 @@ DEFAULTS = {
     "inpaint.default_dilation": 10,
     "inpaint.default_device": configured_default_device(),
     "image.max_output_mb": 256,
+    "image.max_decode_mb": 30,
+    "image.max_input_rgba_mb": 256,
     "network.hf_endpoint": "https://huggingface.com",
     "network.hf_token": "",
     "download.max_concurrent": 3,

@@ -18,6 +18,7 @@ import numpy as np
 from dataclasses import dataclass, field, fields
 from typing import List, Optional, Tuple
 
+from core.model_session import model_session
 from core.model_registry import get_default_model
 from core.utils import default_device_for_platform
 
@@ -100,24 +101,26 @@ class Pipeline:
         model_config = get_model(cfg.inpaint.model)
         executor = ModelExecutorFactory.create_executor(model_config, cfg.inpaint.device)
 
-        if mask is not None:
-            # 使用外部传入的 mask
-            inpaint_mask = mask
-            inpainted = executor.execute(original_rgb, mask=inpaint_mask, 
-                                       dilation=cfg.inpaint.dilation, 
-                                       disable_nsfw=cfg.inpaint.disable_nsfw)
-        elif rois:
-            # 从 ROI 生成 mask
-            h, w = original_rgb.shape[:2]
-            inpaint_mask = np.zeros((h, w), dtype=np.uint8)
-            for (x1, y1, x2, y2) in rois:
-                inpaint_mask[y1:y2, x1:x2] = 255
-            inpainted = executor.execute(original_rgb, mask=inpaint_mask)
-        else:
-            executor.unload_model()
-            raise ValueError("[Pipeline] 必须提供 rois 或 mask 之一")
+        with model_session(executor):
+            if mask is not None:
+                # 使用外部传入的 mask
+                inpaint_mask = mask
+                inpainted = executor.execute(
+                    original_rgb,
+                    mask=inpaint_mask,
+                    dilation=cfg.inpaint.dilation,
+                    disable_nsfw=cfg.inpaint.disable_nsfw,
+                )
+            elif rois:
+                # 从 ROI 生成 mask
+                h, w = original_rgb.shape[:2]
+                inpaint_mask = np.zeros((h, w), dtype=np.uint8)
+                for (x1, y1, x2, y2) in rois:
+                    inpaint_mask[y1:y2, x1:x2] = 255
+                inpainted = executor.execute(original_rgb, mask=inpaint_mask)
+            else:
+                raise ValueError("[Pipeline] 必须提供 rois 或 mask 之一")
 
-        executor.unload_model()
         _progress("inpaint", 50)
 
         # ── Step 2: 后处理 ───────────────────────────────────────
@@ -147,7 +150,8 @@ class Pipeline:
 
             from core.upscaler import Upscaler
             upscaler = Upscaler(model_name=cfg.upscale.model, device=cfg.upscale.device)
-            result = upscaler.upscale(result)
+            with model_session(upscaler, "close"):
+                result = upscaler.upscale(result)
             _progress("upscale", 95)
         else:
             print("[Pipeline] Step 3/3 - Upscale: 跳过")

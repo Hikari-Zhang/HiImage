@@ -22,17 +22,22 @@ const DEFAULT_OPTIONS: DeviceOption[] = [
  * 获取计算设备选项列表，并根据后端检测结果标记不可用设备。
  * 同时自动将当前选中设备纠正为最优可用设备（若当前选中设备不可用）。
  */
-export function useDeviceOptions(): { options: DeviceOption[]; loading: boolean } {
+export function useDeviceOptions(selection?: {
+  device: string
+  setDevice: (device: string) => void
+}): { options: DeviceOption[]; loading: boolean } {
   const { getDevices } = useBackendAPI()
-  const { device, setDevice } = useSettingsStore()
+  const settings = useSettingsStore()
+  const { device, setDevice } = selection ?? settings
   const [options, setOptions] = useState<DeviceOption[]>(DEFAULT_OPTIONS)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
     setLoading(true)
 
-    getDevices()
+    getDevices(controller.signal)
       .then((data) => {
         if (cancelled) return
         if (!data?.devices) {
@@ -90,6 +95,7 @@ export function useDeviceOptions(): { options: DeviceOption[]; loading: boolean 
 
     return () => {
       cancelled = true
+      controller.abort()
     }
   // 仅在组件挂载时执行一次；device/setDevice 变更由组件自身处理
   // eslint-disable-next-line react-hooks/exhaustive-deps

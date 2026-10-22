@@ -98,12 +98,15 @@ export default function ImageCanvas({
     }
 
     const img = new Image()
+    let active = true
     img.onload = () => {
+      if (!active) return
       imageRef.current = img
       onImageLoad(img.naturalWidth, img.naturalHeight)
       fitToView(img)
     }
     img.src = imageSrc
+    return () => { active = false; img.onload = null }
   }, [imageSrc, fitToView])
 
   // Re-fit when container size changes

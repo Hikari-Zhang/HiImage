@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Trash2, ArrowDown, Filter, CircleAlert, Info, AlertTriangle, Bug } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useFirstVisible } from '../hooks/useFirstVisible'
-import { apiClient } from '../services/apiClient'
+import { apiClient, ensureApiSuccess } from '../services/apiClient'
 import { ManagedWebSocket } from '../services/managedWebSocket'
 
 interface LogEntry {
@@ -29,16 +29,18 @@ export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
   // Fetch initial logs
   useEffect(() => {
     if (!ready) return
+    const controller = new AbortController()
+    let active = true
     const fetchLogs = async () => {
       try {
-        const res = await apiClient.fetch('/api/logs?limit=500')
-        const data = await res.json()
-        setLogs(data.logs)
+        const data = await apiClient.json<{ logs: LogEntry[] }>('/api/logs?limit=500', { signal: controller.signal }, '读取日志失败')
+        if (active) setLogs(data.logs)
       } catch (err) {
-        console.error('Failed to fetch logs:', err)
+        if (active) console.error('Failed to fetch logs:', err)
       }
     }
     fetchLogs()
+    return () => { active = false; controller.abort() }
   }, [ready])
 
   // WebSocket for real-time logs
@@ -68,7 +70,7 @@ export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
 
   const handleClear = async () => {
     try {
-      await apiClient.fetch('/api/logs', { method: 'DELETE' })
+      await ensureApiSuccess(await apiClient.fetch('/api/logs', { method: 'DELETE' }), '清空日志失败')
       setLogs([])
     } catch (err) {
       console.error('Failed to clear logs:', err)

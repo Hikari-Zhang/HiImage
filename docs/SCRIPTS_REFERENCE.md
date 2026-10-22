@@ -160,7 +160,9 @@ python scripts/check_hf_repo_size.py Sanster/PowerPaint_v2
 
 ### `scripts/install_deps.py`
 
-安装后端依赖并处理 IOPaint 与 FLUX 依赖组合。通常由 setup 调用，不应替代正常的 `npm run setup`。
+安装后端依赖并处理 IOPaint 与 FLUX 依赖组合。本地 setup 与该脚本共用 `backend/requirements-inference.txt` 的固定组合：diffusers 0.32.2、transformers 4.48.3、huggingface-hub 0.36.2、peft 0.14.0。覆盖步骤使用 `--no-deps`，避免 IOPaint 的旧版声明阻止安装；不得把这组依赖替换为无上限升级，diffusers 新版可能需要 Hub 1.x，而本组 transformers 要求 Hub <1。启动依赖探针同时校验这组已安装版本，基本 Web 依赖可导入不再等价于推理环境可用。Docker 使用其 Dockerfile 中独立固定的构建参数。
+
+正常安装入口仍为 `npm run setup`；手动覆盖时使用 `python -m pip install -r backend/requirements-inference.txt --no-deps`，随后验证 `from iopaint.model_manager import ModelManager` 和所需 diffusers Pipeline 可导入。
 
 ### `scripts/post_install.py`
 

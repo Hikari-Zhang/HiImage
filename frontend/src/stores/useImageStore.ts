@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import type { EditorSessionId } from '../types/editor'
+import { useProcessStore } from './useProcessStore'
 import type { MaskStroke, BrushSettings, MaskTool } from '../types/mask'
 import { DEFAULT_BRUSH_SETTINGS, MAX_UNDO_STEPS } from '../types/mask'
 
@@ -14,6 +16,11 @@ interface ImageState {
   sourceImage: string | null // Base64 or data URL
   sourceFilePath: string | null
   resultImage: string | null
+  showResult: boolean
+  setShowResult: (show: boolean) => void
+  sourceRevision: number
+  resultWidth: number
+  resultHeight: number
   imageWidth: number
   imageHeight: number
   rois: ROI[]
@@ -26,8 +33,8 @@ interface ImageState {
   canvasTool: MaskTool
 
   setSourceImage: (image: string | null, filePath?: string | null) => void
-  setImageDimensions: (width: number, height: number) => void
-  setResultImage: (image: string | null) => void
+  setImageDimensions: (width: number, height: number, revision?: number) => void
+  setResultImage: (image: string | null, width?: number, height?: number) => void
   addROI: (roi: Omit<ROI, 'id'>) => void
   removeROI: (id: string) => void
   clearROIs: () => void
@@ -47,102 +54,131 @@ interface ImageState {
 
 let roiCounter = 0
 
-export const useImageStore = create<ImageState>((set) => ({
-  sourceImage: null,
-  sourceFilePath: null,
-  resultImage: null,
-  imageWidth: 0,
-  imageHeight: 0,
-  rois: [],
-  selectedROIs: [],
+function createImageSessionStore(sessionId: EditorSessionId) {
+  return create<ImageState>((set) => ({
+    sourceRevision: 0,
+    resultWidth: 0,
+    resultHeight: 0,
+    sourceImage: null,
+    sourceFilePath: null,
+    resultImage: null,
+    showResult: false,
+    setShowResult: (showResult) => set({ showResult }),
+    imageWidth: 0,
+    imageHeight: 0,
+    rois: [],
+    selectedROIs: [],
 
-  // 遮罩相关状态初始值
-  maskStrokes: [],
-  brushSettings: DEFAULT_BRUSH_SETTINGS,
-  maskDataURL: null,
-  canvasTool: 'rectangle',
+    // 遮罩相关状态初始值
+    maskStrokes: [],
+    brushSettings: DEFAULT_BRUSH_SETTINGS,
+    maskDataURL: null,
+    canvasTool: 'rectangle',
 
-  setSourceImage: (image, filePath) =>
-    set({
-      sourceImage: image,
-      sourceFilePath: filePath || null,
-      resultImage: null,
-      rois: [],
-      selectedROIs: [],
-      maskStrokes: [],
-      maskDataURL: null,
+    setSourceImage: (image, filePath) => {
+      useProcessStore.getState().reset(sessionId)
+      set((state) => ({
+        sourceRevision: state.sourceRevision + 1,
+        imageWidth: 0,
+        imageHeight: 0,
+        resultWidth: 0,
+        resultHeight: 0,
+        sourceImage: image,
+        sourceFilePath: filePath || null,
+        resultImage: null,
+        showResult: false,
+        rois: [],
+        selectedROIs: [],
+        maskStrokes: [],
+        maskDataURL: null,
+      }))
+    },
+
+    setImageDimensions: (width, height, revision) => set((state) =>
+      revision !== undefined && state.sourceRevision !== revision
+        ? state : { imageWidth: width, imageHeight: height }),
+
+    setResultImage: (image, width = 0, height = 0) => set({
+      resultImage: image, resultWidth: width, resultHeight: height, showResult: !!image,
     }),
 
-  setImageDimensions: (width, height) => set({ imageWidth: width, imageHeight: height }),
+    addROI: (roi) => {
+      const id = `roi_${++roiCounter}`
+      set((state) => ({
+        rois: [...state.rois, { ...roi, id }],
+      }))
+    },
 
-  setResultImage: (image) => set({ resultImage: image }),
+    removeROI: (id) =>
+      set((state) => ({
+        rois: state.rois.filter((r) => r.id !== id),
+        selectedROIs: state.selectedROIs.filter((sid) => sid !== id),
+      })),
 
-  addROI: (roi) => {
-    const id = `roi_${++roiCounter}`
-    set((state) => ({
-      rois: [...state.rois, { ...roi, id }],
-    }))
-  },
+    clearROIs: () => set({ rois: [], selectedROIs: [] }),
 
-  removeROI: (id) =>
-    set((state) => ({
-      rois: state.rois.filter((r) => r.id !== id),
-      selectedROIs: state.selectedROIs.filter((sid) => sid !== id),
-    })),
+    selectROI: (id) =>
+      set((state) => ({
+        selectedROIs: [...state.selectedROIs, id],
+      })),
 
-  clearROIs: () => set({ rois: [], selectedROIs: [] }),
+    deselectROI: (id) =>
+      set((state) => ({
+        selectedROIs: state.selectedROIs.filter((sid) => sid !== id),
+      })),
 
-  selectROI: (id) =>
-    set((state) => ({
-      selectedROIs: [...state.selectedROIs, id],
-    })),
+    setROIs: (rois) => set({ rois }),
 
-  deselectROI: (id) =>
-    set((state) => ({
-      selectedROIs: state.selectedROIs.filter((sid) => sid !== id),
-    })),
+    // 遮罩相关方法实现
+    setBrushSettings: (settings) =>
+      set((state) => ({
+        brushSettings: { ...state.brushSettings, ...settings },
+      })),
 
-  setROIs: (rois) => set({ rois }),
+    addMaskStroke: (stroke) =>
+      set((state) => {
+        const newStrokes = [...state.maskStrokes, stroke]
+        // 限制撤销栈大小
+        if (newStrokes.length > MAX_UNDO_STEPS) {
+          newStrokes.shift()
+        }
+        return { maskStrokes: newStrokes }
+      }),
 
-  // 遮罩相关方法实现
-  setBrushSettings: (settings) =>
-    set((state) => ({
-      brushSettings: { ...state.brushSettings, ...settings },
-    })),
+    undoMaskStroke: () =>
+      set((state) => ({
+        maskStrokes: state.maskStrokes.slice(0, -1),
+      })),
 
-  addMaskStroke: (stroke) =>
-    set((state) => {
-      const newStrokes = [...state.maskStrokes, stroke]
-      // 限制撤销栈大小
-      if (newStrokes.length > MAX_UNDO_STEPS) {
-        newStrokes.shift()
-      }
-      return { maskStrokes: newStrokes }
-    }),
+    clearMaskStrokes: () => set({ maskStrokes: [], maskDataURL: null }),
 
-  undoMaskStroke: () =>
-    set((state) => ({
-      maskStrokes: state.maskStrokes.slice(0, -1),
-    })),
+    setMaskDataURL: (url) => set({ maskDataURL: url }),
 
-  clearMaskStrokes: () => set({ maskStrokes: [], maskDataURL: null }),
+    setCanvasTool: (tool) => set({ canvasTool: tool }),
 
-  setMaskDataURL: (url) => set({ maskDataURL: url }),
+    reset: () => {
+      useProcessStore.getState().reset(sessionId)
+      set((state) => ({
+        sourceRevision: state.sourceRevision + 1,
+        resultWidth: 0,
+        resultHeight: 0,
+        sourceImage: null,
+        sourceFilePath: null,
+        resultImage: null,
+        showResult: false,
+        imageWidth: 0,
+        imageHeight: 0,
+        rois: [],
+        selectedROIs: [],
+        maskStrokes: [],
+        maskDataURL: null,
+        brushSettings: DEFAULT_BRUSH_SETTINGS,
+        canvasTool: 'rectangle',
+      }))
+    },
+  }))
+}
 
-  setCanvasTool: (tool) => set({ canvasTool: tool }),
-
-  reset: () =>
-    set({
-      sourceImage: null,
-      sourceFilePath: null,
-      resultImage: null,
-      imageWidth: 0,
-      imageHeight: 0,
-      rois: [],
-      selectedROIs: [],
-      maskStrokes: [],
-      maskDataURL: null,
-      brushSettings: DEFAULT_BRUSH_SETTINGS,
-      canvasTool: 'rectangle',
-    }),
-}))
+export const useImageStore = createImageSessionStore('watermark')
+export const useUpscaleImageStore = createImageSessionStore('upscale')
+export const useSynthesisImageStore = createImageSessionStore('synthesis')

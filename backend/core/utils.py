@@ -4,9 +4,7 @@
 原本在 app/routers/models.py 和 core/download_queue.py 中各自定义了一份，
 现提取到此处，消除重复代码和反向依赖。
 """
-import asyncio
 import platform
-from typing import Callable
 
 
 def fmt_speed(bytes_per_sec: float) -> str:
@@ -78,31 +76,3 @@ def resolve_effective_device(model_name: str, device: str) -> str:
     except Exception:
         pass
     return device
-
-
-def make_progress_callback(
-    task_id: str,
-    loop: asyncio.AbstractEventLoop,
-    source: str = "inpaint",
-) -> Callable[[int, str], None]:
-    """
-    创建线程安全的进度回调（子线程 → 主线程事件循环）。
-
-    用法：
-        callback = make_progress_callback(req.task_id, loop, source="synthesis")
-        model_exec.execute(image, progress_callback=callback)
-    """
-    # Import lazily to avoid circular import (app → core → app)
-    from app.websocket.progress import progress_manager
-    from app.logging_manager import log_manager
-
-    def callback(percent: int, message: str) -> None:
-        try:
-            asyncio.run_coroutine_threadsafe(
-                progress_manager.send_progress(percent, message, task_id=task_id),
-                loop,
-            )
-        except Exception as e:
-            log_manager.error(f"进度上报失败: {e}", source=source)
-
-    return callback

@@ -13,15 +13,20 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.routers.inpaint import decode_image, encode_image, check_image_size, ensure_model_ready_with_progress
+from app.services.image_codec import decode_image, encode_image, check_image_size
+from app.services.model_readiness import ensure_model_ready_with_progress
+from app.services import image_processing
 from app.shared_executor import inference_admission, inference_scheduler
 from app.task_id import TaskId
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
-from core.utils import make_progress_callback, resolve_default_device
+from app.services.progress import make_progress_callback
+from core.utils import resolve_default_device
 from app.config import get
 
-router = APIRouter()
+from app.task_route import TaskRoute
+
+router = APIRouter(route_class=TaskRoute)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -90,25 +95,14 @@ async def run_synthesis(req: SynthesisRequest):
 
     loop = asyncio.get_running_loop()
 
-    def _process():
-        from core.synthesizer import Synthesizer
-        synth = Synthesizer(
-            mode=req.mode,
-            model_id=req.model_id,
-            device=req.device,
-            prompt=req.prompt,
-            progress_callback=make_progress_callback(req.task_id, loop, source="synthesis"),
-        )
-        return synth.run(
-            source_rgb=source,
-            rois=rois,
-            reference_rgb=reference,
-        )
-
     await progress_manager.send_progress(20, "正在处理中...", task_id=req.task_id)
 
     try:
-        result = await inference_scheduler.run_blocking(_process)
+        result = await inference_scheduler.run_blocking(
+            image_processing.synthesize_image, source, reference, rois,
+            mode=req.mode, model_id=req.model_id, device=req.device, prompt=req.prompt,
+            progress_callback=make_progress_callback(req.task_id, loop, source="synthesis"),
+        )
         h, w = result.shape[:2]
         await progress_manager.send_complete("合成完成", task_id=req.task_id)
         log_manager.info(f"智能合成完成: output={w}x{h}", source="synthesis")

@@ -26,6 +26,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from app.services.model_catalog import model_groups
 from core.model_checker import ModelChecker
 from core.model_registry import MODELS, MODE_GROUPS
 from core.constants import ModelStatus as MS, DownloadStatus as DS, Provider, IOPaintMode
@@ -404,63 +405,10 @@ async def get_model_groups():
     }
     ```
     """
-    from core.model_registry import get_models_for_mode, get_default_model
-
-    # ── inpaint ──────────────────────────────────────────────────────────────
-    inpaint_groups: dict[str, list] = {}
-    for m in get_models_for_mode("watermark_removal"):
-        g = m.get("display_group", "其他")
-        inpaint_groups.setdefault(g, []).append({
-            "id":          m["id"],
-            "name":        m.get("name", m["id"]),
-            "description": m.get("description", ""),
-            "badge":       m.get("badge", ""),
-        })
-
-    # ── upscale ──────────────────────────────────────────────────────────────
-    upscale_groups: dict[str, list] = {}
-    for m in get_models_for_mode("upscale"):
-        g = m.get("display_group", "其他")
-        upscale_groups.setdefault(g, []).append({
-            "id":          m["id"],
-            "name":        m.get("name", m["id"]),
-            "description": m.get("description", ""),
-            "scale":       m.get("scale", 4),
-            "outscale":    m.get("outscale", m.get("scale", 4)),
-            "badge":       m.get("badge", ""),
-            "supports_custom_outscale": m.get("supports_custom_outscale", False),
-        })
-
-    # ── cutout ───────────────────────────────────────────────────────────────
-    cutout_groups: dict[str, list] = {}
-    for m in get_models_for_mode("cutout"):
-        g = m.get("display_group", "通用抠图")
-        cutout_groups.setdefault(g, []).append({
-            "id":              m["id"],
-            "name":            m.get("name", m["id"]),
-            "description":     m.get("description", ""),
-            "recommended_for": m.get("recommended_for", ""),
-            "size_mb":         m.get("size_mb"),
-            "badge":           m.get("badge", ""),
-            "provider":        m.get("provider", ""),
-        })
-
-    try:
-        default_cutout = get_default_model("cutout")
-    except KeyError:
-        default_cutout = "birefnet"
-
     return {
-        "inpaint": {
-            "groups": [{"label": label, "models": ms} for label, ms in inpaint_groups.items()],
-        },
-        "upscale": {
-            "groups": [{"label": label, "models": ms} for label, ms in upscale_groups.items()],
-        },
-        "cutout": {
-            "groups": [{"label": label, "models": ms} for label, ms in cutout_groups.items()],
-            "default_model": default_cutout,
-        },
+        "inpaint": model_groups("watermark_removal"),
+        "upscale": model_groups("upscale"),
+        "cutout": model_groups("cutout"),
     }
 
 

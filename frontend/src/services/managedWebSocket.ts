@@ -40,8 +40,10 @@ export class ManagedWebSocket {
       this.settleOpenFailure(new Error('WebSocket open timed out'))
       this.dispose()
     }, timeoutMs)
+    // connect() can fail synchronously and clear this.openPromise.
+    const pending = this.openPromise
     this.start()
-    return this.openPromise
+    return pending
   }
 
   dispose(): void {
@@ -54,7 +56,15 @@ export class ManagedWebSocket {
     this.settleOpenFailure(new Error('WebSocket disposed before open'))
     const socket = this.socket
     this.socket = null
+    if (socket) this.detach(socket)
     socket?.close()
+  }
+
+  private detach(socket: WebSocket): void {
+    socket.onopen = null
+    socket.onclose = null
+    socket.onmessage = null
+    socket.onerror = null
   }
 
   private settleOpenSuccess(): void {
@@ -90,21 +100,27 @@ export class ManagedWebSocket {
       return
     }
     this.socket = socket
-    socket.onmessage = this.options.onMessage ?? null
-    socket.onerror = this.options.onError ?? null
+    socket.onmessage = (event) => {
+      if (!this.disposed && this.socket === socket) this.options.onMessage?.(event)
+    }
+    socket.onerror = () => {
+      if (!this.disposed && this.socket === socket) this.options.onError?.()
+    }
     socket.onopen = () => {
       if (this.disposed || this.socket !== socket) return
       this.settleOpenSuccess()
     }
     socket.onclose = () => {
-      if (this.socket === socket) this.socket = null
+      if (this.disposed || this.socket !== socket) return
+      this.detach(socket)
+      this.socket = null
       this.opened = false
       this.handleConnectionFailure()
     }
   }
 
   private handleConnectionFailure(): void {
-    if (this.disposed) return
+    if (this.disposed || this.reconnectTimer !== null) return
     const maxRetries = this.options.maxRetries ?? 5
     if (this.retryCount >= maxRetries) {
       this.settleOpenFailure(new Error('WebSocket failed to open'))

@@ -7,6 +7,7 @@
   - lama_refine : 用 LaMa 二次精修修复区域，背景一致性最佳
 """
 from __future__ import annotations
+from core.model_session import model_session
 
 import os
 import sys
@@ -246,8 +247,8 @@ def _lama_refine(
         
         model_config = get_model("lama_inpaint")
         executor = ModelExecutorFactory.create_executor(model_config, device)
-        result = executor.execute(inpainted_rgb, mask=refined_mask)
-        executor.unload_model()
+        with model_session(executor):
+            result = executor.execute(inpainted_rgb, mask=refined_mask)
         return result
     except Exception as e:
         print(f"[BackgroundFixer] LaMa 二次精修失败（退化为 inpainting 结果）: {e}")

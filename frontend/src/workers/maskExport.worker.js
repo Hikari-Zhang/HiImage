@@ -28,7 +28,7 @@
  * }
  */
 
-self.onmessage = function (e) {
+self.onmessage = async function (e) {
   const { type, strokes, rois, imageWidth, imageHeight, scale = 1 } = e.data
 
   if (type !== 'export' && type !== 'export-combined') {
@@ -110,17 +110,14 @@ self.onmessage = function (e) {
     }
 
     // 导出为 PNG
-    canvas.convertToBlob({ type: 'image/png' }).then((blob) => {
+    const blob = await canvas.convertToBlob({ type: 'image/png' })
+    const dataURL = await new Promise((resolve, reject) => {
       const reader = new FileReader()
-      reader.onload = function () {
-        const dataURL = reader.result
-        self.postMessage({
-          type: 'export-complete',
-          dataURL: dataURL,
-        })
-      }
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = () => reject(new Error('无法读取遮罩图片'))
       reader.readAsDataURL(blob)
     })
+    self.postMessage({ type: 'export-complete', dataURL })
   } catch (error) {
     self.postMessage({
       type: 'export-error',

@@ -4,6 +4,7 @@ export type ApiClient = {
   sseUrl: (path: string) => string
   websocketUrl: (path: string) => string
   fetch: (path: string, init?: RequestInit) => Promise<Response>
+  json: <T>(path: string, init?: RequestInit, failureMessage?: string) => Promise<T>
 }
 
 export class ApiError extends Error {
@@ -21,6 +22,59 @@ export class ApiError extends Error {
 }
 
 const QUEUE_FULL_MESSAGE = '服务器任务队列已满，请稍后重试'
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : undefined
+}
+
+function errorDetail(value: unknown): string | undefined {
+  if (typeof value === 'string') return value.trim() || undefined
+  if (Array.isArray(value)) return value.map(errorDetail).filter(Boolean).join('；') || undefined
+  const record = object(value)
+  if (!record) return undefined
+  // FastAPI validation errors contain an array of {loc, msg, type} entries.
+  if (typeof record.msg === 'string') {
+    const location = Array.isArray(record.loc) ? record.loc.filter((part) => part !== 'body').join('.') : ''
+    return location ? `${location}: ${record.msg}` : record.msg
+  }
+  return errorDetail(record.message) || errorDetail(record.detail)
+}
+
+async function readBody(response: Response) {
+  const text = await response.text()
+  try {
+    return { text, data: JSON.parse(text) as unknown, valid: true }
+  } catch {
+    return { text, data: undefined, valid: false }
+  }
+}
+
+function responseError(response: Response, body: Awaited<ReturnType<typeof readBody>>, fallback: string): ApiError {
+  const record = object(body.data)
+  // Proxy HTML pages should not become a wall of markup in a toast.
+  const plain = !body.valid && body.text.trim() && !body.text.trim().startsWith('<')
+    ? body.text.trim().slice(0, 500) : undefined
+  return new ApiError(
+    response.status === 429 ? QUEUE_FULL_MESSAGE
+      : errorDetail(body.data) || plain || `${fallback} (${response.status})`,
+    response.status,
+    typeof record?.code === 'string' ? record.code : undefined,
+    typeof record?.retryable === 'boolean' ? record.retryable : response.status === 429,
+  )
+}
+
+export async function ensureApiSuccess(response: Response, failureMessage = '请求失败'): Promise<void> {
+  if (!response.ok) throw responseError(response, await readBody(response), failureMessage)
+}
+
+export async function readApiResponse<T>(response: Response, failureMessage = '请求失败'): Promise<T> {
+  const body = await readBody(response)
+  if (!response.ok) throw responseError(response, body, failureMessage)
+  if (response.status === 204) return undefined as T
+  if (!body.valid) throw new ApiError(`${failureMessage}：服务返回了无效的 JSON 响应`, response.status, 'INVALID_RESPONSE')
+  return body.data as T
+}
 
 function trim(value: string): string {
   return value.replace(/\/+$/, '')
@@ -44,20 +98,17 @@ export function createApiClient(baseUrl?: string): ApiClient {
     const response = await fetch(url(path), init)
     if (response.status !== 429) return response
 
-    let body: { code?: string; retryable?: boolean } = {}
+    let body: Awaited<ReturnType<typeof readBody>>
     try {
-      body = await response.json()
+      body = await readBody(response)
     } catch {
-      // 429 即使响应体损坏，也使用统一的可恢复错误。
+      body = { text: '', data: undefined, valid: false }
     }
-    throw new ApiError(
-      QUEUE_FULL_MESSAGE,
-      response.status,
-      body.code,
-      body.retryable ?? true,
-    )
+    throw responseError(response, body, QUEUE_FULL_MESSAGE)
   }
-  return { baseUrl: base, url, sseUrl, websocketUrl, fetch: request }
+  const json: ApiClient['json'] = async <T>(path: string, init?: RequestInit, failureMessage?: string) =>
+    readApiResponse<T>(await request(path, init), failureMessage)
+  return { baseUrl: base, url, sseUrl, websocketUrl, fetch: request, json }
 }
 
 export const apiClient = createApiClient()

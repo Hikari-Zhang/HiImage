@@ -4,12 +4,8 @@ const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
 const SETUP_VERSION = 2;
-const FLUX_PACKAGES = [
-  'diffusers>=0.32.0',
-  'transformers>=4.47.0,<5.0',
-  'huggingface-hub>=0.27.0,<1.0',
-  'peft>=0.9.0',
-];
+const FLUX_PACKAGES = fs.readFileSync(path.join(__dirname, '..', '..', 'backend', 'requirements-inference.txt'), 'utf8')
+  .split(/\r?\n/).map((line) => line.split('#')[0].trim()).filter(Boolean);
 
 function parseCudaVersion(output) {
   const match = String(output).match(/CUDA Version:\s*([\d.]+)/);
@@ -168,7 +164,10 @@ function isPythonEnvironmentReady(python, config, runProbe = spawnSync) {
     python,
     [
       '-c',
-      'import sys, fastapi, torch, uvicorn; '
+        'import sys, fastapi, torch, uvicorn; '
+        + 'from importlib.metadata import version; from packaging.requirements import Requirement; '
+        + `requirements = [Requirement(spec) for spec in ${JSON.stringify(FLUX_PACKAGES)}]; `
+        + 'assert all(version(req.name) in req.specifier for req in requirements), "Inference dependencies are incompatible"; '
       + 'print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|{torch.__version__}")',
     ],
     { encoding: 'utf8', shell: false }

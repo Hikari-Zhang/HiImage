@@ -11,10 +11,11 @@ import Konva from 'konva'
 import { Button, Slider, Progress, Select, showToast } from '../components/ui'
 import ModelSelect from '../components/ModelSelect/ModelSelect'
 import PageHeader from '../components/layout/PageHeader'
+import SendToEditor from '../components/SendToEditor'
 import { useCutoutStore } from '../stores/useCutoutStore'
 import type { CutoutBrushMode } from '../stores/useCutoutStore'
-import { isCurrentTask, useProcessStore } from '../stores/useProcessStore'
-import { useSettingsStore } from '../stores/useSettingsStore'
+import { isCurrentTask, useSessionProcess } from '../stores/useProcessStore'
+import { useEditorSettings } from '../stores/useEditorSettings'
 import { useModelStore } from '../stores/useModelStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
@@ -45,7 +46,8 @@ const CHECKERBOARD_STYLE = {
 export default function CutoutPage({ isVisible = false }: { isVisible?: boolean }) {
   // ── Store 状态 ──
   const {
-    sourceImage, resultImage, resultMask,
+    sourceRevision, sourceImage, resultImage, resultMask,
+    compositeResult, setCompositeResult, bgColor, setBgColor,
     imageWidth, imageHeight,
     brushStrokes, brushMode, brushSize,
     feather, dilate,
@@ -59,16 +61,12 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
     reset,
   } = useCutoutStore()
 
-  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset: resetProcess } = useProcessStore()
+  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError } = useSessionProcess('cutout')
   const { cutout, cutoutRefine, cutoutComposite, getCutoutModels } = useBackendAPI()
-  const { device, cutoutModel, setDevice, setCutoutModel } = useSettingsStore()
-  const { options: deviceOptions } = useDeviceOptions()
+  const { device, cutoutModel, setDevice, setCutoutModel } = useEditorSettings('cutout')
+  const { options: deviceOptions } = useDeviceOptions({ device, setDevice })
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
-
-  // ── 本地状态 ──
-  const [bgColor, setBgColor] = useState('#FFFFFF')
-  const [compositeResult, setCompositeResult] = useState<string | null>(null)
 
   // ── Konva 画布状态 ──
   const stageRef = useRef<Konva.Stage>(null)
@@ -91,9 +89,11 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
   const [cutoutModelGroups, setCutoutModelGroups] = useState<ModelGroup[]>([])
   useEffect(() => {
     if (!ready) return
-    getCutoutModels()
+    let active = true
+    const controller = new AbortController()
+    getCutoutModels(controller.signal)
       .then((data) => {
-        if (data?.groups) {
+        if (active && data?.groups) {
           const groups: ModelGroup[] = data.groups.map((g: any) => ({
             label: g.label,
             options: g.models.map((m: any) => ({
@@ -106,7 +106,20 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
         }
       })
       .catch(() => {})
+    return () => { active = false; controller.abort() }
   }, [ready])
+
+  // 所有原图入口（包括工具间传图）都在会话内加载尺寸。
+  useEffect(() => {
+    if (!sourceImage) return
+    let active = true
+    const img = new Image()
+    img.onload = () => {
+      if (active) setImageDimensions(img.naturalWidth, img.naturalHeight, sourceRevision)
+    }
+    img.src = sourceImage
+    return () => { active = false; img.onload = null }
+  }, [sourceImage, sourceRevision, setImageDimensions])
 
   // ── 加载结果图到 Konva ──
   const displayImage = compositeResult || resultImage
@@ -118,12 +131,15 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       return
     }
     const img = new window.Image()
+    let active = true
     img.onload = () => {
+      if (!active) return
       imageObjRef.current = img
       setImageObj(img)
     }
     const src = displayImage.startsWith('data:') ? displayImage : `data:image/png;base64,${displayImage}`
     img.src = src
+    return () => { active = false; img.onload = null }
   }, [displayImage])
 
   // ── 加载 mask 图到 Konva（独立加载，确保 onload 完成） ──
@@ -135,9 +151,11 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       return
     }
     const img = new window.Image()
-    img.onload = () => setMaskImageObj(img)
+    let active = true
+    img.onload = () => { if (active) setMaskImageObj(img) }
     const maskSrc = resultMask.startsWith('data:') ? resultMask : `data:image/png;base64,${resultMask}`
     img.src = maskSrc
+    return () => { active = false; img.onload = null }
   }, [showMask, resultMask, compositeResult])
 
   // ── 容器尺寸 ──
@@ -295,7 +313,9 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
 
   // ── 键盘事件 ──
   useEffect(() => {
+    if (!isVisible) return
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
         e.preventDefault()
         undoBrushStroke()
@@ -303,7 +323,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [undoBrushStroke])
+  }, [isVisible, undoBrushStroke])
 
   // 清理 rAF
   useEffect(() => {
@@ -316,13 +336,8 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadSource = useCallback((dataUrl: string) => {
-    setCompositeResult(null)
-    resetProcess()
     setSourceImage(dataUrl)
-    const img = new Image()
-    img.onload = () => setImageDimensions(img.width, img.height)
-    img.src = dataUrl
-  }, [setSourceImage, setImageDimensions, resetProcess])
+  }, [setSourceImage])
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -370,7 +385,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       return
     }
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId)
+    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     startProcess(cutoutModel, taskId)
     setCompositeResult(null)
     clearBrushStrokes()
@@ -398,7 +413,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
     if (!resultMask || !sourceImage) return
 
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId)
+    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     startProcess('refine', taskId)
     try {
       const result = await session.run((requestTaskId) => {
@@ -435,7 +450,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
   const handleComposite = useCallback(async () => {
     if (!resultImage) return
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId)
+    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     startProcess('composite', taskId)
     try {
       const result = await session.run((requestTaskId) => cutoutComposite({
@@ -504,7 +519,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
 
   return (
     <div className="flex flex-col h-full">
-      <PageHeader title="抠图" />
+      <PageHeader title="抠图" right={<SendToEditor image={compositeResult || resultImage} current="cutout" />} />
 
       <div className="flex flex-1 min-h-0">
         {/* ── 左侧画布区域 ── */}

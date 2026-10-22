@@ -3,6 +3,7 @@ const test = require('node:test');
 const path = require('node:path');
 
 const {
+  FLUX_PACKAGES,
   buildInstallFingerprint,
   findPython,
   getVenvPaths,
@@ -26,6 +27,14 @@ test('isPythonEnvironmentReady probes torch, FastAPI and Uvicorn together', () =
   assert.equal(ready, true);
   assert.match(probeArgs[1], /fastapi, torch, uvicorn/);
   assert.match(probeArgs[1], /sys\.version_info/);
+  assert.match(probeArgs[1], /version\(req.name\) in req.specifier/);
+  for (const spec of FLUX_PACKAGES) assert.ok(probeArgs[1].includes(spec));
+});
+
+test('inference dependencies use the tested compatible group instead of unbounded upgrades', () => {
+  assert.deepEqual(FLUX_PACKAGES, [
+    'diffusers==0.32.2', 'transformers==4.48.3', 'huggingface-hub==0.36.2', 'peft==0.14.0',
+  ]);
 });
 
 test('isPythonEnvironmentReady rejects a Python 3.9 virtual environment', () => {

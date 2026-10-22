@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
-import MainLayout from './components/layout/MainLayout'
+import { HashRouter } from 'react-router-dom'
+import AppRoutes from './AppRoutes'
+import TaskRecoveryNotice from './components/TaskRecoveryNotice'
 import { ToastContainer } from './components/ui'
 import { useBackendStore } from './stores/useBackendStore'
 import { useModelStore } from './stores/useModelStore'
@@ -39,32 +40,24 @@ export default function App() {
 
   return (
     <HashRouter>
-      {!settingsHydrated ? (
-        <main className="min-h-screen bg-bg-primary text-fg-secondary flex items-center justify-center">
-          <p className="text-sm">正在加载应用设置…</p>
-        </main>
-      ) : (
-        <>
-          {settingsError && (
-            <div role="alert" className="bg-status-error/10 text-status-error px-3 py-2 text-xs">
-              {settingsError}
-            </div>
-          )}
-          <Routes>
-            <Route path="/" element={<MainLayout />}>
-              <Route index element={<Navigate to="/watermark" replace />} />
-              {/* 路径注册，实际渲染由 MainLayout 内的常驻组件处理 */}
-              <Route path="watermark" element={null} />
-              <Route path="cutout"    element={null} />
-              <Route path="upscale"   element={null} />
-              <Route path="synthesis" element={null} />
-              <Route path="logs"      element={null} />
-              <Route path="settings"  element={null} />
-            </Route>
-          </Routes>
-        </>
-      )}
-      <ToastContainer />
+      <div className="h-screen w-screen flex flex-col overflow-hidden">
+        <TaskRecoveryNotice backendURL={backendURL} />
+        {!settingsHydrated ? (
+          <main className="flex-1 min-h-0 bg-bg-primary text-fg-secondary flex items-center justify-center">
+            <p className="text-sm">正在加载应用设置…</p>
+          </main>
+        ) : (
+          <>
+            {settingsError && (
+              <div role="alert" className="bg-status-error/10 text-status-error px-3 py-2 text-xs">
+                {settingsError}
+              </div>
+            )}
+            <div className="flex-1 min-h-0"><AppRoutes /></div>
+          </>
+        )}
+        <ToastContainer />
+      </div>
     </HashRouter>
   )
 }

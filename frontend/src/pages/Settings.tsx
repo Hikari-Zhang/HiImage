@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import LazyPage from '../components/layout/PageBoundary'
+import { getSettingsDraftStore, useSettingsDraft } from '../stores/useSettingsDraft'
 import { Save, RotateCcw, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import PageHeader from '../components/layout/PageHeader'
@@ -7,7 +9,7 @@ import { useSettingsStore } from '../stores/useSettingsStore'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useFirstVisible } from '../hooks/useFirstVisible'
-import ModelManager from './ModelManager'
+const loadModelManager = () => import('./ModelManager')
 
 type SettingsTab = 'general' | 'models'
 
@@ -37,25 +39,15 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
   const { getDevices } = useBackendAPI()
   const ready = useFirstVisible(isVisible)
 
-  const [activeTab, setActiveTab] = useState<SettingsTab>('general')
+  const {
+    activeTab, setActiveTab, device, setDevice, port, setPort, keepalive, setKeepalive,
+    startupTimeout, setStartupTimeout, hfEndpoint, setHfEndpoint, hfToken, setHfToken,
+    githubMirror, setGithubMirror, dilation, setDilation, disableNsfw, setDisableNsfw,
+    lowMem, setLowMem, cpuOffload, setCpuOffload, cpuTextencoder, setCpuTextencoder,
+    downloadMaxConcurrent, setDownloadMaxConcurrent, upscaleTile, setUpscaleTile,
+    isSaving, setIsSaving, settingsLoadError, setSettingsLoadError,
+  } = useSettingsDraft(backendURL)
 
-  // 本地 draft state — 用户编辑中但尚未保存的值
-  const [device, setDevice] = useState(store.device)
-  const [port, setPort] = useState(String(store.serverPort))
-  const [keepalive, setKeepalive] = useState(String(store.keepaliveSeconds))
-  const [startupTimeout, setStartupTimeout] = useState(String(store.startupTimeout))
-  const [hfEndpoint, setHfEndpoint] = useState(store.hfEndpoint)
-  const [hfToken, setHfToken] = useState(store.hfToken)
-  const [githubMirror, setGithubMirror] = useState(store.githubMirror)
-  const [dilation, setDilation] = useState(String(store.defaultDilation))
-  const [disableNsfw, setDisableNsfw] = useState(store.disableNsfw)
-  const [lowMem, setLowMem] = useState(store.lowMem)
-  const [cpuOffload, setCpuOffload] = useState(store.cpuOffload)
-  const [cpuTextencoder, setCpuTextencoder] = useState(store.cpuTextencoder)
-  const [downloadMaxConcurrent, setDownloadMaxConcurrent] = useState(String(store.downloadMaxConcurrent))
-  const [upscaleTile, setUpscaleTile] = useState(String(store.upscaleTile))
-  const [isSaving, setIsSaving] = useState(false)
-  const [settingsLoadError, setSettingsLoadError] = useState('')
   // 设备可用性（从后端检测）
   const [deviceAvailability, setDeviceAvailability] = useState<
     Record<string, { available: boolean; desc: string; reason?: string }>
@@ -65,25 +57,14 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
   // 初始化：从当前浏览器服务读取应用设置
   useEffect(() => {
     if (!ready) return
+    let active = true
+    const controller = new AbortController()
     // 读取应用设置
     setSettingsLoadError('')
-    store.loadSettings(backendURL).then(() => {
-      const s = useSettingsStore.getState()
-      setDevice(s.device)
-      setPort(String(s.serverPort))
-      setKeepalive(String(s.keepaliveSeconds))
-      setStartupTimeout(String(s.startupTimeout))
-      setHfEndpoint(s.hfEndpoint)
-      setHfToken('')
-      setGithubMirror(s.githubMirror)
-      setDilation(String(s.defaultDilation))
-      setDisableNsfw(s.disableNsfw)
-      setLowMem(s.lowMem)
-      setCpuOffload(s.cpuOffload)
-      setCpuTextencoder(s.cpuTextencoder)
-      setDownloadMaxConcurrent(String(s.downloadMaxConcurrent))
-      setUpscaleTile(String(s.upscaleTile))
+    if (!getSettingsDraftStore(backendURL).getState().isSaving) store.loadSettings(backendURL, controller.signal).then(() => {
+      if (active) getSettingsDraftStore(backendURL).getState().syncFromSettings()
     }).catch((err) => {
+      if (!active) return
       const message = `读取设置失败: ${err instanceof Error ? err.message : String(err)}`
       setSettingsLoadError(message)
       showToast('error', message)
@@ -92,9 +73,9 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
     // 检测计算设备可用性
     setDevicesLoading(true)
     checkHealth()
-    getDevices()
+    getDevices(controller.signal)
       .then((data) => {
-        if (data?.devices) {
+        if (active && data?.devices) {
           const map: Record<string, { available: boolean; desc: string; reason?: string }> = {}
           for (const d of data.devices) {
             map[d.id] = { available: d.available, desc: d.desc, reason: d.reason }
@@ -105,10 +86,13 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
       .catch(() => {
         // 后端不可达时不阻断页面，所有设备视为可用
       })
-      .finally(() => setDevicesLoading(false))
+      .finally(() => { if (active) setDevicesLoading(false) })
+    return () => { active = false; controller.abort() }
   }, [backendURL, ready, checkHealth])
 
   const handleSave = async () => {
+    if (getSettingsDraftStore(backendURL).getState().isSaving) return
+    const revision = getSettingsDraftStore(backendURL).getState().revision
     setIsSaving(true)
     try {
       // 先把 draft 写入 store
@@ -130,7 +114,7 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
       })
       // 再持久化到后端
       await useSettingsStore.getState().saveSettings(backendURL)
-      if (hfToken.trim()) setHfToken('')
+      getSettingsDraftStore(backendURL).getState().markSaved(revision)
       showToast('success', '设置已保存')
     } catch (err: any) {
       showToast('error', `保存失败: ${err.message}`)
@@ -193,10 +177,11 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
         ))}
       </div>
 
-      {/* 模型管理页签：始终挂载，通过 CSS 控制显隐，避免切换路由后状态丢失 */}
-      <div className={activeTab === 'models' ? 'flex flex-1 min-h-0 overflow-hidden' : 'hidden'}>
-        <ModelManager />
-      </div>
+      {activeTab === 'models' && (
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+          <LazyPage load={loadModelManager} />
+        </div>
+      )}
 
       {/* 通用设置页签 */}
       {activeTab === 'general' && (

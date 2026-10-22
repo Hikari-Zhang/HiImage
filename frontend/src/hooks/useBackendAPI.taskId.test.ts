@@ -1,15 +1,30 @@
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useBackendAPI } from './useBackendAPI'
+import { useBackendStore } from '../stores/useBackendStore'
 
 describe('useBackendAPI task_id propagation', () => {
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => { vi.unstubAllGlobals(); useBackendStore.getState().setBackendURL('') })
+
+  it('keeps function identities stable and switches every domain to a new backend', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')))
+    const hook = renderHook(() => useBackendAPI())
+    const first = hook.result.current
+    hook.rerender()
+    expect(hook.result.current).toBe(first)
+    act(() => useBackendStore.getState().setBackendURL('https://backend.test'))
+    expect(hook.result.current).not.toBe(first)
+    await hook.result.current.getDevices()
+    await hook.result.current.cutout({ image: 'i', model: 'm', device: 'cpu', task_id: 'task' })
+    expect(fetch).toHaveBeenNthCalledWith(1, 'https://backend.test/api/devices', undefined)
+    expect(fetch).toHaveBeenNthCalledWith(2, 'https://backend.test/api/cutout', expect.objectContaining({ method: 'POST' }))
+  })
 
   it('includes task_id in every inference request body', async () => {
     const bodies: Array<Record<string, unknown>> = []
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)))
-      return { ok: true, json: async () => ({ regions: [], image: '', width: 1, height: 1 }) }
+      return new Response(JSON.stringify({ regions: [], image: '', width: 1, height: 1 }))
     }))
     const api = renderHook(() => useBackendAPI()).result.current as Record<string, (...args: any[]) => Promise<unknown>>
 

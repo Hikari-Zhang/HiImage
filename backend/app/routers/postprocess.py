@@ -6,14 +6,18 @@
   POST /api/postprocess/fix         对已有图像做后处理修复
   POST /api/pipeline/run            一次性执行完整 inpaint→postprocess→upscale 流程
 """
+import asyncio
 from typing import List, Optional
 
-import numpy as np
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.routers.inpaint import decode_image, decode_mask, encode_image, check_image_size
+from app.services.image_codec import decode_image, decode_mask, encode_image, check_image_size
+from app.services.image_codec import validate_matching_dimensions
+from app.services.upscale_budget import enforce_upscale_budget
+from app.services import image_processing
+from app.services.progress import make_progress_callback
 from app.shared_executor import inference_admission, inference_scheduler
 from app.task_id import TaskId
 from app.websocket.progress import progress_manager
@@ -22,7 +26,9 @@ from app.config import get
 from core.model_registry import get_default_model
 from core.utils import resolve_default_device
 
-router = APIRouter()
+from app.task_route import TaskRoute
+
+router = APIRouter(route_class=TaskRoute)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -90,6 +96,8 @@ async def postprocess_fix(req: PostprocessRequest):
     original = decode_image(req.original_image)
     inpainted = decode_image(req.inpainted_image)
     mask = decode_mask(req.mask)
+    validate_matching_dimensions(original, inpainted, "处理结果")
+    validate_matching_dimensions(original, mask)
 
     log_manager.info(
         f"开始后处理修复: method={req.method}, device={req.device}",
@@ -97,18 +105,10 @@ async def postprocess_fix(req: PostprocessRequest):
     )
     await progress_manager.send_progress(10, f"正在进行后处理（{req.method}）...", task_id=req.task_id)
 
-    def _process():
-        from core.background_fixer import fix_background
-        return fix_background(
-            original_rgb=original,
-            inpainted_rgb=inpainted,
-            mask=mask,
-            method=req.method,
-            device=req.device,
-        )
-
     try:
-        result = await inference_scheduler.run_blocking(_process)
+        result = await inference_scheduler.run_blocking(
+            image_processing.postprocess_image, original, inpainted, mask, req.method, req.device,
+        )
         await progress_manager.send_complete("后处理完成", task_id=req.task_id)
         log_manager.info("后处理修复完成", source="postprocess")
         return {"image": encode_image(result)}
@@ -128,6 +128,10 @@ async def run_pipeline(req: PipelineRequest):
 
     original = decode_image(req.image)
     mask_arr = decode_mask(req.mask) if req.mask else None
+    if mask_arr is not None:
+        validate_matching_dimensions(original, mask_arr)
+    if req.upscale_enabled:
+        enforce_upscale_budget(original, req.upscale_model)
 
     log_manager.info(
         f"开始 Pipeline: inpaint={req.inpaint_model}, "
@@ -137,45 +141,12 @@ async def run_pipeline(req: PipelineRequest):
     )
     await progress_manager.send_progress(5, "正在初始化处理流程...", task_id=req.task_id)
 
-    def _process():
-        from core.pipeline import Pipeline, PipelineConfig, InpaintStep, PostprocessStep, UpscaleStep
-
-        config = PipelineConfig(
-            inpaint=InpaintStep(
-                model=req.inpaint_model,
-                device=req.device,
-                dilation=req.dilation,
-                disable_nsfw=req.disable_nsfw,
-            ),
-            postprocess=PostprocessStep(
-                method=req.postprocess_method,
-                device=req.device,
-                enabled=req.postprocess_enabled,
-            ),
-            upscale=UpscaleStep(
-                model=req.upscale_model,
-                device=req.device,
-                enabled=req.upscale_enabled,
-            ),
-        )
-
-        def _cb(step_name: str, pct: int):
-            # 进度回调（同步，仅打印，WebSocket 推送在异步层处理）
-            print(f"[Pipeline] {step_name}: {pct}%")
-
-        pipeline = Pipeline(config)
-        rois = [tuple(r) for r in req.rois] if req.rois else None
-        return pipeline.run(
-            original_rgb=original,
-            rois=rois,
-            mask=mask_arr,
-            progress_callback=_cb,
-        )
-
-    await progress_manager.send_progress(15, "正在处理...", task_id=req.task_id)
-
     try:
-        result = await inference_scheduler.run_blocking(_process)
+        result = await inference_scheduler.run_blocking(
+            image_processing.pipeline_image, original, mask_arr, req.rois,
+            req.model_dump(exclude={"image", "mask", "rois", "task_id"}),
+            progress_callback=make_progress_callback(req.task_id, asyncio.get_running_loop(), source="pipeline"),
+        )
         h, w = result.shape[:2]
         await progress_manager.send_complete("Pipeline 处理完成", task_id=req.task_id)
         log_manager.info(f"Pipeline 完成: output={w}x{h}", source="pipeline")

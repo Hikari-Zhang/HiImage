@@ -6,12 +6,13 @@ import MaskCanvas from '../components/MaskCanvas'
 import MaskToolbar from '../components/MaskToolbar'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
+import SendToEditor from '../components/SendToEditor'
 import { Button, Select, Slider, Progress, showToast } from '../components/ui'
 import ModelSelect from '../components/ModelSelect/ModelSelect'
 import { useImageStore } from '../stores/useImageStore'
-import { useSettingsStore } from '../stores/useSettingsStore'
+import { useEditorSettings } from '../stores/useEditorSettings'
 import { useModelStore } from '../stores/useModelStore'
-import { isCurrentTask, useProcessStore } from '../stores/useProcessStore'
+import { isCurrentTask, useSessionProcess } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
@@ -34,16 +35,16 @@ const POSTPROCESS_OPTIONS = [
   { value: PostprocessMethod.GFPGAN,      label: 'GFPGAN（人脸专用）' },
 ]
 
-export default function WatermarkRemoval() {
+export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boolean }) {
   const {
-    sourceImage, resultImage, rois, selectedROIs, imageWidth, imageHeight,
+    sourceRevision, sourceImage, resultImage, showResult, setShowResult, rois, selectedROIs, imageWidth, imageHeight,
     maskStrokes, brushSettings, canvasTool,
     setSourceImage, setImageDimensions, setResultImage,
     addROI, removeROI, clearROIs, selectROI,
     addMaskStroke, undoMaskStroke, clearMaskStrokes, setCanvasTool, setBrushSettings,
   } = useImageStore()
 
-  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
+  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError } = useSessionProcess('watermark')
   const { detectWatermark, inpaint, inpaintWithMask, runPipeline } = useBackendAPI()
   const {
     device, inpaintModel, defaultDilation, sensitivity, disableNsfw,
@@ -51,15 +52,14 @@ export default function WatermarkRemoval() {
     upscaleModel, upscaleEnabled,
     setDevice, setInpaintModel, setDilation, setSensitivity,
     setPostprocessMethod, setPostprocessEnabled, setUpscaleEnabled, setUpscaleModel,
-  } = useSettingsStore()
+  } = useEditorSettings('watermark')
   const { inpaintGroups, upscaleGroups } = useModelStore()
-  const { options: deviceOptions } = useDeviceOptions()
+  const { options: deviceOptions } = useDeviceOptions({ device, setDevice })
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
   const { exportMask, exportCombinedMask } = useMaskExport()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
-  const [showResult, setShowResult] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -73,7 +73,6 @@ export default function WatermarkRemoval() {
     const file = e.target.files?.[0]
     if (!file) return
     fileToDataUrl(file).then((dataUrl) => {
-      reset()
       setSourceImage(dataUrl)
       setShowResult(false)
     }).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
@@ -85,7 +84,6 @@ export default function WatermarkRemoval() {
     const file = e.dataTransfer.files[0]
     if (!file || !file.type.startsWith('image/')) return
     fileToDataUrl(file).then((dataUrl) => {
-      reset()
       setSourceImage(dataUrl)
       setShowResult(false)
     }).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
@@ -106,14 +104,14 @@ export default function WatermarkRemoval() {
   }, [selectROI])
 
   const handleImageLoad = useCallback((w: number, h: number) => {
-    setImageDimensions(w, h)
-  }, [setImageDimensions])
+    setImageDimensions(w, h, sourceRevision)
+  }, [setImageDimensions, sourceRevision])
 
   // Auto detect
   const handleAutoDetect = async () => {
     if (!sourceImage) return
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId)
+    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     try {
       startProcess('detect', taskId)
       const result = await session.run(
@@ -153,7 +151,7 @@ export default function WatermarkRemoval() {
     }
 
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId)
+    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     try {
       startProcess(inpaintModel, taskId)
       const usePipeline = postprocessEnabled || upscaleEnabled
@@ -258,7 +256,6 @@ export default function WatermarkRemoval() {
   // 将处理结果作为新的源图进行再次处理
   const handleUseResultAsSource = () => {
     if (!resultImage) return
-    reset()
     clearROIs()
     setSourceImage(resultImage)
     setShowResult(false)
@@ -272,6 +269,7 @@ export default function WatermarkRemoval() {
 
   // Keyboard shortcuts (必须在 handleDeleteSelected 之后定义)
   useEffect(() => {
+    if (!isVisible) return
     const handleKeyDown = (e: KeyboardEvent) => {
       // 忽略输入框中的按键
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
@@ -319,14 +317,14 @@ export default function WatermarkRemoval() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [canvasTool, brushSettings.size, setCanvasTool, setBrushSettings, undoMaskStroke, handleDeleteSelected])
+  }, [isVisible, canvasTool, brushSettings.size, setCanvasTool, setBrushSettings, undoMaskStroke, handleDeleteSelected])
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <PageHeader
         title="去水印"
         subtitle={imageWidth > 0 ? `${imageWidth} x ${imageHeight}` : undefined}
-        right={<span className="text-xs text-fg-secondary">{inpaintModel} | {device}</span>}
+        right={<div className="flex items-center gap-2"><SendToEditor image={resultImage} current="watermark" /><span className="text-xs text-fg-secondary">{inpaintModel} | {device}</span></div>}
       />
 
       {/* Content area */}
@@ -350,6 +348,9 @@ export default function WatermarkRemoval() {
             <>
               {/* 始终显示 MaskCanvas，同时支持 ROI 和画笔遮罩 */}
               <MaskCanvas
+                key={sourceRevision}
+                isActive={isVisible}
+                onImageLoad={handleImageLoad}
                 imageSrc={sourceImage}
                 strokes={maskStrokes}
                 brushSettings={brushSettings}

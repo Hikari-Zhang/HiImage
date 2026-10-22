@@ -1,3 +1,4 @@
+import type { RawModeGroup, SynthesisModel } from '../services/api/catalog'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   Upload, Download, Square, Move, Trash2, RotateCcw, PenTool,
@@ -11,10 +12,11 @@ import MaskCanvas from '../components/MaskCanvas'
 import MaskToolbar from '../components/MaskToolbar'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
+import SendToEditor from '../components/SendToEditor'
 import { Button, Select, Progress, showToast } from '../components/ui'
-import { useImageStore } from '../stores/useImageStore'
-import { useSettingsStore } from '../stores/useSettingsStore'
-import { isCurrentTask, useProcessStore } from '../stores/useProcessStore'
+import { useSynthesisImageStore } from '../stores/useImageStore'
+import { useEditorSettings, getEditorSettingsStore } from '../stores/useEditorSettings'
+import { isCurrentTask, useSessionProcess } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useFirstVisible } from '../hooks/useFirstVisible'
@@ -37,23 +39,6 @@ const ICON_MAP: Record<string, LucideIcon> = {
 
 // ─── 后端返回数据类型 ──────────────────────────────────────────────────────
 
-/** 后端 /api/synthesis/modes 返回的单条模式 */
-type RawModeGroup = {
-  id: string
-  name: string
-  icon_name: string
-  description: string
-  default_model: string
-  needs_reference: boolean
-  reference_label?: string
-  reference_hint?: string
-  needs_roi: boolean
-  needs_prompt: boolean
-  prompt_required?: boolean
-  prompt_label?: string
-  prompt_hint?: string
-}
-
 /** 前端运行时模式配置（icon_name 解析为 Icon 组件） */
 type ModeGroup = {
   id: SynthesisTagValue
@@ -69,15 +54,6 @@ type ModeGroup = {
   promptRequired?: boolean
   promptLabel?: string
   promptHint?: string
-}
-
-/** 后端 /api/synthesis/models 返回的单条模型 */
-type SynthesisModel = {
-  id: string
-  name: string
-  tags: string[]
-  description: string
-  badge: string
 }
 
 // ─── 工具函数 ──────────────────────────────────────────────────────────────
@@ -116,23 +92,27 @@ function defaultModel(models: SynthesisModel[], modeGroup: ModeGroup | undefined
 
 export default function SmartSynthesis({ isVisible = false }: { isVisible?: boolean }) {
   const {
-    sourceImage, resultImage, rois, selectedROIs, imageWidth, imageHeight,
+    sourceRevision, sourceImage, resultImage, showResult, setShowResult, rois, selectedROIs, imageWidth, imageHeight,
     maskStrokes, brushSettings, canvasTool,
     setSourceImage, setImageDimensions, setResultImage,
     addROI, removeROI, clearROIs, selectROI,
     addMaskStroke, undoMaskStroke, clearMaskStrokes, setBrushSettings, setCanvasTool,
-  } = useImageStore()
+  } = useSynthesisImageStore()
 
-  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
-  const { device, setDevice } = useSettingsStore()
+  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError } = useSessionProcess('synthesis')
+  const {
+    device, setDevice, synthesisMode, setSynthesisMode: setActiveMode,
+    synthesisModel: selectedModel, setSynthesisModel: setSelectedModel,
+    prompt, setPrompt, referenceImage, setReferenceImage, referenceFileName, setReferenceFileName,
+  } = useEditorSettings('synthesis')
+  const activeMode = synthesisMode as SynthesisTagValue
   const { runSynthesis, getSynthesisModes, getSynthesisModels } = useBackendAPI()
-  const { options: deviceOptions } = useDeviceOptions()
+  const { options: deviceOptions } = useDeviceOptions({ device, setDevice })
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
   const { exportCombinedMask } = useMaskExport()
 
   const [tool, setTool] = useState<CanvasTool>('draw')
-  const [showResult, setShowResult] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
 
   // ── 动态加载的模式与模型 —— 首次变为可见时才触发网络请求 ────────────────────
@@ -141,15 +121,6 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
   const [allModels, setAllModels] = useState<SynthesisModel[]>([])
   const [configLoading, setConfigLoading] = useState(true)
 
-  // 合成参数
-  const [activeMode, setActiveMode] = useState<SynthesisTagValue>('' as SynthesisTagValue)
-  const [selectedModel, setSelectedModel] = useState('')
-  const [prompt, setPrompt] = useState('')
-
-  // 参考图
-  const [referenceImage, setReferenceImage] = useState<string | null>(null)
-  const [referenceFileName, setReferenceFileName] = useState('')
-
   const sourceFileInputRef = useRef<HTMLInputElement>(null)
   const referenceFileInputRef = useRef<HTMLInputElement>(null)
 
@@ -157,11 +128,12 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
   useEffect(() => {
     if (!ready) return
     let cancelled = false
+    const controller = new AbortController()
     ;(async () => {
       try {
         const [modesResp, modelsResp] = await Promise.all([
-          getSynthesisModes(),
-          getSynthesisModels(),
+          getSynthesisModes(controller.signal),
+          getSynthesisModels(controller.signal),
         ])
         if (cancelled) return
         const parsedModes: ModeGroup[] = (modesResp.modes ?? [])
@@ -172,7 +144,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
         setAllModels(parsedModels)
         // 初始化默认模型
         const firstMode = parsedModes[0]
-        if (firstMode) {
+        if (firstMode && !getEditorSettingsStore('synthesis').getState().synthesisMode) {
           setActiveMode(firstMode.id)
           setSelectedModel(defaultModel(parsedModels, firstMode))
         }
@@ -182,17 +154,11 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
         if (!cancelled) setConfigLoading(false)
       }
     })()
-    return () => { cancelled = true }
+    return () => { cancelled = true; controller.abort() }
   }, [ready])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeModeConfig = modeGroups.find((m) => m.id === activeMode)
   const availableModels = modeModels(allModels, activeMode)
-
-  // 切换模式时重置模型选择
-  useEffect(() => {
-    if (!activeModeConfig) return
-    setSelectedModel(defaultModel(allModels, activeModeConfig))
-  }, [activeMode])  // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 图片加载工具 ─────────────────────────────────────────────────────────
 
@@ -215,7 +181,6 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
     if (!file) return
     try {
       const dataUrl = await fileToDataUrl(file)
-      reset()
       setSourceImage(dataUrl)
       setShowResult(false)
     } catch (err) {
@@ -229,7 +194,6 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
     if (!file || !file.type.startsWith('image/')) return
     try {
       const dataUrl = await fileToDataUrl(file)
-      reset()
       setSourceImage(dataUrl)
       setShowResult(false)
     } catch (err) {
@@ -272,7 +236,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
 
   const handleROIDrawn = useCallback((roi: Omit<ROI, 'id'>) => { addROI(roi) }, [addROI])
   const handleROISelect = useCallback((id: string) => { selectROI(id) }, [selectROI])
-  const handleImageLoad = useCallback((w: number, h: number) => { setImageDimensions(w, h) }, [setImageDimensions])
+  const handleImageLoad = useCallback((w: number, h: number) => { setImageDimensions(w, h, sourceRevision) }, [setImageDimensions, sourceRevision])
 
   // ── 执行合成 ──────────────────────────────────────────────────────────────
 
@@ -304,13 +268,14 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
     }
 
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId)
+    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     try {
       startProcess(selectedModel, taskId)
 
       const result = await session.run(async (requestTaskId) => {
         if (maskStrokes.length > 0 || rois.length > 0) {
           const maskDataURL = await exportCombinedMask(maskStrokes, rois, imageWidth, imageHeight)
+          if (!isCurrentTask(requestTaskId)) throw new Error('任务已被新任务替代')
           return runSynthesis({
             source_image: sourceImage,
             reference_image: referenceImage ?? undefined,
@@ -409,7 +374,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
       <PageHeader
         title="智能合成"
         subtitle={imageWidth > 0 ? `${imageWidth} × ${imageHeight}` : undefined}
-        right={<span className="text-xs text-fg-secondary">{activeModeConfig?.name ?? '...'} | {device}</span>}
+        right={<div className="flex items-center gap-2"><SendToEditor image={resultImage} current="synthesis" /><span className="text-xs text-fg-secondary">{activeModeConfig?.name ?? '...'} | {device}</span></div>}
       />
 
       <div className="flex-1 flex overflow-hidden min-h-0">
@@ -438,6 +403,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
               {/* 根据 canvasTool 切换画布 */}
               {canvasTool === 'rectangle' ? (
                 <ImageCanvas
+                  key={sourceRevision}
                   imageSrc={sourceImage}
                   rois={rois}
                   selectedROIs={selectedROIs}
@@ -448,6 +414,9 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
                 />
               ) : (
                 <MaskCanvas
+                  key={sourceRevision}
+                  isActive={isVisible}
+                  onImageLoad={handleImageLoad}
                   imageSrc={sourceImage}
                   strokes={maskStrokes}
                   brushSettings={brushSettings}
@@ -533,7 +502,12 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
                 {modeGroups.map(({ id, name, Icon }) => (
                   <button
                     key={id}
-                    onClick={() => setActiveMode(id)}
+                    onClick={() => {
+                      if (id === activeMode) return
+                      setActiveMode(id)
+                      const mode = modeGroups.find((group) => group.id === id)
+                      if (mode) setSelectedModel(defaultModel(allModels, mode))
+                    }}
                     className={clsx(
                       'flex flex-col items-center gap-1 py-2.5 px-1 rounded-lg border text-xs transition-all',
                       activeMode === id

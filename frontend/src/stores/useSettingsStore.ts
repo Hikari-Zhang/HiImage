@@ -2,6 +2,23 @@ import { create } from 'zustand'
 import { createApiClient } from '../services/apiClient'
 import { clearHfTokenRequest, saveSettingsRequest } from '../services/settingsService'
 
+interface SettingsResponse {
+  device?: string
+  server_port?: number
+  server_keepalive?: number
+  server_startup_timeout?: number
+  hf_endpoint?: string
+  hf_token_configured?: boolean
+  github_mirror?: string
+  default_dilation?: number
+  disable_nsfw?: boolean
+  low_mem?: boolean
+  cpu_offload?: boolean
+  cpu_textencoder?: boolean
+  download_max_concurrent?: number
+  upscale_tile?: number
+}
+
 interface SettingsState {
   // Global
   device: string
@@ -59,7 +76,7 @@ interface SettingsState {
   setPostprocessEnabled: (enabled: boolean) => void
   setUpscaleEnabled: (enabled: boolean) => void
   setSettings: (settings: Partial<SettingsState>) => void
-  loadSettings: (backendURL: string) => Promise<void>
+  loadSettings: (backendURL: string, signal?: AbortSignal) => Promise<void>
   saveSettings: (backendURL: string) => Promise<void>
   clearHfToken: (backendURL: string) => Promise<void>
   loadDefaults: (backendURL: string) => Promise<void>  // 从后端加载默认模型配置
@@ -105,22 +122,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setSettings: (settings) => set(settings),
 
-  loadSettings: async (backendURL) => {
+  loadSettings: async (backendURL, signal) => {
     set({ isLoading: true })
     try {
-      const res = await createApiClient(backendURL).fetch('/api/settings')
-      if (!res.ok) {
-        let message = `读取设置失败 (${res.status})`
-        try {
-          const error = await res.json() as { detail?: string; message?: string }
-          message = error.detail || error.message || message
-        } catch {
-          const text = await res.text().catch(() => '')
-          if (text) message = text
-        }
-        throw new Error(message)
-      }
-      const data = await res.json()
+      const data = await createApiClient(backendURL).json<SettingsResponse>('/api/settings', signal ? { signal } : undefined, '读取设置失败')
+        if (signal?.aborted) throw new DOMException('Settings request cancelled', 'AbortError')
       set({
         device: data.device ?? 'cpu',
         serverPort: data.server_port ?? 51821,
@@ -139,7 +145,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         upscaleTile: data.upscale_tile ?? 0,  // 0 = 自动计算
       })
     } catch (err) {
-      console.error('Failed to load settings:', err)
+      if (!signal?.aborted) console.error('Failed to load settings:', err)
       throw err
     } finally {
       set({ isLoading: false })
@@ -187,8 +193,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   loadDefaults: async (backendURL) => {
     try {
-      const res = await createApiClient(backendURL).fetch('/api/models/defaults')
-      const defaults = await res.json()
+      const defaults = await createApiClient(backendURL).json<Record<string, string>>('/api/models/defaults', undefined, '读取默认模型失败')
       set({
         inpaintModel: defaults.watermark_removal ?? 'wm_lama',
         cutoutModel: defaults.cutout ?? 'birefnet',

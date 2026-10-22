@@ -10,6 +10,7 @@ from typing import Dict, List
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from app.websocket.origin import require_websocket_origin
+from app.services.task_registry import task_registry
 
 router = APIRouter()
 
@@ -78,6 +79,7 @@ class ProgressManager:
         """发送指定任务的进度更新。"""
         task_id = self._validate_task_id(task_id)
         data = {"type": "progress", "percent": percent, "message": message}
+        task_registry.progress(task_id, percent, message)
         await self._send_to_channel(task_id, data)
 
     async def send_complete(
@@ -86,6 +88,8 @@ class ProgressManager:
         """发送完成消息。"""
         task_id = self._validate_task_id(task_id)
         data = {"type": "complete", "percent": 100, "message": message}
+        # Stage completion is not the HTTP task's terminal state (encoding may still fail).
+        task_registry.progress(task_id, 100, message)
         await self._send_to_channel(task_id, data)
 
     async def send_error(

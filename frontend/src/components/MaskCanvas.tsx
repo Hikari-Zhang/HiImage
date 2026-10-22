@@ -13,6 +13,8 @@ interface ROI {
 }
 
 interface MaskCanvasProps {
+  isActive?: boolean
+  onImageLoad?: (width: number, height: number) => void
   imageSrc: string | null
   strokes: MaskStroke[]
   brushSettings: BrushSettings
@@ -33,6 +35,8 @@ interface MaskCanvasProps {
  * 同时支持显示 ROI 矩形和画笔遮罩
  */
 export default function MaskCanvas({
+  isActive = true,
+  onImageLoad,
   imageSrc,
   strokes,
   brushSettings,
@@ -87,12 +91,16 @@ export default function MaskCanvas({
     }
 
     const img = new window.Image()
+    let active = true
     img.onload = () => {
+      if (!active) return
       imageObjRef.current = img
       setImageObj(img)  // 触发重新渲染
+      onImageLoad?.(img.naturalWidth, img.naturalHeight)
       fitToView(img)
     }
     img.src = imageSrc
+    return () => { active = false; img.onload = null }
   }, [imageSrc])
 
   // 适配视图
@@ -132,7 +140,9 @@ export default function MaskCanvas({
 
   // 空格键监听（临时平移模式）
   useEffect(() => {
+    if (!isActive) return
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault()
         setSpaceDown(true)
@@ -155,7 +165,7 @@ export default function MaskCanvas({
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [onUndo])
+  }, [isActive, onUndo])
 
   // 点采样：判断是否应该添加新点
   const shouldAddPoint = useCallback(

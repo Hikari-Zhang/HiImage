@@ -7,17 +7,20 @@
   POST /api/cutout/refine       遮罩精细化（羽化/膨胀/腐蚀/画笔编辑）
   POST /api/cutout/composite    合成到自定义背景色
 """
-import base64
-from typing import List, Optional
+from typing import Optional
 
 import anyio
-import cv2
 import numpy as np
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.routers.inpaint import decode_image, encode_image, check_image_size, ensure_model_ready_with_progress
+from app.services.image_codec import (decode_image, encode_image, check_image_size, decode_mask,
+                                      decode_rgba_image, encode_rgba_image, encode_mask,
+                                      validate_matching_dimensions)
+from app.services.model_readiness import ensure_model_ready_with_progress
+from app.services import image_processing
+from app.services.model_catalog import model_groups
 from app.shared_executor import inference_admission, inference_scheduler
 from app.task_id import TaskId
 from app.websocket.progress import progress_manager
@@ -25,34 +28,9 @@ from app.logging_manager import log_manager
 from app.config import get
 from core.utils import resolve_default_device
 
-router = APIRouter()
+from app.task_route import TaskRoute
 
-
-# ============ 编解码辅助函数 ============
-
-def encode_rgba_image(image_rgba: np.ndarray) -> str:
-    """RGBA numpy array → Base64 PNG"""
-    img_bgra = cv2.cvtColor(image_rgba, cv2.COLOR_RGBA2BGRA)
-    _, buffer = cv2.imencode(".png", img_bgra)
-    return base64.b64encode(buffer).decode("utf-8")
-
-
-def encode_mask(mask: np.ndarray) -> str:
-    """灰度 mask numpy array → Base64 PNG"""
-    _, buffer = cv2.imencode(".png", mask)
-    return base64.b64encode(buffer).decode("utf-8")
-
-
-def decode_mask(base64_str: str) -> np.ndarray:
-    """Base64 → 灰度 mask numpy array"""
-    if "," in base64_str:
-        base64_str = base64_str.split(",", 1)[1]
-    img_bytes = base64.b64decode(base64_str)
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    mask = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
-    if mask is None:
-        raise ValueError("无法解码遮罩")
-    return mask
+router = APIRouter(route_class=TaskRoute)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -104,35 +82,7 @@ async def get_cutout_models():
       ]
     }
     """
-    from core.model_registry import get_models_for_mode, get_default_model
-
-    cutout_models = get_models_for_mode("cutout")
-
-    # 按 display_group 分组
-    groups_dict: dict[str, list] = {}
-    for m in cutout_models:
-        group = m.get("display_group", "通用抠图")
-        if group not in groups_dict:
-            groups_dict[group] = []
-        groups_dict[group].append({
-            "id": m["id"],
-            "name": m.get("name", m["id"]),
-            "description": m.get("description", ""),
-            "recommended_for": m.get("recommended_for", ""),
-            "size_mb": m.get("size_mb"),
-            "badge": m.get("badge", ""),
-            "provider": m.get("provider", ""),
-        })
-
-    groups = [{"label": label, "models": models_list} for label, models_list in groups_dict.items()]
-
-    # 获取默认模型
-    try:
-        default_model = get_default_model("cutout")
-    except KeyError:
-        default_model = "birefnet"
-
-    return {"groups": groups, "default_model": default_model}
+    return model_groups("cutout")
 
 
 @router.post("/cutout", dependencies=[Depends(inference_admission)])
@@ -161,30 +111,12 @@ async def run_cutout(req: CutoutRequest):
 
     await progress_manager.send_progress(10, "正在初始化抠图模型...", task_id=req.task_id)
 
-    def _process():
-        from core.model_executor import ModelExecutorFactory
-        from core.model_registry import get_model
-
-        model_config = get_model(req.model)
-
-        model_executor = ModelExecutorFactory.create_executor(model_config, req.device)
-        try:
-            # RembgExecutor.execute() 返回 RGBA numpy array
-            result_rgba = model_executor.execute(source)
-            return result_rgba
-        finally:
-            model_executor.unload_model()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
-
     await progress_manager.send_progress(20, "正在抠图处理...", task_id=req.task_id)
 
     try:
-        result_rgba = await inference_scheduler.run_blocking(_process)
+        result_rgba = await inference_scheduler.run_blocking(
+            image_processing.cutout_image, source, req.model, req.device,
+        )
         h, w = result_rgba.shape[:2]
 
         # 提取 alpha mask
@@ -226,6 +158,12 @@ async def refine_mask(req: RefineRequest):
 
     mask = decode_mask(req.mask)
     original = decode_image(req.original_image)
+    validate_matching_dimensions(original, mask)
+    brush_add = decode_mask(req.brush_add) if req.brush_add is not None else None
+    brush_remove = decode_mask(req.brush_remove) if req.brush_remove is not None else None
+    for brush in (brush_add, brush_remove):
+        if brush is not None:
+            validate_matching_dimensions(original, brush, "画笔遮罩")
 
     log_manager.info(
         f"遮罩精修: feather={req.feather}, dilate={req.dilate}, "
@@ -234,52 +172,10 @@ async def refine_mask(req: RefineRequest):
         source="cutout",
     )
 
-    def _process():
-        nonlocal mask
-        # 1. 画笔编辑
-        if req.brush_add is not None:
-            brush_add = decode_mask(req.brush_add)
-            # 调整尺寸以防不匹配
-            if brush_add.shape != mask.shape:
-                brush_add = cv2.resize(brush_add, (mask.shape[1], mask.shape[0]))
-            mask[brush_add > 128] = 255
-
-        if req.brush_remove is not None:
-            brush_remove = decode_mask(req.brush_remove)
-            if brush_remove.shape != mask.shape:
-                brush_remove = cv2.resize(brush_remove, (mask.shape[1], mask.shape[0]))
-            mask[brush_remove > 128] = 0
-
-        # 2. 膨胀/腐蚀
-        if req.dilate != 0:
-            kernel_size = abs(req.dilate) * 2 + 1
-            kernel = cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
-            )
-            if req.dilate > 0:
-                mask = cv2.dilate(mask, kernel, iterations=1)
-            else:
-                mask = cv2.erode(mask, kernel, iterations=1)
-
-        # 3. 羽化
-        if req.feather > 0:
-            # 对 mask 进行高斯模糊实现羽化效果
-            blur_size = req.feather * 2 + 1
-            mask = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
-            # 保留中间灰度值，不做二值化，以获得平滑过渡
-
-        # 4. 用精修 mask 合成 RGBA 结果
-        h, w = original.shape[:2]
-        # 确保 mask 尺寸与原图一致
-        if mask.shape != (h, w):
-            mask = cv2.resize(mask, (w, h))
-
-        result_rgba = np.dstack([original, mask])
-
-        return result_rgba, mask
-
     try:
-        result_rgba, refined_mask = await anyio.to_thread.run_sync(_process)
+        result_rgba, refined_mask = await anyio.to_thread.run_sync(
+            image_processing.refine_cutout, mask, original, brush_add, brush_remove, req.feather, req.dilate,
+        )
         h, w = result_rgba.shape[:2]
 
         log_manager.info(f"遮罩精修完成: output={w}x{h}", source="cutout")
@@ -306,49 +202,11 @@ async def composite_cutout(req: CompositeRequest):
 
     将 RGBA 结果图与纯色背景合成，返回 RGB 结果。
     """
-    # 解码 RGBA 图像
-    if "," in req.image:
-        base64_str = req.image.split(",", 1)[1]
-    else:
-        base64_str = req.image
-    img_bytes = base64.b64decode(base64_str)
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    img_bgra = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
-
-    if img_bgra is None:
-        return JSONResponse(
-            status_code=422,
-            content={"detail": "无法解码图像", "message": "无法解码图像"},
-        )
-
-    def _process():
-        # BGRA → RGB
-        if img_bgra.shape[2] == 4:
-            alpha = img_bgra[:, :, 3:4].astype(np.float32) / 255.0
-            bgr = img_bgra[:, :, :3].astype(np.float32)
-        else:
-            alpha = np.ones((*img_bgra.shape[:2], 1), dtype=np.float32)
-            bgr = img_bgra.astype(np.float32)
-
-        # 解析背景色
-        hex_color = req.background_color.lstrip("#")
-        if len(hex_color) == 6:
-            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
-        else:
-            r, g, b = 255, 255, 255
-
-        # OpenCV 用 BGR
-        bg = np.array([b, g, r], dtype=np.float32)
-        bg_layer = np.full_like(bgr, bg)
-
-        # Alpha blending
-        result_bgr = (bgr * alpha + bg_layer * (1 - alpha)).astype(np.uint8)
-        result_rgb = cv2.cvtColor(result_bgr, cv2.COLOR_BGR2RGB)
-
-        return result_rgb
-
+    image_rgba = decode_rgba_image(req.image)
     try:
-        result = await anyio.to_thread.run_sync(_process)
+        result = await anyio.to_thread.run_sync(
+            image_processing.composite_cutout, image_rgba, req.background_color,
+        )
         h, w = result.shape[:2]
 
         return {

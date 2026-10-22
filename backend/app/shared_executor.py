@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.logging_manager import log_manager
+from app.services.task_registry import task_registry
 
 
 DEFAULT_MAX_PENDING = 4
@@ -229,4 +230,7 @@ async def inference_admission(request: Request) -> AsyncIterator[None]:
     """FastAPI yield 依赖：一次 HTTP 推理任务只占用一个 admission。"""
     label = f"{request.method} {request.url.path}"
     async with inference_scheduler.admission(label):
+        task_id = getattr(request.state, "tracked_task_id", None)
+        if task_id:
+            task_registry.mark_running(task_id)
         yield

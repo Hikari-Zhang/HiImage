@@ -69,17 +69,11 @@ export const useModelStore = create<ModelStoreState>((set) => ({
   loadModels: async (backendURL: string) => {
     set({ isLoading: true, error: null })
     try {
-      const res = await createApiClient(backendURL).fetch('/api/models/groups')
-
-      if (!res.ok) {
-        throw new Error('模型列表接口返回错误')
-      }
-
-      const data = await res.json() as {
+      const data = await createApiClient(backendURL).json<{
         inpaint: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; badge?: string }> }> }
         upscale: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; scale: number; outscale: number; badge?: string; supports_custom_outscale: boolean }> }> }
         cutout: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; recommended_for?: string; size_mb?: number; badge?: string; provider?: string }> }>; default_model: string }
-      }
+      }>('/api/models/groups', undefined, '读取模型列表失败')
 
       // 转换后端数据为前端格式（统一去除 ── 装饰符）
       const stripDecorators = (s: string) => s.replace(/^──\s*|\s*──$/g, '').trim()

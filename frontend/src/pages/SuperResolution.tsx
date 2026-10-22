@@ -1,15 +1,17 @@
-import { useState, useRef, useCallback } from 'react'
+import { useRef, useCallback } from 'react'
+import { useUpscaleBatchStore } from '../stores/useUpscaleBatchStore'
 import { Upload, Download, Images, List, CheckCircle2 } from 'lucide-react'
 import { Button, Select, Progress, showToast } from '../components/ui'
 import ImageCanvas from '../components/ImageCanvas'
 import ImageCompare from '../components/ImageCompare'
 import PageHeader from '../components/layout/PageHeader'
+import SendToEditor from '../components/SendToEditor'
 import ModelSelect from '../components/ModelSelect/ModelSelect'
 import BatchImageQueue, { type ImageQueueItem } from '../components/BatchImageQueue'
 import BatchProgress from '../components/BatchProgress'
-import { useImageStore } from '../stores/useImageStore'
-import { isCurrentTask, useProcessStore } from '../stores/useProcessStore'
-import { useSettingsStore } from '../stores/useSettingsStore'
+import { useUpscaleImageStore } from '../stores/useImageStore'
+import { isCurrentTask, useSessionProcess } from '../stores/useProcessStore'
+import { useEditorSettings } from '../stores/useEditorSettings'
 import { useModelStore } from '../stores/useModelStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
@@ -44,31 +46,20 @@ import { createTaskProgressSession } from '../services/taskProgress'
 
 export default function SuperResolution() {
   const {
-    sourceImage, imageWidth, imageHeight,
-    setSourceImage, setImageDimensions,
-  } = useImageStore()
-  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useProcessStore()
+    sourceRevision, sourceImage, imageWidth, imageHeight, resultImage, resultWidth, resultHeight,
+    setSourceImage, setImageDimensions, setResultImage,
+  } = useUpscaleImageStore()
+  const {
+    mode, setMode, batchItems, setBatchItems, batchCurrentIndex, setBatchCurrentIndex,
+    isBatchProcessing, setIsBatchProcessing,
+  } = useUpscaleBatchStore()
+  const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError } = useSessionProcess(mode === 'batch' ? 'upscale-batch' : 'upscale')
   const { upscale } = useBackendAPI()
-  const { device, upscaleModel, upscaleTile, setDevice, setUpscaleModel } = useSettingsStore()
+  const { device, upscaleModel, upscaleTile, setDevice, setUpscaleModel, outscale, setOutscale, tile, setTile } = useEditorSettings('upscale')
   const { upscaleGroups, upscaleModelMeta } = useModelStore()
-  const { options: deviceOptions } = useDeviceOptions()
+  const { options: deviceOptions } = useDeviceOptions({ device, setDevice })
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
-
-  // 模式：'single' | 'batch'
-  const [mode, setMode] = useState<'single' | 'batch'>('single')
-
-  // 批量模式状态
-  const [batchItems, setBatchItems] = useState<ImageQueueItem[]>([])
-  const [batchCurrentIndex, setBatchCurrentIndex] = useState<number | null>(null)
-  const [isBatchProcessing, setIsBatchProcessing] = useState(false)
-
-  const [resultImage, setResultImage] = useState<string | null>(null)
-  const [outputSize, setOutputSize] = useState({ w: 0, h: 0 })
-  // outscale: null 表示跟随模型默认值，用户可手动覆盖
-  const [outscale, setOutscale] = useState<number | null>(null)
-  // tile: null 表示使用默认配置，用户可手动覆盖
-  const [tile, setTile] = useState<number | null>(null)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -76,6 +67,9 @@ export default function SuperResolution() {
   const defaultOutscale = upscaleModelMeta[upscaleModel]?.defaultOutscale ?? 4
   // 实际使用的倍率（用户覆盖优先）
   const currentScale = outscale ?? defaultOutscale
+  const outputSize = resultImage
+    ? { w: resultWidth, h: resultHeight }
+    : { w: imageWidth * currentScale, h: imageHeight * currentScale }
   // 当前模型是否支持自定义输出倍率
   const supportsCustomOutscale = upscaleModelMeta[upscaleModel]?.supportsCustomOutscale ?? false
   const zipResultBytes = resultDataUrlsByteLength(
@@ -83,7 +77,7 @@ export default function SuperResolution() {
   )
   const zipBudgetError = validateZipBudgetBytes(zipResultBytes)
 
-  // 加载原图（写入共享 useImageStore）
+  // 加载当前超分编辑会话的原图。
   const loadSource = (dataUrl: string) => {
     if (mode === 'batch') {
       // 批量模式：添加到队列
@@ -102,14 +96,11 @@ export default function SuperResolution() {
       return
     }
     // 单图模式：原有逻辑
-    setResultImage(null)
-    reset()
-    setImageDimensions(0, 0)
     setSourceImage(dataUrl)
+    const revision = useUpscaleImageStore.getState().sourceRevision
     const img = new Image()
     img.onload = () => {
-      setImageDimensions(img.naturalWidth, img.naturalHeight)
-      setOutputSize({ w: img.naturalWidth * currentScale, h: img.naturalHeight * currentScale })
+      setImageDimensions(img.naturalWidth, img.naturalHeight, revision)
     }
     img.src = dataUrl
   }
@@ -118,8 +109,9 @@ export default function SuperResolution() {
   const handleOpenFile = () => fileInputRef.current?.click()
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (!files || files.length === 0) return
+    // FileList is live: copy it before clearing the input for same-file re-selection.
+    const files = Array.from(e.target.files ?? [])
+    if (files.length === 0) return
     e.target.value = ''
 
     if (mode === 'batch') {
@@ -158,10 +150,6 @@ export default function SuperResolution() {
   const handleModelChange = (newModel: string) => {
     setUpscaleModel(newModel)
     setOutscale(null)  // 重置为新模型的默认倍率
-    const scale = upscaleModelMeta[newModel]?.defaultOutscale ?? 4
-    if (imageWidth > 0) {
-      setOutputSize({ w: imageWidth * scale, h: imageHeight * scale })
-    }
   }
 
   // Drag & drop
@@ -239,7 +227,7 @@ export default function SuperResolution() {
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId)
+    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     startProcess(upscaleModel, taskId)
     const stopStaleBatch = () => {
       setIsBatchProcessing(false)
@@ -321,7 +309,7 @@ export default function SuperResolution() {
 
   // Process - Batch mode
   const handleBatchUpscale = async () => {
-    if (batchItems.length === 0) return
+    if (batchItems.length === 0 || useUpscaleBatchStore.getState().isBatchProcessing) return
 
     // 检查模型状态
     const task = downloadTasks[upscaleModel]
@@ -353,6 +341,7 @@ export default function SuperResolution() {
       return
     }
 
+    setIsBatchProcessing(true)
     try {
       const sources = newItems.flatMap((item) => {
         if (item.status === 'success' && item.resultDataUrl) return []
@@ -362,6 +351,7 @@ export default function SuperResolution() {
       const dimensions = await Promise.all(sources.map(readImageDimensions))
       const outputBudgetError = validateOutputRgbaBudget(dimensions, currentScale)
       if (outputBudgetError) {
+        setIsBatchProcessing(false)
         showToast('error', outputBudgetError)
         return
       }
@@ -391,7 +381,7 @@ export default function SuperResolution() {
     }
 
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId)
+    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     try {
       startProcess(upscaleModel, taskId)
       const dimensions = imageWidth > 0 && imageHeight > 0
@@ -413,9 +403,7 @@ export default function SuperResolution() {
       }))
 
       if (!isCurrentTask(taskId)) return
-      setResultImage(`data:image/png;base64,${result.image}`)
-
-      setOutputSize({ w: result.width, h: result.height })
+      setResultImage(`data:image/png;base64,${result.image}`, result.width, result.height)
       finishProcess(taskId, '超分辨率处理完成')
       showToast('success', `超分辨率完成: ${result.width}x${result.height}`)
     } catch (err: any) {
@@ -519,6 +507,7 @@ export default function SuperResolution() {
         }
         right={
           <div className="flex items-center gap-1">
+            {mode === 'single' && <SendToEditor image={resultImage} current="upscale" />}
             <button
               onClick={() => setMode('single')}
               className={`px-2 py-1 rounded text-xs ${
@@ -592,13 +581,14 @@ export default function SuperResolution() {
             </div>
           ) : (
             <ImageCanvas
+                  key={sourceRevision}
               imageSrc={sourceImage}
               rois={[]}
               selectedROIs={[]}
               tool="pan"
               onROIDrawn={() => {}}
               onROISelect={() => {}}
-              onImageLoad={(w, h) => setImageDimensions(w, h)}
+              onImageLoad={(w, h) => setImageDimensions(w, h, sourceRevision)}
             />
           )}
           <input ref={fileInputRef} type="file" accept="image/*" multiple={mode === 'batch'} className="hidden" onChange={handleFileInput} />
@@ -632,9 +622,7 @@ export default function SuperResolution() {
               onChange={(e) => {
                 const val = Number(e.target.value)
                 setOutscale(val)
-                if (imageWidth > 0) {
-                  setOutputSize({ w: imageWidth * val, h: imageHeight * val })
-                }
+
               }}
               size="sm"
               options={[
