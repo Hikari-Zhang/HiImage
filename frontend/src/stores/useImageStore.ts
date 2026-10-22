@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { EditorSessionId } from '../types/editor'
 import { useProcessStore } from './useProcessStore'
 import type { MaskStroke, BrushSettings, MaskTool } from '../types/mask'
-import { DEFAULT_BRUSH_SETTINGS, MAX_UNDO_STEPS } from '../types/mask'
+import { DEFAULT_BRUSH_SETTINGS } from '../types/mask'
 
 export interface ROI {
   id: string
@@ -10,6 +10,7 @@ export interface ROI {
   y1: number
   x2: number
   y2: number
+  polygon?: number[][]
 }
 
 interface ImageState {
@@ -138,10 +139,7 @@ function createImageSessionStore(sessionId: EditorSessionId) {
     addMaskStroke: (stroke) =>
       set((state) => {
         const newStrokes = [...state.maskStrokes, stroke]
-        // 限制撤销栈大小
-        if (newStrokes.length > MAX_UNDO_STEPS) {
-          newStrokes.shift()
-        }
+        // 笔画也是完整遮罩数据，不能为限制撤销次数而删除早期笔画。
         return { maskStrokes: newStrokes }
       }),
 

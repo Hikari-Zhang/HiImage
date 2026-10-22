@@ -84,3 +84,5 @@ logs/
 .AppleDouble
 .LSOverride
 Icon
+test-results/
+playwright-report/

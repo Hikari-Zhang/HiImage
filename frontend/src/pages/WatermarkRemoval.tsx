@@ -24,6 +24,7 @@ import type { ROI } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
 import { createTaskId } from '../services/taskId'
 import { createTaskProgressSession } from '../services/taskProgress'
+import type { WatermarkCandidate } from '../services/api/processing'
 
 type CanvasTool = 'draw' | 'pan'
 
@@ -40,7 +41,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
     sourceRevision, sourceImage, resultImage, showResult, setShowResult, rois, selectedROIs, imageWidth, imageHeight,
     maskStrokes, brushSettings, canvasTool,
     setSourceImage, setImageDimensions, setResultImage,
-    addROI, removeROI, clearROIs, selectROI,
+    addROI, removeROI, clearROIs, selectROI, setROIs,
     addMaskStroke, undoMaskStroke, clearMaskStrokes, setCanvasTool, setBrushSettings,
   } = useImageStore()
 
@@ -53,7 +54,8 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
     setDevice, setInpaintModel, setDilation, setSensitivity,
     setPostprocessMethod, setPostprocessEnabled, setUpscaleEnabled, setUpscaleModel,
   } = useEditorSettings('watermark')
-  const { inpaintGroups, upscaleGroups } = useModelStore()
+  const { inpaintGroups, upscaleGroups, inpaintDeviceOverrides } = useModelStore()
+  const effectiveDevice = inpaintDeviceOverrides?.[inpaintModel] || device
   const { options: deviceOptions } = useDeviceOptions({ device, setDevice })
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
@@ -61,6 +63,19 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
 
   const [tool, setTool] = useState<CanvasTool>('draw')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showMaskPreview, setShowMaskPreview] = useState(true)
+  const [candidates, setCandidates] = useState<WatermarkCandidate[]>([])
+  const [detectionMessage, setDetectionMessage] = useState('')
+  useEffect(() => { setCandidates([]); setDetectionMessage('') }, [sourceRevision])
+
+  const toggleCandidate = (candidate: WatermarkCandidate, index: number) => {
+    const id = `ocr-${sourceRevision}-${index}`
+    if (rois.some(roi => roi.id === id)) removeROI(id)
+    else {
+      const [x1, y1, x2, y2] = candidate.region
+      setROIs([...rois, { id, x1, y1, x2, y2, polygon: candidate.polygon || undefined }])
+    }
+  }
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -111,19 +126,21 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
   const handleAutoDetect = async () => {
     if (!sourceImage) return
     const taskId = createTaskId()
-    const session = createTaskProgressSession(taskId, { isCurrent: () => isCurrentTask(taskId) })
     try {
       startProcess('detect', taskId)
-      const result = await session.run(
-        (requestTaskId) => detectWatermark(sourceImage, sensitivity / 100, requestTaskId),
-      )
+      // 检测接口没有增量进度，直接提交，避免依赖额外的 WebSocket 握手。
+      const result = await detectWatermark(sourceImage, sensitivity / 100, taskId)
       if (!isCurrentTask(taskId)) return
-      result.regions.forEach(([x1, y1, x2, y2]) => {
-        addROI({ x1, y1, x2, y2 })
-      })
-      finishProcess(taskId, `检测到 ${result.regions.length} 个区域`)
+      // 重新检测清理旧候选选区，手动选区和笔画保留。
+      setROIs(rois.filter(roi => !roi.id.startsWith('ocr-')))
+      setCandidates(result.candidates || result.regions.map(region => ({
+        region, polygon: null, text: '', text_confidence: null,
+        watermark_score: null, reasons: ['需人工确认'],
+      })))
+      setDetectionMessage(result.warning || '文字候选不一定是水印，请勾选需要去除的区域。')
+      finishProcess(taskId, `检测到 ${result.regions.length} 个候选，请勾选`)
       if (result.regions.length === 0) {
-        showToast('info', '未检测到水印区域，请尝试调整敏感度或手动绘制')
+        showToast('info', '未找到可靠的文字候选，不代表没有水印；可提高敏感度或手动圈选')
       }
     } catch (err: any) {
       if (!isCurrentTask(taskId)) return
@@ -324,7 +341,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
       <PageHeader
         title="去水印"
         subtitle={imageWidth > 0 ? `${imageWidth} x ${imageHeight}` : undefined}
-        right={<div className="flex items-center gap-2"><SendToEditor image={resultImage} current="watermark" /><span className="text-xs text-fg-secondary">{inpaintModel} | {device}</span></div>}
+        right={<div className="flex items-center gap-2"><SendToEditor image={resultImage} current="watermark" /><span className="text-xs text-fg-secondary">{inpaintModel} | 实际设备 {effectiveDevice}{effectiveDevice !== device ? `（请求 ${device}）` : ''}</span></div>}
       />
 
       {/* Content area */}
@@ -361,6 +378,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
                 onROIDrawn={handleROIDrawn}
                 onStrokeComplete={addMaskStroke}
                 onUndo={undoMaskStroke}
+                showMaskPreview={showMaskPreview}
               />
 
               {/* 工具栏 */}
@@ -429,7 +447,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             <h3 className="text-xs uppercase tracking-wider text-fg-secondary mb-2">水印区域</h3>
             <div className="bg-bg-primary rounded border border-border-subtle p-1 min-h-[60px] max-h-[140px] overflow-y-auto">
               {/* 画笔遮罩模式 */}
-              {maskStrokes.length > 0 ? (
+              {maskStrokes.length > 0 && (
                 <div className="p-2">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs text-fg-primary">画笔遮罩</span>
@@ -440,7 +458,8 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
                     {maskStrokes.filter(s => s.tool === 'eraser').length} 笔橡皮擦
                   </div>
                 </div>
-              ) : rois.length === 0 ? (
+              )}
+              {rois.length === 0 ? (
                 <p className="text-xs text-fg-secondary p-2 text-center">在画布上拖拽绘制区域</p>
               ) : (
                 rois.map((roi, i) => (
@@ -464,13 +483,8 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
               )}
             </div>
             <div className="flex gap-1 mt-2">
-              {maskStrokes.length > 0 ? (
-                <Button size="sm" variant="danger" onClick={clearMaskStrokes} className="flex-1">
-                  清除遮罩
-                </Button>
-              ) : (
                 <>
-                  <Button size="sm" variant="primary" onClick={handleAutoDetect} icon={<Wand2 size={12} />} className="flex-1">
+                  <Button size="sm" variant="primary" onClick={handleAutoDetect} disabled={!sourceImage || isProcessing} icon={<Wand2 size={12} />} className="flex-1">
                     自动检测
                   </Button>
                   {selectedROIs.length > 0 ? (
@@ -478,16 +492,36 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
                       删除选中 ({selectedROIs.length})
                     </Button>
                   ) : (
-                    <Button size="sm" variant="ghost" onClick={clearROIs} className="flex-1" disabled={rois.length === 0}>
+                    <Button size="sm" variant="ghost" onClick={() => { clearROIs(); clearMaskStrokes() }} className="flex-1" disabled={rois.length === 0 && maskStrokes.length === 0}>
                       清除全部
                     </Button>
                   )}
                 </>
-              )}
             </div>
           </section>
 
+          {detectionMessage && <section className="space-y-2">
+            <p className="text-xs text-fg-secondary">{detectionMessage}</p>
+            <div className="max-h-48 overflow-y-auto space-y-2">
+              {candidates.map((candidate, index) => <label key={index}
+                className="flex gap-2 text-xs text-fg-primary cursor-pointer">
+                <input type="checkbox" checked={rois.some(roi => roi.id === `ocr-${sourceRevision}-${index}`)}
+                  disabled={isProcessing} onChange={() => toggleCandidate(candidate, index)}
+                  aria-label={`候选 ${index + 1} ${candidate.text}`} />
+                <span>{candidate.text || `候选区域 ${index + 1}`}
+                  <span className="block text-fg-secondary">{candidate.reasons.join('、')}</span>
+                </span>
+              </label>)}
+            </div>
+          </section>}
+
           {/* Sensitivity */}
+          <label className="flex items-center justify-between text-xs text-fg-secondary">
+            显示遮罩预览
+            <input type="checkbox" checked={showMaskPreview}
+              onChange={e => setShowMaskPreview(e.target.checked)} />
+          </label>
+          <p className="text-xs text-fg-secondary">绿色为选中区域；画笔补选，橡皮擦取消，Ctrl+Z 撤销。扩张参数会在修复时进一步扩大范围。</p>
           <Slider
             label="检测敏感度"
             min={10}

@@ -10,7 +10,7 @@ import { useProcessStore } from '../stores/useProcessStore'
 import { getEditorSettingsStore } from '../stores/useEditorSettings'
 import { useUpscaleBatchStore } from '../stores/useUpscaleBatchStore'
 
-const api = vi.hoisted(() => ({ upscale: vi.fn(), inpaintWithMask: vi.fn() }))
+const api = vi.hoisted(() => ({ upscale: vi.fn(), inpaintWithMask: vi.fn(), detectWatermark: vi.fn() }))
 const dimensions = vi.hoisted(() => vi.fn(async () => ({ width: 8, height: 8 })))
 vi.mock('../services/imageDimensions', async (importOriginal) => ({
   ...await importOriginal<typeof import('../services/imageDimensions')>(),
@@ -192,6 +192,42 @@ describe('real editor interaction with deferred inference responses', () => {
     expect(useProcessStore.getState().tasks[retryId].status).toBe('succeeded')
     expect(useProcessStore.getState().tasks[failedId].status).toBe('failed')
     expect(api.upscale).toHaveBeenCalledTimes(2)
+  })
+
+  it('preserves watermark selections after failure and retries with the same options', async () => {
+    api.inpaintWithMask.mockRejectedValueOnce(new Error('修复失败'))
+      .mockResolvedValueOnce({ image: 'retry-cleaned' })
+    getEditorSettingsStore('watermark').setState({ defaultDilation: 3 })
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    const originalROIs = useImageStore.getState().rois
+    fireEvent.click(screen.getByRole('button', { name: '去除水印' }))
+    await waitFor(() => expect(api.inpaintWithMask).toHaveBeenCalledOnce())
+    await waitFor(() => expect(screen.getByRole('button', { name: '去除水印' })).toBeEnabled())
+    expect(useImageStore.getState().sourceImage).toBe('watermark-original')
+    expect(useImageStore.getState().rois).toEqual(originalROIs)
+    fireEvent.click(screen.getByRole('button', { name: '去除水印' }))
+    await waitFor(() => expect(screen.getByTestId('comparison')).toHaveTextContent('retry-cleaned'))
+    expect(api.inpaintWithMask.mock.calls[1][0].dilation).toBe(3)
+    expect(api.inpaintWithMask.mock.calls[0][0].task_id).not.toBe(api.inpaintWithMask.mock.calls[1][0].task_id)
+  })
+
+  it('requires candidate confirmation and preserves polygon coordinates when selected', async () => {
+    api.detectWatermark.mockResolvedValueOnce({
+      regions: [[1, 1, 7, 7]], engine: 'paddleocr-onnx', candidates: [{
+        region: [1, 1, 7, 7], polygon: [[1, 2], [6, 1], [7, 6], [2, 7]],
+        text: 'TEST', text_confidence: .99, watermark_score: .35, reasons: ['靠近边缘'],
+      }],
+    })
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    const initial = useImageStore.getState().rois
+    fireEvent.click(screen.getByRole('button', { name: '自动检测' }))
+    const candidate = await screen.findByRole('checkbox', { name: '候选 1 TEST' })
+    expect(candidate).not.toBeChecked()
+    expect(useImageStore.getState().rois).toEqual(initial)
+    fireEvent.click(candidate)
+    expect(useImageStore.getState().rois.slice(-1)[0]?.polygon).toEqual([[1, 2], [6, 1], [7, 6], [2, 7]])
+    fireEvent.click(candidate)
+    expect(useImageStore.getState().rois).toEqual(initial)
   })
 
   it('finishes inference while its route is unmounted and restores the result on return', async () => {

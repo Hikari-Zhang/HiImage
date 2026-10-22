@@ -29,7 +29,7 @@
  */
 
 self.onmessage = async function (e) {
-  const { type, strokes, rois, imageWidth, imageHeight, scale = 1 } = e.data
+  const { type, strokes, rois, polygons, imageWidth, imageHeight, scale = 1 } = e.data
 
   if (type !== 'export' && type !== 'export-combined') {
     return
@@ -50,11 +50,31 @@ self.onmessage = async function (e) {
     // 清空画布（透明）
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
+    // 选区是底层遮罩，之后的橡皮擦可以修正矩形选区。
+    if (type === 'export-combined' && rois) {
+      ctx.fillStyle = 'white'
+      rois.forEach(([x1, y1, x2, y2]) => ctx.fillRect(
+        x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale,
+      ))
+    }
+    if (type === 'export-combined' && polygons) {
+      ctx.fillStyle = 'white'
+      polygons.forEach(polygon => {
+        ctx.beginPath()
+        polygon.forEach(([x, y], index) => {
+          if (index === 0) ctx.moveTo(x * scale, y * scale)
+          else ctx.lineTo(x * scale, y * scale)
+        })
+        ctx.closePath()
+        ctx.fill()
+      })
+    }
+
     // 绘制所有笔划
     strokes.forEach((stroke) => {
       const isEraser = stroke.tool === 'eraser'
 
-      ctx.lineCap = 'round'
+      ctx.lineCap = stroke.shape === 'square' ? 'square' : 'round'
       ctx.lineJoin = 'round'
       ctx.lineWidth = stroke.size * scale
       ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over'
@@ -76,6 +96,16 @@ self.onmessage = async function (e) {
       // 绘制路径
       ctx.beginPath()
       const points = stroke.points
+      if (points.length === 2) {
+        ctx.fillStyle = 'white'
+        if (stroke.shape === 'square') {
+          ctx.fillRect((points[0] - stroke.size / 2) * scale, (points[1] - stroke.size / 2) * scale,
+            stroke.size * scale, stroke.size * scale)
+        } else {
+          ctx.arc(points[0] * scale, points[1] * scale, stroke.size * scale / 2, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
       for (let i = 0; i < points.length; i += 2) {
         const x = points[i] * scale
         const y = points[i + 1] * scale
@@ -86,28 +116,14 @@ self.onmessage = async function (e) {
           ctx.lineTo(x, y)
         }
       }
-      ctx.stroke()
+      if (points.length >= 4) ctx.stroke()
       ctx.shadowBlur = 0 // 重置
     })
 
-    // 绘制 ROI 矩形区域（合并模式）
-    if (type === 'export-combined' && rois && rois.length > 0) {
-      ctx.globalCompositeOperation = 'source-over'
-      ctx.fillStyle = 'rgba(255, 255, 255, 1)' // 白色填充
-
-      rois.forEach((roi) => {
-        const [x1, y1, x2, y2] = roi
-        const width = x2 - x1
-        const height = y2 - y1
-
-        ctx.fillRect(
-          x1 * scale,
-          y1 * scale,
-          width * scale,
-          height * scale
-        )
-      })
-    }
+    // PNG 中明确存储黑底，避免透明白色被灰度解码成白色遮罩。
+    ctx.globalCompositeOperation = 'destination-over'
+    ctx.fillStyle = 'black'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
 
     // 导出为 PNG
     const blob = await canvas.convertToBlob({ type: 'image/png' })

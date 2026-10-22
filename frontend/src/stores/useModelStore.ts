@@ -46,6 +46,7 @@ interface ModelStoreState {
    *   supportsCustomOutscale:  是否支持自定义输出倍率（隐藏倍率选项用）
    */
   upscaleModelMeta: Record<string, { defaultOutscale: number; supportsCustomOutscale: boolean }>
+  inpaintDeviceOverrides: Record<string, string>
   /** 是否已加载完成 */
   isLoaded: boolean
   /** 加载中 */
@@ -62,6 +63,7 @@ export const useModelStore = create<ModelStoreState>((set) => ({
   upscaleGroups: DEFAULT_UPSCALE_GROUPS,
   cutoutGroups: DEFAULT_CUTOUT_GROUPS,
   upscaleModelMeta: {},
+  inpaintDeviceOverrides: {},
   isLoaded: false,
   isLoading: false,
   error: null,
@@ -70,7 +72,7 @@ export const useModelStore = create<ModelStoreState>((set) => ({
     set({ isLoading: true, error: null })
     try {
       const data = await createApiClient(backendURL).json<{
-        inpaint: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; badge?: string }> }> }
+        inpaint: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; badge?: string; device_override?: string }> }> }
         upscale: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; scale: number; outscale: number; badge?: string; supports_custom_outscale: boolean }> }> }
         cutout: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; recommended_for?: string; size_mb?: number; badge?: string; provider?: string }> }>; default_model: string }
       }>('/api/models/groups', undefined, '读取模型列表失败')
@@ -112,7 +114,9 @@ export const useModelStore = create<ModelStoreState>((set) => ({
         })),
       }))
 
-      set({ inpaintGroups, upscaleGroups, cutoutGroups, upscaleModelMeta, isLoaded: true, isLoading: false })
+      const inpaintDeviceOverrides = Object.fromEntries(data.inpaint.groups.flatMap(g =>
+        g.models.filter(m => m.device_override).map(m => [m.id, m.device_override!])))
+      set({ inpaintGroups, upscaleGroups, cutoutGroups, upscaleModelMeta, inpaintDeviceOverrides, isLoaded: true, isLoading: false })
     } catch (err: any) {
       console.warn('[ModelStore] 加载模型列表失败，使用默认配置:', err.message)
       // 失败时保留默认值

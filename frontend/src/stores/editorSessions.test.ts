@@ -21,6 +21,19 @@ describe('editor session ownership', () => {
     useProcessStore.setState({ sessions: {}, tasks: {} })
   })
 
+  it('retains early mask strokes beyond twenty edits and undoes only the latest', () => {
+    const store = useImageStore.getState()
+    for (let i = 0; i < 25; i++) store.addMaskStroke({
+      id: `stroke-${i}`, points: [i, i], size: 3, hardness: 100,
+      shape: 'circle', tool: 'brush', timestamp: i,
+    })
+    expect(useImageStore.getState().maskStrokes).toHaveLength(25)
+    store.undoMaskStroke()
+    expect(useImageStore.getState().maskStrokes.map(s => s.id)).toEqual(
+      Array.from({ length: 24 }, (_, i) => `stroke-${i}`),
+    )
+  })
+
   it.each(Object.keys(images) as (keyof typeof images)[])('%s keeps its own image, result and mask', (id) => {
     const otherId = id === 'watermark' ? 'synthesis' : 'watermark'
     const current = images[id].getState()

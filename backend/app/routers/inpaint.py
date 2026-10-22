@@ -32,7 +32,7 @@ router = APIRouter(route_class=TaskRoute)
 
 class DetectRequest(BaseModel):
     image: str  # Base64 encoded PNG/JPG
-    sensitivity: float = 0.5
+    sensitivity: float = Field(default=.5, ge=0, le=1)
     task_id: TaskId
 
 
@@ -41,7 +41,7 @@ class InpaintRequest(BaseModel):
     rois: List[List[int]]  # [[x1, y1, x2, y2], ...]
     model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
-    dilation: int = 10
+    dilation: int = Field(default=10, ge=0, le=100)
     disable_nsfw: bool = False
     task_id: TaskId
 
@@ -51,7 +51,7 @@ class InpaintWithMaskRequest(BaseModel):
     mask: str  # Base64 encoded mask
     model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
-    dilation: int = 10
+    dilation: int = Field(default=10, ge=0, le=100)
     disable_nsfw: bool = False
     task_id: TaskId
 
@@ -86,14 +86,12 @@ async def detect_watermark(req: DetectRequest):
     image = decode_image(req.image)
     log_manager.info(f"开始水印检测 (sensitivity={req.sensitivity})", source="inpaint")
 
-    regions = await inference_scheduler.run_blocking(
+    result = await inference_scheduler.run_blocking(
         image_processing.detect_watermark, image, req.sensitivity,
     )
 
-    log_manager.info(f"水印检测完成，发现 {len(regions)} 个区域", source="inpaint")
-    return {
-        "regions": [[int(x1), int(y1), int(x2), int(y2)] for x1, y1, x2, y2 in regions]
-    }
+    log_manager.info(f"水印检测完成，发现 {len(result['regions'])} 个候选区域", source="inpaint")
+    return result
 
 
 @router.post("/inpaint", dependencies=[Depends(inference_admission)])
@@ -128,7 +126,8 @@ async def inpaint_with_rois(req: InpaintRequest):
     try:
         result = await inference_scheduler.run_blocking(
             image_processing.inpaint_image, image, req.model, req.device,
-            rois=req.rois, progress_callback=make_progress_callback(req.task_id, loop),
+            rois=req.rois, dilation=req.dilation, disable_nsfw=req.disable_nsfw,
+            progress_callback=make_progress_callback(req.task_id, loop),
         )
         await progress_manager.send_complete(task_id=req.task_id)
         log_manager.info("水印去除完成", source="inpaint")
@@ -174,7 +173,8 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
     try:
         result = await inference_scheduler.run_blocking(
             image_processing.inpaint_image, image, req.model, req.device,
-            mask=mask, progress_callback=make_progress_callback(req.task_id, loop),
+            mask=mask, dilation=req.dilation, disable_nsfw=req.disable_nsfw,
+            progress_callback=make_progress_callback(req.task_id, loop),
         )
         await progress_manager.send_complete(task_id=req.task_id)
         log_manager.info("掩码修复完成", source="inpaint")

@@ -17,6 +17,8 @@ def model_groups(mode: str) -> dict:
                 outscale=model.get("outscale", model.get("scale", 4)),
                 supports_custom_outscale=model.get("supports_custom_outscale", False),
             )
+        elif mode == "watermark_removal":
+            item["device_override"] = model.get("device_override")
         elif mode == "cutout":
             item.update(
                 recommended_for=model.get("recommended_for", ""),

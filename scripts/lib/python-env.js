@@ -164,7 +164,7 @@ function isPythonEnvironmentReady(python, config, runProbe = spawnSync) {
     python,
     [
       '-c',
-        'import sys, fastapi, torch, uvicorn; '
+        'import sys, fastapi, torch, uvicorn, rapidocr_onnxruntime; '
         + 'from importlib.metadata import version; from packaging.requirements import Requirement; '
         + `requirements = [Requirement(spec) for spec in ${JSON.stringify(FLUX_PACKAGES)}]; `
         + 'assert all(version(req.name) in req.specifier for req in requirements), "Inference dependencies are incompatible"; '

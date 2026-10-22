@@ -67,7 +67,7 @@ async def models_health():
     ```
     """
     checker = ModelChecker()
-    results = checker.check_all()
+    results = await asyncio.to_thread(checker.check_all)
     return {
         "models": [_result_to_dict(r) for r in results],
         "summary": {
@@ -91,7 +91,7 @@ async def model_health(model_id: str):
     ```
     """
     checker = ModelChecker()
-    result = checker.check_model(model_id)
+    result = await asyncio.to_thread(checker.check_model, model_id)
     if result.status == MS.UNKNOWN and result.message.startswith("模型 ID"):
         raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
     return _result_to_dict(result)
@@ -104,7 +104,7 @@ async def models_list():
     附带实时完整性状态。
     """
     checker = ModelChecker()
-    check_map = {r.model_id: r for r in checker.check_all()}
+    check_map = {r.model_id: r for r in await asyncio.to_thread(checker.check_all)}
 
     result = []
     for m in MODELS:

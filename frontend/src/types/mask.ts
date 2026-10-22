@@ -16,6 +16,7 @@ export interface ROI {
   y1: number
   x2: number
   y2: number
+  polygon?: number[][]
 }
 
 /** 单条遮罩笔划（支持画笔/橡皮擦，记录完整绘制参数） */

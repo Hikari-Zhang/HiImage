@@ -3,6 +3,7 @@ import { Stage, Layer, Image as KonvaImage, Line, Rect } from 'react-konva'
 import Konva from 'konva'
 import type { MaskStroke, BrushSettings, MaskTool } from '../types/mask'
 import { POINT_SAMPLE_RATIO } from '../types/mask'
+import { exportCombinedMask } from '../services/maskExport'
 
 interface ROI {
   id: string
@@ -27,6 +28,7 @@ interface MaskCanvasProps {
   // 回调
   onStrokeComplete: (stroke: MaskStroke) => void
   onUndo: () => void
+  showMaskPreview?: boolean
 }
 
 /**
@@ -47,6 +49,7 @@ export default function MaskCanvas({
   onROIDrawn,
   onStrokeComplete,
   onUndo,
+  showMaskPreview = true,
 }: MaskCanvasProps) {
   const stageRef = useRef<Konva.Stage>(null)
   const imageLayerRef = useRef<Konva.Layer>(null)
@@ -54,6 +57,39 @@ export default function MaskCanvas({
   const containerRef = useRef<HTMLDivElement>(null)
   const [imageObj, setImageObj] = useState<HTMLImageElement | null>(null)
   const imageObjRef = useRef<HTMLImageElement | null>(null)
+  const [maskPreview, setMaskPreview] = useState<HTMLCanvasElement | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setMaskPreview(null)
+    if (!isActive || !showMaskPreview || !imageObj || (!strokes.length && !rois.length)) return
+    const timer = setTimeout(() => {
+      exportCombinedMask(strokes, rois, imageObj.naturalWidth, imageObj.naturalHeight).then(url => {
+        if (!active) return
+        const mask = new window.Image()
+        mask.onload = () => {
+          if (!active) return
+          const overlay = document.createElement('canvas')
+          overlay.width = mask.naturalWidth
+          overlay.height = mask.naturalHeight
+          const ctx = overlay.getContext('2d')!
+          ctx.drawImage(mask, 0, 0)
+          const pixels = ctx.getImageData(0, 0, overlay.width, overlay.height)
+          for (let i = 0; i < pixels.data.length; i += 4) {
+            const alpha = pixels.data[i] * 0.5
+            pixels.data[i] = 76
+            pixels.data[i + 1] = 175
+            pixels.data[i + 2] = 80
+            pixels.data[i + 3] = alpha
+          }
+          ctx.putImageData(pixels, 0, 0)
+          setMaskPreview(overlay)
+        }
+        mask.src = url
+      }).catch(() => { if (active) setMaskPreview(null) })
+    }, 150)
+    return () => { active = false; clearTimeout(timer) }
+  }, [imageObj, strokes, rois, isActive, showMaskPreview])
 
   // 视图状态
   const [scale, setScale] = useState(1)
@@ -349,7 +385,7 @@ export default function MaskCanvas({
     // 画笔绘制完成
     if (isDrawing) {
       setIsDrawing(false)
-      if (currentPoints.length >= 4) {
+      if (currentPoints.length >= 2) {
         // 完成一笔
         const stroke: MaskStroke = {
           id: `stroke_${Date.now()}`,
@@ -518,7 +554,7 @@ export default function MaskCanvas({
                   height={(roi.y2 - roi.y1) * scale}
                   stroke={isSelected ? '#00a8ff' : '#ff9800'}
                   strokeWidth={2}
-                  fill={isSelected ? 'rgba(0, 168, 255, 0.2)' : 'rgba(255, 152, 0, 0.2)'}
+                  fill="transparent"
                   onClick={() => onROISelect?.(roi.id)}
                   onTap={() => onROISelect?.(roi.id)}
                   listening={canvasTool === 'rectangle'}
@@ -543,7 +579,10 @@ export default function MaskCanvas({
 
           {/* 遮罩层：动态，仅笔划变化时重绘 */}
           <Layer ref={maskLayerRef}>
-            {renderStrokes}
+            {maskPreview && imageObj && <KonvaImage image={maskPreview}
+              x={offset.x} y={offset.y}
+              width={imageObj.naturalWidth * scale} height={imageObj.naturalHeight * scale}
+              listening={false} />}
             {renderCurrentStroke}
           </Layer>
         </Stage>

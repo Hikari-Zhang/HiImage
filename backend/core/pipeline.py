@@ -102,24 +102,14 @@ class Pipeline:
         executor = ModelExecutorFactory.create_executor(model_config, cfg.inpaint.device)
 
         with model_session(executor):
-            if mask is not None:
-                # 使用外部传入的 mask
-                inpaint_mask = mask
-                inpainted = executor.execute(
-                    original_rgb,
-                    mask=inpaint_mask,
-                    dilation=cfg.inpaint.dilation,
-                    disable_nsfw=cfg.inpaint.disable_nsfw,
-                )
-            elif rois:
-                # 从 ROI 生成 mask
-                h, w = original_rgb.shape[:2]
-                inpaint_mask = np.zeros((h, w), dtype=np.uint8)
-                for (x1, y1, x2, y2) in rois:
-                    inpaint_mask[y1:y2, x1:x2] = 255
-                inpainted = executor.execute(original_rgb, mask=inpaint_mask)
-            else:
+            if mask is None and not rois:
                 raise ValueError("[Pipeline] 必须提供 rois 或 mask 之一")
+            from core.inpaint_regions import prepare_mask
+            inpaint_mask = prepare_mask(original_rgb.shape, mask, rois, cfg.inpaint.dilation)
+            inpainted = executor.execute(
+                original_rgb, mask=inpaint_mask, dilation=0,
+                disable_nsfw=cfg.inpaint.disable_nsfw,
+            )
 
         _progress("inpaint", 50)
 
@@ -139,6 +129,8 @@ class Pipeline:
                 method=post_method,
                 device=cfg.postprocess.device,
             )
+            # 后处理也不能修改选区之外的原图。
+            result[inpaint_mask == 0] = original_rgb[inpaint_mask == 0]
             _progress("postprocess", 75)
         else:
             print("[Pipeline] Step 2/3 - Postprocess: 跳过")

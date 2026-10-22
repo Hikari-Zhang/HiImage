@@ -771,9 +771,8 @@ def inpaint_via_server(
             negative_prompt if negative_prompt
             else 'blurry, low quality, deformed, artifacts, watermark'
         ),
-        'hd_strategy': 'Resize',
-        'hd_strategy_resize_limit': 1024,   # SDXL 推理分辨率上限；超出则等比缩放后推理再还原
-        # Crop 参数保留（兼容性），但 Resize 策略下不生效
+        'hd_strategy': 'Crop',
+        'hd_strategy_resize_limit': 1024,
         'hd_strategy_crop_trigger_size': 800,
         'hd_strategy_crop_margin': 196,
     }

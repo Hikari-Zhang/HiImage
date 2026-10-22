@@ -15,15 +15,17 @@ ProgressCallback = Callable[[int, str], None]
 
 
 def detect_watermark(image: np.ndarray, sensitivity: float):
-    from core.watermark_detector import WatermarkDetector
-    return WatermarkDetector(sensitivity=sensitivity).detect(image)
+    from core.watermark_ocr import detect_candidates
+    return detect_candidates(image, sensitivity)
 
 
 def inpaint_image(image: np.ndarray, model_id: str, device: str, *,
-                  rois=None, mask=None, progress_callback: ProgressCallback | None = None):
+                  rois=None, mask=None, dilation=10, disable_nsfw=False,
+                  progress_callback: ProgressCallback | None = None):
     executor = ModelExecutorFactory.create_executor(get_model(model_id), device)
     with model_session(executor):
-        params = {"progress_callback": progress_callback}
+        params = {"progress_callback": progress_callback, "dilation": dilation,
+                  "disable_nsfw": disable_nsfw}
         if mask is not None:
             params["mask"] = mask
         elif executor.supports_mask():

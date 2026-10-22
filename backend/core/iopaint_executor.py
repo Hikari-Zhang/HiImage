@@ -49,17 +49,21 @@ class IOPaintExecutor(BaseModelExecutor):
         :return: 修复后的图像（RGB，uint8）
         """
         if self._inpainter is None:
-            self._init_inpainter()
+            self._init_inpainter(**kwargs)
+        else:
+            for key in ("dilation", "disable_nsfw", "prompt", "negative_prompt",
+                        "sd_steps", "sd_guidance_scale", "sd_seed", "progress_callback"):
+                if key in kwargs:
+                    setattr(self._inpainter, key, kwargs[key])
 
         mask = kwargs.get("mask")
         rois = kwargs.get("rois")
 
-        if mask is not None:
-            return self._inpainter.remove_watermark_with_mask(image, mask)
-        elif rois is not None:
-            return self._inpainter.remove_watermark(image, rois)
-        else:
+        if mask is None and rois is None:
             raise ValueError("IOPaint 模型需要 mask 或 rois 参数")
+        from .inpaint_regions import prepare_mask, repair_regions
+        mask = prepare_mask(image.shape, mask=mask, rois=rois, dilation=self._inpainter.dilation)
+        return repair_regions(image, mask, self._inpainter.remove_watermark_with_mask)
 
     def unload_model(self) -> None:
         """卸载模型，释放显存（Server 模式需要停止保活进程）"""
@@ -77,23 +81,24 @@ class IOPaintExecutor(BaseModelExecutor):
         """IOPaint 模型需要 mask 或 rois"""
         return True
 
-    def _init_inpainter(self) -> None:
+    def _init_inpainter(self, **kwargs) -> None:
         """初始化 Inpainter（懒加载）"""
         from .inpainter import Inpainter
 
         # 从 kwargs 或 model_config 获取参数
-        progress_callback = None  # 可以从 kwargs 传入
+        options = {**self.model_config, **kwargs}
+        progress_callback = options.get("progress_callback")
 
         self._inpainter = Inpainter(
             model_name=self.model_config["id"],
             device=self.device,
-            dilation=self.model_config.get("dilation", 10),
-            disable_nsfw=self.model_config.get("disable_nsfw", False),
+            dilation=options.get("dilation", 10),
+            disable_nsfw=options.get("disable_nsfw", False),
             iopaint_path=self.model_config.get("iopaint_path"),
-            prompt=self.model_config.get("prompt", ""),
-            negative_prompt=self.model_config.get("negative_prompt", ""),
-            sd_steps=self.model_config.get("sd_steps", 50),
-            sd_guidance_scale=self.model_config.get("sd_guidance_scale", 7.5),
-            sd_seed=self.model_config.get("sd_seed", 42),
+            prompt=options.get("prompt", ""),
+            negative_prompt=options.get("negative_prompt", ""),
+            sd_steps=options.get("sd_steps", 50),
+            sd_guidance_scale=options.get("sd_guidance_scale", 7.5),
+            sd_seed=options.get("sd_seed", 42),
             progress_callback=progress_callback,
         )

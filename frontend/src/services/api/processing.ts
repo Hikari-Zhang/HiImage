@@ -2,9 +2,23 @@ import type { ApiClient } from '../apiClient'
 
 export interface ImageResult { image: string; width: number; height: number }
 export interface MaskResult extends ImageResult { mask: string }
+export interface WatermarkCandidate {
+  region: number[]
+  polygon: number[][] | null
+  text: string
+  text_confidence: number | null
+  watermark_score: number | null
+  reasons: string[]
+}
+export interface WatermarkDetection {
+  regions: number[][]
+  candidates?: WatermarkCandidate[]
+  engine?: string
+  warning?: string | null
+}
 
 export function createProcessingAPI(client: ApiClient) {
-  const detectWatermark = (imageBase64: string, sensitivity: number, taskId: string) => client.json<{ regions: number[][] }>('/api/detect', {
+  const detectWatermark = (imageBase64: string, sensitivity: number, taskId: string) => client.json<WatermarkDetection>('/api/detect', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ image: imageBase64, sensitivity, task_id: taskId }),
