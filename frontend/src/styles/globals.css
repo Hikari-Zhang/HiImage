@@ -105,6 +105,15 @@ input:not([type='range']):not([type='checkbox']):not([type='radio']):not([type='
 input[type='checkbox'], input[type='radio'] { width: 16px; height: 16px; flex-shrink: 0; }
 input[type='range'] { min-height: 20px; }
 select { padding-right: 30px; }
+/* Native popup menus need explicit colors on Windows, especially when the
+   select itself has a transparent background. */
+select option, select optgroup {
+  background-color: rgb(var(--bg-secondary));
+  color: rgb(var(--fg-primary));
+}
+select option:disabled, select optgroup:disabled {
+  color: rgb(var(--fg-secondary));
+}
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgb(var(--fg-secondary) / .28); border: 2px solid transparent; background-clip: padding-box; border-radius: 8px; }
