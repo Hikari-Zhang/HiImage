@@ -10,7 +10,7 @@
 
 | 顺序 | 编号 | 状态 | 最近更新 | 测试结果 / 剩余事项 | 提交 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | MODEL-SAFE-01 | 已完成 | 2026-11-02 | 15 项删除专项通过；后端回归 280 项通过；使用临时权重和受控线程验证 | 未提交 |
+| 1 | MODEL-SAFE-01 | 已完成 | 2026-11-02 | 15 项删除专项通过；后端回归 280 项通过；使用临时权重和受控线程验证 | `be77a85` |
 | 2 | DL-01 | 待处理 | 2026-11-02 | 尚未开始修复和验收 | — |
 | 3 | DL-02 | 待处理 | 2026-11-02 | 尚未开始修复和验收 | — |
 | 4 | INFER-01 | 待处理 | 2026-11-02 | 尚未开始修复和验收 | — |
@@ -41,7 +41,7 @@
 - 测试环境：Windows，本地 `venv`；`venv/Scripts/python.exe -X utf8 -m pytest backend/tests/test_model_deletion.py -q` → **15 passed**；`venv/Scripts/python.exe -X utf8 -m pytest backend/tests -q` → **280 passed**。完整后端回归包含这 15 项，不重复累计；存在第三方弃用警告，无测试失败。
 - 前端兼容回归：在 `frontend` 执行 `npm test -- --run src/services/apiClient.test.ts src/pages/ModelManager.test.tsx` → **21 passed**，未修改前端业务代码；文档检查 `venv/Scripts/python.exe -X utf8 scripts/check_docs.py` → **6 份文档通过**，`venv/Scripts/python.exe -X utf8 -m pytest tests/test_docs.py -q` → **12 passed**；`git diff --check` 通过。
 - 测试全部使用临时缓存、假下载器和受控线程，未删除真实模型权重，未执行真实网络下载或 GPU 推理。下载并发计数和旧任务覆盖新任务属于 DL-01，本项未修复也未标记完成。
-- 提交：未提交。下一项仍为 DL-01，尚未开始。
+- 修复提交：`be77a85768110c806558e0c262328f477b39cde0`。下一项仍为 DL-01，尚未开始。
 
 ### 2026-11-02：初始化记录
 
