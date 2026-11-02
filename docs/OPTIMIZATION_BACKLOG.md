@@ -16,7 +16,7 @@
 | 2 | DL-01 | 已完成 | 2026-11-02 | 新增后端专项 14 项、前端专项 5 项通过；Python 回归 362 项、前端回归 209 项通过 | `0ff76e2` |
 | 3 | DL-02 | 已完成 | 2026-11-02 | 新增后端 9 项、前端 14 项；Python 回归 371 项、前端回归 223 项通过 | `354861f` |
 | 4 | INFER-01 | 已完成 | 2026-11-02 | 新增 CLI 专项 11 项；Python 回归 382 项通过；Windows 进程树回收已实测 | `7a9f746` |
-| 5 | DL-03 | 已完成 | 2026-11-02 | 新增依赖下载专项 8 项；Python 完整回归 390 项通过；macOS 待验收 | 未提交 |
+| 5 | DL-03 | 已完成 | 2026-11-02 | 新增依赖下载专项 8 项；Python 完整回归 390 项通过；macOS 待验收 | `c7340e3` |
 | 6 | IOPAINT-EXIT-01 | 待处理 | 2026-11-02 | 分阶段替换全部 IOPaint 调用、清理依赖与兼容逻辑；每阶段单独验收 | — |
 | 7 | MODEL-PATH-01 | 待处理 | 2026-11-02 | 尚未开始修复和验收 | — |
 | 8 | MODEL-STATE-01 | 待处理 | 2026-11-02 | 尚未开始修复和验收 | — |
@@ -43,7 +43,7 @@
 - 测试环境：Windows，本地 `venv`。`venv/Scripts/python.exe -X utf8 -m pytest backend/tests/test_download_queue.py backend/tests/test_model_deletion.py -q --tb=short` → **46 passed**；`venv/Scripts/python.exe -X utf8 -m pytest backend/tests tests -q` → **390 passed**。专项包含在完整回归中，不重复累计；存在第三方弃用警告，无失败或跳过。
 - 测试使用假 HF 下载器、受控线程及 ASGI 客户端，没有真实网络下载、模型权重写入或 GPU 推理。代码使用通用 asyncio/线程机制，macOS 仍需实际验收。前端未修改，未重复运行前端检查。
 - 范围为 `DownloadQueue`；IOPaint 私有服务启动时的旧依赖初始化链随 IOPAINT-EXIT-01 盘点和移除，不将本项解释为已重构全部第三方内部下载。目录优先级仍按 MODEL-PATH-01 单独处理。
-- 提交：未提交。P1 五项的实现及 Windows 回归均已完成；下一项 IOPAINT-EXIT-01 尚未开始。
+- 修复提交：`c7340e38510b89f09c981080085bfc8362b6e1f8`。P1 五项的实现及 Windows 回归均已完成；下一项 IOPAINT-EXIT-01 尚未开始。
 
 ### 2026-11-02：INFER-01 完成
 
