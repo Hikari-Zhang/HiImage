@@ -33,6 +33,7 @@ export type DownloadTask = {
   modelId: string
   modelName: string
   downloadId?: string  // 本次下载实例 ID；取消重试时必须更换
+  statusSyncFailed?: boolean // 仅表示状态连接失败，不代表后端下载失败
   status: TaskStatus
   position: number      // queued 时的排队序号（1-based），downloading/done 时为 0
   message: string
@@ -119,7 +120,7 @@ export const useDownloadStore = create<DownloadStoreState>((set, get) => ({
     set((state) => {
       const next: Record<string, DownloadTask> = {}
       for (const [id, task] of Object.entries(state.tasks)) {
-        if (task.status !== DownloadStatus.DONE && task.status !== DownloadStatus.ERROR && task.status !== DownloadStatus.CANCELLED) {
+        if (task.statusSyncFailed || (task.status !== DownloadStatus.DONE && task.status !== DownloadStatus.ERROR && task.status !== DownloadStatus.CANCELLED)) {
           next[id] = task
         }
       }

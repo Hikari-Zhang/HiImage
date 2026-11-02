@@ -233,14 +233,15 @@ export default function ModelManager() {
 
   const bulkStatus = (() => {
     if (!bulkSession.active) return 'idle'
-    if (bulkTasks.some((t) => t.status === DownloadStatus.DOWNLOADING || t.status === DownloadStatus.QUEUED)) return 'running'
+    if (bulkTasks.some((t) => t.statusSyncFailed || t.status === DownloadStatus.DOWNLOADING || t.status === DownloadStatus.QUEUED)) return 'running'
     if (bulkTasks.some((t) => t.status === DownloadStatus.ERROR)) return 'error'
     if (bulkTasks.every((t) => t.status === DownloadStatus.DONE || t.status === ModelStatus.OK || t.status === DownloadStatus.CANCELLED)) return 'done'
     return 'running'
   })()
 
   const doneCount = bulkTasks.filter((t) => t.status === DownloadStatus.DONE || t.status === ModelStatus.OK).length
-  const errorCount = bulkTasks.filter((t) => t.status === DownloadStatus.ERROR).length
+  const errorCount = bulkTasks.filter((t) => t.status === DownloadStatus.ERROR && !t.statusSyncFailed).length
+  const unconfirmedCount = bulkTasks.filter((t) => t.statusSyncFailed).length
 
   // ── 渲染 ─────────────────────────────────────────────────────────────────────
 
@@ -355,7 +356,9 @@ export default function ModelManager() {
             <div className="px-4 py-1.5 border-b border-border-subtle">
               <p className="text-[11px] text-fg-secondary">
                 {bulkStatus === 'running'
-                  ? `下载中：${doneCount} / ${bulkSession.modelIds.length} 完成`
+                  ? unconfirmedCount
+                    ? `下载状态未确认：${unconfirmedCount} 个待重新连接；${doneCount} / ${bulkSession.modelIds.length} 完成`
+                    : `下载中：${doneCount} / ${bulkSession.modelIds.length} 完成`
                   : bulkStatus === 'done'
                     ? `全部完成：${doneCount} 个成功，${errorCount} 个失败`
                     : `已完成：${doneCount} 个成功，${errorCount} 个失败`}
@@ -438,12 +441,13 @@ function BulkTaskRow({ task }: { task: DownloadTask }) {
           {task.status === DownloadStatus.DOWNLOADING && <Loader2 size={11} className="animate-spin text-fg-accent" />}
           {task.status === DownloadStatus.QUEUED      && <Clock size={11} className="text-orange-400" />}
           {(task.status === DownloadStatus.DONE || task.status === ModelStatus.OK) && <CheckCircle2 size={11} className="text-status-success" />}
-          {task.status === DownloadStatus.ERROR       && <XCircle size={11} className="text-status-error" />}
+          {task.statusSyncFailed && <AlertCircle size={11} className="text-orange-400" />}
+          {task.status === DownloadStatus.ERROR && !task.statusSyncFailed && <XCircle size={11} className="text-status-error" />}
           {task.status === DownloadStatus.CANCELLED   && <XCircle size={11} className="text-fg-secondary" />}
         </span>
         <span className={clsx(
           'flex-1 text-[11px] truncate',
-          task.status === DownloadStatus.ERROR ? 'text-status-error' : 'text-fg-primary',
+          task.status === DownloadStatus.ERROR && !task.statusSyncFailed ? 'text-status-error' : 'text-fg-primary',
         )}>
           {task.modelName}
         </span>
@@ -529,8 +533,9 @@ function ModelRow({
   const isBuiltin = model.provider === Provider.IOPAINT && model.iopaint_mode === IOPaintMode.CLI
   const isDownloading = downloadTask?.status === DownloadStatus.DOWNLOADING
   const isQueued = downloadTask?.status === DownloadStatus.QUEUED
+  const syncFailed = downloadTask?.status === DownloadStatus.ERROR && downloadTask.statusSyncFailed === true
   const isDone = downloadTask?.status === DownloadStatus.DONE || model.status === ModelStatus.OK
-  const canDelete = !isBuiltin && isDone && !isDownloading && !isQueued
+  const canDelete = !isBuiltin && isDone && !isDownloading && !isQueued && !syncFailed
   const canDownload = !isBuiltin && !isDone && !isDownloading && !isQueued
 
   // 行内进度百分比
@@ -544,7 +549,9 @@ function ModelRow({
     <div className="flex items-start gap-3 px-4 py-3 hover:bg-bg-hover/30 transition-colors">
       {/* 状态图标 */}
       <div className="mt-0.5 flex-shrink-0">
-        {isDownloading
+        {syncFailed
+          ? <AlertCircle size={13} className="text-orange-400" />
+          : isDownloading
           ? <Loader2 size={13} className="animate-spin text-fg-accent" />
           : isQueued
           ? <Clock size={13} className="text-orange-400" />
@@ -601,7 +608,9 @@ function ModelRow({
           </div>
         ) : downloadTask?.status === DownloadStatus.ERROR ? (
           <div className="flex items-center gap-3 mt-1 flex-wrap">
-            <span className="text-[10px] font-medium text-status-error">下载失败</span>
+            <span className={clsx('text-[10px] font-medium', syncFailed ? 'text-orange-400' : 'text-status-error')}>
+              {syncFailed ? '下载状态未确认' : '下载失败'}
+            </span>
             <span className="text-[10px] text-fg-secondary truncate max-w-[240px]">{downloadTask.message}</span>
           </div>
         ) : downloadTask?.status === DownloadStatus.DONE ? (
@@ -635,18 +644,18 @@ function ModelRow({
       {/* 操作区 */}
       <div className="flex items-center gap-1 flex-shrink-0 mt-0.5" onClick={(e) => e.stopPropagation()}>
         {/* 单独下载按钮 */}
-        {canDownload && !isConfirming && (
+        {(canDownload || syncFailed) && !isConfirming && (
           <button
             onClick={onDownload}
-            title="下载此模型"
+            title={syncFailed ? '重新连接下载状态' : '下载此模型'}
             className="p-1.5 rounded text-fg-secondary hover:text-fg-accent hover:bg-fg-accent/10 transition-colors"
           >
-            <Download size={13} />
+            {syncFailed ? <RefreshCw size={13} /> : <Download size={13} />}
           </button>
         )}
 
         {/* 下载中/排队中：取消按钮 */}
-        {(isDownloading || isQueued) && (
+        {(isDownloading || isQueued || syncFailed) && (
           <button
             onClick={onCancel}
             title="取消下载"

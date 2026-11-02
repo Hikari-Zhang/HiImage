@@ -109,13 +109,16 @@ class DownloadQueue:
 
     async def subscribe(self, model_id: str) -> AsyncIterator[dict]:
         task = self._tasks.get(model_id)
-        key = task.download_id if task else f"missing:{model_id}"
+        if task is None:
+            return
+        key = task.download_id
         queue: asyncio.Queue = asyncio.Queue()
         self._subscribers.setdefault(key, []).append(queue)
-        # 终态快照补齐属于 DL-02；此处只改为绑定具体下载实例。
-        if task and task.status in (DS.QUEUED, DS.DOWNLOADING):
-            queue.put_nowait(task.to_dict())
         try:
+            # 注册订阅与快照入队之间无 await，避免状态变化的丢失窗口。
+            queue.put_nowait(task.to_dict())
+            if task.status in (DS.DONE, DS.ERROR, DS.CANCELLED):
+                queue.put_nowait(None)
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30)

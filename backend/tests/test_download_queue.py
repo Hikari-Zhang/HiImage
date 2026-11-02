@@ -336,3 +336,97 @@ def test_http_cancel_id_guard_and_retry_response(harness, monkeypatch):
             finally:
                 await harness.cleanup()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", ["done", "error", "cancelled"])
+def test_subscribe_immediately_replays_terminal_snapshot_and_closes(harness, status):
+    async def scenario():
+        q = harness.queue
+        task = download_queue.DownloadTask("a", "A", status=status, message="terminal detail")
+        q._tasks["a"] = task
+        stream = q.subscribe("a")
+        try:
+            event = await asyncio.wait_for(anext(stream), 0.1)
+            assert event == task.to_dict()
+            with pytest.raises(StopAsyncIteration):
+                await asyncio.wait_for(anext(stream), 0.1)
+            assert not q._subscribers
+        finally:
+            await stream.aclose()
+    asyncio.run(scenario())
+
+
+def test_start_failure_is_replayed_when_client_connects_late(harness):
+    async def scenario():
+        q = harness.queue
+        model_registry.MODEL_BY_ID["bad"] = {"id": "bad", "name": "Bad"}
+        task = q.submit("bad")
+        await task._runner
+        assert task.status == "error"
+        stream = q.subscribe("bad")
+        try:
+            event = await asyncio.wait_for(anext(stream), 0.1)
+            assert event["status"] == "error"
+            assert "无下载来源" in event["message"]
+        finally:
+            await stream.aclose()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", ["done", "error", "cancelled"])
+def test_http_sse_returns_terminal_snapshot_without_waiting_for_heartbeat(harness, monkeypatch, status):
+    import httpx
+    from fastapi import FastAPI
+    from app.routers import models
+    monkeypatch.setattr(download_queue, "get_download_queue", lambda: harness.queue)
+    task = download_queue.DownloadTask("a", "A", status=status)
+    harness.queue._tasks["a"] = task
+
+    async def scenario():
+        app = FastAPI()
+        app.include_router(models.router, prefix="/api")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await asyncio.wait_for(client.get("/api/models/subscribe/a"), 0.1)
+            assert response.status_code == 200
+            assert "text/event-stream" in response.headers["content-type"]
+            assert response.text.count("event: status") == 1
+            assert task.download_id in response.text
+            assert f'"status": "{status}"' in response.text
+            assert not harness.queue._subscribers
+    asyncio.run(scenario())
+
+
+def test_start_failure_broadcasts_to_existing_subscriber_and_closes(harness):
+    async def scenario():
+        q = harness.queue
+        task = download_queue.DownloadTask("bad", "Bad", status="downloading", _config={"id": "bad"})
+        q._tasks["bad"] = task
+        q._active["bad"] = task
+        stream = q.subscribe("bad")
+        try:
+            assert (await anext(stream))["status"] == "downloading"
+            await q._run_download(task)
+            assert (await asyncio.wait_for(anext(stream), 0.1))["status"] == "error"
+            with pytest.raises(StopAsyncIteration):
+                await asyncio.wait_for(anext(stream), 0.1)
+            assert not q._subscribers
+            assert not q.list_active()
+        finally:
+            await stream.aclose()
+    asyncio.run(scenario())
+
+
+def test_missing_task_subscription_returns_404_instead_of_hanging(harness, monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from app.routers import models
+    monkeypatch.setattr(download_queue, "get_download_queue", lambda: harness.queue)
+
+    async def scenario():
+        app = FastAPI()
+        app.include_router(models.router, prefix="/api")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await asyncio.wait_for(client.get("/api/models/subscribe/missing"), 0.1)
+            assert response.status_code == 404
+            assert not harness.queue._subscribers
+    asyncio.run(scenario())

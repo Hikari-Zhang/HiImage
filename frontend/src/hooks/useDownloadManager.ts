@@ -64,11 +64,36 @@ const SSE_MAX_RETRIES = 3
 /** SSE 重试间隔 (ms) */
 const SSE_RETRY_DELAY = 2000
 
+// 仅对提示去重，重放的终态仍更新 store；缓存限定当前应用最近 500 次下载。
+const _terminalNotices = new Set<string>()
+const isTerminal = (status: DownloadTask['status'] | undefined) =>
+  status === DownloadStatus.DONE || status === DownloadStatus.ERROR || status === DownloadStatus.CANCELLED
+const isDownloadStatus = (status: unknown) => typeof status === 'string'
+  && [DownloadStatus.QUEUED, DownloadStatus.DOWNLOADING, DownloadStatus.DONE,
+    DownloadStatus.ERROR, DownloadStatus.CANCELLED].some((value) => value === status)
+
+function applySnapshot(modelId: string, patch: Partial<DownloadTask>, client: ReturnType<typeof createApiClient>, isCurrent: () => boolean) {
+  if (!isCurrent() || !isDownloadStatus(patch.status)) return false
+  useDownloadStore.getState().setTask(modelId, { ...patch, statusSyncFailed: false })
+  const key = operationKey(modelId, client)
+  _sseRetryCount.delete(key)
+  if (!isTerminal(patch.status)) return false
+  const noticeKey = `${key}|${patch.downloadId ?? `legacy-${_generations.get(key) ?? 0}`}`
+  if (!_terminalNotices.has(noticeKey)) {
+    _terminalNotices.add(noticeKey)
+    if (_terminalNotices.size > 500) _terminalNotices.delete(_terminalNotices.values().next().value!)
+    if (patch.status === DownloadStatus.DONE) showToast('success', `${patch.modelName || modelId} 下载完成`)
+    if (patch.status === DownloadStatus.ERROR) showToast('error', `${patch.modelName || modelId} 下载失败: ${patch.message}`)
+  }
+  if (patch.status === DownloadStatus.DONE) void _syncOne(modelId, client, isCurrent)
+  return true
+}
+
 /** 建立或复用 SSE 连接（全局单例，不重复建立）。 */
 function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiClient>) {
   const key = operationKey(modelId, client)
   const generation = _generations.get(key) ?? 0
-  const downloadId = useDownloadStore.getState().getTask(modelId)?.downloadId
+  let downloadId = useDownloadStore.getState().getTask(modelId)?.downloadId
   const connectionKey = `${key}|${generation}|${downloadId ?? ''}`
   const sameAttempt = () => (_generations.get(key) ?? 0) === generation
     && createApiClient(useBackendStore.getState().backendURL).baseUrl === client.baseUrl
@@ -90,8 +115,7 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
   es.onopen = () => {
     if (!isCurrent()) return
     console.log(`[SSE] 连接已打开: ${modelId}`)
-    // 连接成功，重置重试计数
-    _sseRetryCount.delete(modelId)
+    // 只有有效状态快照才重置重试，TCP 打开不代表状态已同步。
   }
 
   es.addEventListener('status', (e: MessageEvent) => {
@@ -102,26 +126,14 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
       if (downloadId && patch.downloadId !== downloadId) return
       console.log(`[SSE] 收到 status 事件: ${modelId} status=${patch.status}`, data)
 
-      // 收到有效事件，重置重试计数
-      _sseRetryCount.delete(modelId)
-      useDownloadStore.getState().setTask(modelId, patch)
-
-      if (patch.status === DownloadStatus.DONE) {
-        console.log(`[SSE] 下载完成: ${modelId}`)
-        showToast('success', `${patch.modelName || modelId} 下载完成`)
-        es.close()
-        _sseMap.delete(modelId)
-        void _syncOne(modelId, client, sameAttempt)
+      if (!isDownloadStatus(patch.status) || (patch.modelId && patch.modelId !== modelId)) return
+      const terminal = applySnapshot(modelId, patch, client, sameAttempt)
+      if (!downloadId && patch.downloadId) {
+        downloadId = patch.downloadId
+        _serverIds.set(key, downloadId)
+        _connectionKeys.set(es, `${key}|${generation}|${downloadId}`)
       }
-
-      if (patch.status === DownloadStatus.ERROR) {
-        console.log(`[SSE] 下载失败: ${modelId} msg=${patch.message}`)
-        showToast('error', `${patch.modelName || modelId} 下载失败: ${patch.message}`)
-        es.close()
-        _sseMap.delete(modelId)
-      }
-
-      if (patch.status === DownloadStatus.CANCELLED) {
+      if (terminal) {
         es.close()
         _sseMap.delete(modelId)
       }
@@ -139,9 +151,9 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
     const current = useDownloadStore.getState().getTask(modelId)
     // 对于 queued/downloading 状态的任务，尝试重连而不是立即标记为 error
     if (current?.status === DownloadStatus.DOWNLOADING || current?.status === DownloadStatus.QUEUED) {
-      const retries = _sseRetryCount.get(modelId) ?? 0
+      const retries = _sseRetryCount.get(key) ?? 0
       if (retries < SSE_MAX_RETRIES) {
-        _sseRetryCount.set(modelId, retries + 1)
+        _sseRetryCount.set(key, retries + 1)
         console.log(`[SSE] 将在 ${SSE_RETRY_DELAY}ms 后重试 (${retries + 1}/${SSE_MAX_RETRIES}): ${modelId}`)
         setTimeout(() => {
           // 重连前再次检查状态，如果已经不再是 queued/downloading 就不重连
@@ -152,10 +164,11 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
           }
         }, SSE_RETRY_DELAY)
       } else {
-        // 超过重试次数，标记为 error
-        console.log(`[SSE] 重试次数耗尽，标记为 error: ${modelId}`)
-        _sseRetryCount.delete(modelId)
-        useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.ERROR, message: '连接中断，请重试' })
+        // 表示状态同步失败，不推定后端下载失败，也不弹下载失败通知。
+        console.log(`[SSE] 重试次数耗尽，无法确认状态: ${modelId}`)
+        _sseRetryCount.delete(key)
+        useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.ERROR, statusSyncFailed: true,
+          message: '无法确认下载状态，请重新连接；不代表下载失败' })
       }
     }
   }
@@ -197,6 +210,7 @@ export function useDownloadManager() {
       for (const m of data.models ?? []) {
         const current = getTask(m.id)
         if (
+          current?.statusSyncFailed ||
           current?.status === DownloadStatus.QUEUED ||
           current?.status === DownloadStatus.DOWNLOADING ||
           current?.status === DownloadStatus.DONE
@@ -223,12 +237,19 @@ export function useDownloadManager() {
     const client = getClient()
     const key = operationKey(modelId, client)
     const current = getTask(modelId)
+    if (current?.status === DownloadStatus.ERROR && current.statusSyncFailed && current.downloadId) {
+      _sseRetryCount.delete(key)
+      setTask(modelId, { status: DownloadStatus.DOWNLOADING, statusSyncFailed: false, message: '正在重新连接下载状态...' })
+      ensureSubscribed(modelId, client)
+      return
+    }
     if (current?.status === DownloadStatus.QUEUED || current?.status === DownloadStatus.DOWNLOADING) {
       // POST 尚未返回时不能订阅同模型的旧实例。
       if (current.downloadId || !_requestTails.has(key)) ensureSubscribed(modelId, client)
       return
     }
     const generation = advance(key)
+    _sseRetryCount.delete(key)
     const isCurrent = () => _generations.get(key) === generation
       && createApiClient(useBackendStore.getState().backendURL).baseUrl === client.baseUrl
     _sseMap.get(modelId)?.close()
@@ -236,7 +257,7 @@ export function useDownloadManager() {
     const queuedCount = Object.values(useDownloadStore.getState().tasks).filter(
       (task) => task.status === DownloadStatus.QUEUED || task.status === DownloadStatus.DOWNLOADING
     ).length
-    setTask(modelId, { downloadId: undefined, status: DownloadStatus.QUEUED, position: queuedCount + 1,
+    setTask(modelId, { downloadId: undefined, statusSyncFailed: false, status: DownloadStatus.QUEUED, position: queuedCount + 1,
       message: '提交中...', speed: '', downloaded: '', totalSize: '' })
     try {
       await serialize(key, async () => {
@@ -245,8 +266,7 @@ export function useDownloadManager() {
         // 即使 UI 已取消也记住实例 ID，使后续 DELETE 只针对本次下载。
         if (patch.downloadId) _serverIds.set(key, patch.downloadId)
         if (!isCurrent()) return
-        setTask(modelId, patch)
-        ensureSubscribed(modelId, client)
+        if (!applySnapshot(modelId, patch, client, isCurrent)) ensureSubscribed(modelId, client)
       })
     } catch (error: unknown) {
       if (!isCurrent()) return
@@ -263,8 +283,8 @@ export function useDownloadManager() {
     const currentId = useDownloadStore.getState().getTask(modelId)?.downloadId
     _sseMap.get(modelId)?.close()
     _sseMap.delete(modelId)
-    _sseRetryCount.delete(modelId)
-    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELLED,
+    _sseRetryCount.delete(key)
+    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELLED, statusSyncFailed: false,
       message: '正在取消，等待下载线程退出', speed: '', downloaded: '' })
     try {
       await serialize(key, async () => {
@@ -294,7 +314,7 @@ export function useDownloadManager() {
         return
       }
 
-      const { setTask, setBulkSession } = useDownloadStore.getState()
+      const { setBulkSession } = useDownloadStore.getState()
       const modelIds: string[] = []
       for (const taskData of data.tasks) {
         const task = normalizeTask(taskData)
@@ -303,11 +323,11 @@ export function useDownloadManager() {
           if ((_generations.get(key) ?? 0) !== (generations.get(key) ?? 0)) continue
           if (task.downloadId) _serverIds.set(key, task.downloadId)
           if (useDownloadStore.getState().getTask(task.modelId)?.downloadId !== task.downloadId) advance(key)
-          setTask(task.modelId, task)
+          const generation = _generations.get(key) ?? 0
+          const isCurrent = () => (_generations.get(key) ?? 0) === generation
+            && createApiClient(useBackendStore.getState().backendURL).baseUrl === client.baseUrl
           modelIds.push(task.modelId)
-          if (task.status === DownloadStatus.QUEUED || task.status === DownloadStatus.DOWNLOADING) {
-            ensureSubscribed(task.modelId, client)
-          }
+          if (!applySnapshot(task.modelId, task, client, isCurrent)) ensureSubscribed(task.modelId, client)
         }
       }
 
@@ -326,7 +346,7 @@ export function useDownloadManager() {
     const { bulkSession } = useDownloadStore.getState()
     for (const modelId of bulkSession.modelIds) {
       const task = useDownloadStore.getState().getTask(modelId)
-      if (task?.status === DownloadStatus.QUEUED || task?.status === DownloadStatus.DOWNLOADING) {
+      if (task?.statusSyncFailed || task?.status === DownloadStatus.QUEUED || task?.status === DownloadStatus.DOWNLOADING) {
         await cancelDownload(modelId)
       }
     }
@@ -339,11 +359,15 @@ export function useDownloadManager() {
     const client = getClient()
     const { tasks } = useDownloadStore.getState()
     for (const [modelId, task] of Object.entries(tasks)) {
+      if (task.statusSyncFailed) {
+        await startDownload(modelId)
+        continue
+      }
       if (task.status === DownloadStatus.QUEUED || task.status === DownloadStatus.DOWNLOADING) {
         ensureSubscribed(modelId, client)
       }
     }
-  }, [getClient])
+  }, [getClient, startDownload])
 
   // ── 挂载时：同步状态 + 恢复连接 ────────────────────────────────────────────
 

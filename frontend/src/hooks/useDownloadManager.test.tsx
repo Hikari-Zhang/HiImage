@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDownloadManager } from './useDownloadManager'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useBackendStore } from '../stores/useBackendStore'
+import { showToast } from '../components/ui'
 
 vi.mock('../components/ui', () => ({ showToast: vi.fn() }))
 
@@ -30,12 +31,13 @@ function deferred<T>() {
 const response = (value: unknown) => new Response(JSON.stringify(value))
 
 beforeEach(() => {
+  vi.mocked(showToast).mockClear()
   useDownloadStore.setState({ tasks: {}, bulkSession: { active: false, modelIds: [] } })
   useBackendStore.getState().setBackendURL('')
   FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource)
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('download attempt isolation', () => {
   it('ignores late events and errors from a cancelled connection after retry', async () => {
@@ -137,5 +139,145 @@ describe('download attempt isolation', () => {
     expect(useDownloadStore.getState().getTask('a')?.downloadId).toBe('after-bulk')
     expect(useDownloadStore.getState().getTask('a')?.status).toBe('downloading')
     act(() => { FakeEventSource.latest.emit('after-bulk', 'cancelled') })
+  })
+})
+
+describe('download terminal snapshots', () => {
+  it.each(['done', 'error'] as const)('shows a %s notification once even if the same snapshot is replayed', async (status) => {
+    const id = `replay-${status}`
+    vi.stubGlobal('fetch', vi.fn(async () => response({ models: [] })))
+    useDownloadStore.getState().setTask('a', { downloadId: id, status: 'downloading' })
+    const hook = renderHook(() => useDownloadManager())
+    await act(async () => { FakeEventSource.latest.emit(id, status) })
+    act(() => { useDownloadStore.getState().setTask('a', { status: 'downloading' }) })
+    await act(async () => { await hook.result.current.resume(); FakeEventSource.latest.emit(id, status) })
+    const notifications = vi.mocked(showToast).mock.calls.filter(([kind]) => kind === (status === 'done' ? 'success' : 'error'))
+    expect(notifications).toHaveLength(1)
+    expect(useDownloadStore.getState().getTask('a')?.status).not.toBe('downloading')
+  })
+
+  it('applies a terminal POST response immediately without waiting for another connection', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      if (init?.method === 'POST') return response({ modelId: 'a', downloadId: 'post-done', status: 'done' })
+      return response({ models: [] })
+    }))
+    const hook = renderHook(() => useDownloadManager())
+    await act(async () => { await hook.result.current.startDownload('a') })
+    expect(FakeEventSource.instances).toHaveLength(0)
+    expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('下载完成'))
+  })
+
+  it('bounds reconnect attempts even if sockets open but never deliver valid status', async () => {
+    vi.useFakeTimers()
+    const id = 'reconnect-empty'
+    vi.stubGlobal('fetch', vi.fn(async () => response({ models: [] })))
+    useDownloadStore.getState().setTask('a', { downloadId: id, status: 'downloading' })
+    renderHook(() => useDownloadManager())
+    await act(async () => {
+      for (let i = 0; i < 4; i++) {
+        FakeEventSource.latest.onopen?.()
+        FakeEventSource.latest.onerror?.()
+        await vi.advanceTimersByTimeAsync(2000)
+      }
+    })
+    expect(FakeEventSource.instances).toHaveLength(4)
+    expect(useDownloadStore.getState().getTask('a')?.message).toContain('无法确认下载状态')
+    expect(showToast).not.toHaveBeenCalledWith('error', expect.stringContaining('下载失败'))
+  })
+
+  it('recovers completion after a disconnect and clears the scheduled retry', async () => {
+    vi.useFakeTimers()
+    const id = 'completed-while-offline'
+    vi.stubGlobal('fetch', vi.fn(async (url) => response(String(url).includes('/health/') ? { status: 'ok' } : { models: [] })))
+    useDownloadStore.getState().setTask('a', { downloadId: id, status: 'downloading' })
+    renderHook(() => useDownloadManager())
+    const original = FakeEventSource.latest
+    await act(async () => {
+      original.onerror?.()
+      await vi.advanceTimersByTimeAsync(2000)
+      FakeEventSource.latest.emit(id, 'done')
+    })
+    expect(original.readyState).toBe(FakeEventSource.CLOSED)
+    expect(FakeEventSource.latest.readyState).toBe(FakeEventSource.CLOSED)
+    expect(useDownloadStore.getState().getTask('a')?.status).toBe('ok')
+    expect(showToast).toHaveBeenCalledTimes(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
+    expect(FakeEventSource.instances).toHaveLength(2)
+  })
+
+  it('reconnects an unconfirmed download without creating a new backend task', async () => {
+    const id = 'manual-reconnect'
+    const fetchMock = vi.fn(async (url) => response(String(url).includes('/health/') ? { status: 'ok' } : { models: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const hook = renderHook(() => useDownloadManager())
+    act(() => { useDownloadStore.getState().setTask('a', {
+      downloadId: id, status: 'error', statusSyncFailed: true,
+    }) })
+    act(() => { useDownloadStore.getState().clearFinished() })
+    expect(useDownloadStore.getState().getTask('a')?.downloadId).toBe(id)
+    await act(async () => { await hook.result.current.startDownload('a'); FakeEventSource.latest.emit(id, 'done') })
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/download/'))).toBe(false)
+    expect(useDownloadStore.getState().getTask('a')?.status).toBe('ok')
+    expect(useDownloadStore.getState().getTask('a')?.statusSyncFailed).toBe(false)
+  })
+
+  it('adopts the download ID on the first snapshot when resuming legacy local state', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => response(String(url).includes('/health/') ? { status: 'ok' } : { models: [] })))
+    useDownloadStore.getState().setTask('a', { status: 'queued' })
+    renderHook(() => useDownloadManager())
+    await act(async () => {
+      FakeEventSource.latest.emit('adopted-id', 'downloading')
+      FakeEventSource.latest.emit('adopted-id', 'done')
+    })
+    expect(useDownloadStore.getState().getTask('a')?.downloadId).toBe('adopted-id')
+    expect(useDownloadStore.getState().getTask('a')?.status).toBe('ok')
+    expect(showToast).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies terminal bulk results without opening redundant subscriptions', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (init?.method === 'POST') return response({ submitted: 1, tasks: [{
+        modelId: 'a', downloadId: 'bulk-done-snapshot', status: 'done',
+      }] })
+      return response(String(url).includes('/health/') ? { status: 'ok' } : { models: [] })
+    }))
+    const hook = renderHook(() => useDownloadManager())
+    await act(async () => { await hook.result.current.startBulkDownload() })
+    expect(FakeEventSource.instances).toHaveLength(0)
+    expect(useDownloadStore.getState().getTask('a')?.status).toBe('ok')
+    expect(vi.mocked(showToast).mock.calls.filter(([kind]) => kind === 'success')).toHaveLength(1)
+  })
+
+  it('notifies a new retry independently after the previous attempt failed', async () => {
+    let attempt = 0
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (init?.method === 'POST') {
+        attempt++
+        return response({ modelId: 'a', downloadId: `separate-notice-${attempt}`, status: attempt === 1 ? 'error' : 'done' })
+      }
+      return response(String(url).includes('/health/') ? { status: 'ok' } : { models: [] })
+    }))
+    const hook = renderHook(() => useDownloadManager())
+    await act(async () => { await hook.result.current.startDownload('a') })
+    await act(async () => { await hook.result.current.startDownload('a') })
+    expect(vi.mocked(showToast).mock.calls.map(([kind]) => kind)).toEqual(['error', 'success'])
+    expect(useDownloadStore.getState().getTask('a')?.status).toBe('ok')
+  })
+
+  it('resumes an unconfirmed task on remount without replacing it with catalog state', async () => {
+    const metadata = deferred<Response>()
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      expect(init?.method).not.toBe('POST')
+      return String(url).includes('/health/') ? response({ status: 'ok' }) : metadata.promise
+    }))
+    useDownloadStore.getState().setTask('a', { downloadId: 'remount-resume', status: 'error', statusSyncFailed: true })
+    renderHook(() => useDownloadManager())
+    await act(async () => {
+      metadata.resolve(response({ models: [{ id: 'a', name: 'A', status: 'missing' }] }))
+      await metadata.promise
+    })
+    expect(useDownloadStore.getState().getTask('a')?.status).toBe('downloading')
+    await act(async () => { FakeEventSource.latest.emit('remount-resume', 'done') })
+    expect(useDownloadStore.getState().getTask('a')?.status).toBe('ok')
   })
 })

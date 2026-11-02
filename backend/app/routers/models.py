@@ -235,6 +235,8 @@ async def subscribe_model(model_id: str, request: Request):
     """
     from core.download_queue import get_download_queue
     queue = get_download_queue()
+    if queue.get_task(model_id) is None:
+        raise HTTPException(status_code=404, detail=f"未找到下载任务: {model_id!r}")
 
     async def _generate():
         async for event in queue.subscribe(model_id):
