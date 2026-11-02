@@ -87,10 +87,9 @@ export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* Top bar with titlebar safe area */}
-      <div className="bg-bg-secondary border-b border-border-subtle flex-shrink-0 drag-region">
-        <div className="h-[28px]" />
-        <div className="h-9 flex items-center px-3 gap-3">
-          <span className="text-sm font-medium no-drag">日志</span>
+      <div className="page-header">
+        <div className="flex items-center flex-wrap w-full gap-3">
+          <h1 className="text-xl font-semibold tracking-tight text-fg-primary">日志</h1>
           <div className="flex items-center gap-2 ml-2 no-drag">
           {errorCount > 0 && (
             <span className="text-xs text-status-error flex items-center gap-1">
@@ -111,9 +110,10 @@ export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
         <div className="flex items-center gap-1 no-drag">
           <Filter size={12} className="text-fg-secondary" />
           <select
+            aria-label="日志级别"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-0.5 rounded"
+            className="bg-bg-primary border border-border-subtle text-fg-primary text-xs px-3 py-2 rounded-xl"
           >
             <option value="ALL">全部</option>
             <option value="ERROR">仅 Error</option>
@@ -127,7 +127,7 @@ export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
         <button
           onClick={() => setAutoScroll(!autoScroll)}
           className={clsx(
-            'flex items-center gap-1 text-xs px-2 py-0.5 rounded transition-colors no-drag',
+            'flex items-center gap-1 text-xs px-3 py-2 rounded-xl transition-colors no-drag',
             autoScroll ? 'text-fg-accent bg-bg-active' : 'text-fg-secondary hover:bg-bg-hover'
           )}
           title="自动滚动到底部"
@@ -139,7 +139,7 @@ export default function Logs({ isVisible = false }: { isVisible?: boolean }) {
         {/* Clear */}
         <button
           onClick={handleClear}
-          className="flex items-center gap-1 text-xs text-fg-secondary hover:text-status-error px-2 py-0.5 rounded hover:bg-bg-hover transition-colors no-drag"
+          className="flex items-center gap-1 text-xs text-fg-secondary hover:text-status-error px-3 py-2 rounded-xl hover:bg-bg-hover transition-colors no-drag"
           title="清空日志"
         >
           <Trash2 size={12} />

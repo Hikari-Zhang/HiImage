@@ -377,15 +377,15 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
         right={<div className="flex items-center gap-2"><SendToEditor image={resultImage} current="synthesis" /><span className="text-xs text-fg-secondary">{activeModeConfig?.name ?? '...'} | {device}</span></div>}
       />
 
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      <div className="editor-workspace flex-1 flex overflow-hidden min-h-0">
         {/* ── 画布区域 ── */}
         <div
-          className="flex-1 bg-[#1a1a1a] relative"
+          className="flex-1 min-w-0 bg-workspace relative"
           onDrop={handleSourceDrop}
           onDragOver={handleDragOver}
         >
           {!sourceImage ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-fg-secondary">
+            <div className="empty-canvas absolute inset-0 flex flex-col items-center justify-center gap-4 text-fg-secondary">
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽主图到此处，或点击打开</p>
               <Button onClick={handleOpenSource}>打开主图</Button>
@@ -486,7 +486,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
         </div>
 
         {/* ── 控制面板 ── */}
-        <div className="w-[260px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-3 overflow-y-auto min-h-0">
+        <div className="editor-inspector w-[280px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-3 overflow-y-auto min-h-0">
 
           {/* 模式选择 */}
           <section>

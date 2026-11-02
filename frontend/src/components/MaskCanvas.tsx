@@ -513,7 +513,7 @@ export default function MaskCanvas({
   }, [])
 
   return (
-    <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-[#1a1a1a]">
+    <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-workspace">
       {containerSize.w > 0 && (
         <Stage
           ref={stageRef}

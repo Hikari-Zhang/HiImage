@@ -22,17 +22,17 @@ export default function Button({
     <button
       disabled={disabled || loading}
       className={clsx(
-        'inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors',
+        'inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-colors',
         'disabled:opacity-50 disabled:cursor-not-allowed',
         // Variants
         variant === 'primary' && 'bg-border-focus text-white hover:bg-blue-600',
-        variant === 'secondary' && 'bg-bg-hover text-fg-primary border border-border-subtle hover:bg-[#4a4a4a]',
+        variant === 'secondary' && 'bg-bg-tertiary text-fg-primary border border-border-subtle shadow-sm hover:bg-bg-hover',
         variant === 'danger' && 'bg-status-error text-white hover:bg-red-600',
         variant === 'ghost' && 'bg-transparent text-fg-secondary hover:text-fg-primary hover:bg-bg-hover',
         // Sizes
-        size === 'sm' && 'text-xs px-2.5 py-1.5',
-        size === 'md' && 'text-sm px-4 py-2',
-        size === 'lg' && 'text-sm px-5 py-2.5',
+        size === 'sm' && 'text-xs px-3 py-2',
+        size === 'md' && 'text-sm px-4 py-2.5',
+        size === 'lg' && 'text-sm px-5 py-3',
         className
       )}
       {...props}

@@ -239,9 +239,9 @@ export default function ModelSelect({
         onClick={() => setOpen((v) => !v)}
         className={clsx(
           'w-full flex items-center gap-2',
-          'bg-bg-primary border border-border-subtle text-fg-primary rounded',
+          'bg-bg-primary border border-border-subtle text-fg-primary rounded-xl',
           'focus:border-border-focus focus:outline-none transition-colors text-left',
-          size === 'sm' ? 'text-xs px-2 py-1.5' : 'text-sm px-3 py-2',
+          size === 'sm' ? 'text-xs px-3 py-2' : 'text-sm px-3 py-2.5',
           open && 'border-border-focus',
         )}
       >

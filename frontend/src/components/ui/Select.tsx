@@ -1,3 +1,4 @@
+import { useId } from 'react'
 import { clsx } from 'clsx'
 import type { SelectHTMLAttributes } from 'react'
 
@@ -21,16 +22,19 @@ interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'siz
 }
 
 export default function Select({ label, options, groups, size = 'md', className, ...props }: SelectProps) {
+  const generatedId = useId()
+  const controlId = props.id ?? generatedId
   return (
     <div>
-      {label && <label className="text-xs text-fg-secondary mb-1.5 block">{label}</label>}
+      {label && <label htmlFor={controlId} className="text-xs text-fg-secondary mb-1.5 block">{label}</label>}
       <select
+        id={controlId}
         className={clsx(
-          'w-full bg-bg-primary border border-border-subtle text-fg-primary rounded',
+          'w-full bg-bg-primary border border-border-subtle text-fg-primary rounded-xl',
           'focus:border-border-focus focus:outline-none transition-colors',
           'appearance-none bg-no-repeat bg-[length:16px] bg-[right_8px_center]',
-          size === 'sm' && 'text-xs px-2 py-1.5',
-          size === 'md' && 'text-sm px-3 py-2',
+          size === 'sm' && 'text-xs pl-3 pr-8 py-2',
+          size === 'md' && 'text-sm pl-3 pr-8 py-2.5',
           className
         )}
         style={{

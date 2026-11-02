@@ -521,11 +521,11 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
     <div className="flex flex-col h-full">
       <PageHeader title="抠图" right={<SendToEditor image={compositeResult || resultImage} current="cutout" />} />
 
-      <div className="flex flex-1 min-h-0">
+      <div className="editor-workspace flex flex-1 min-h-0">
         {/* ── 左侧画布区域 ── */}
         <div
           ref={containerRef}
-          className="flex-1 relative overflow-hidden"
+          className="flex-1 min-w-0 relative overflow-hidden bg-workspace"
           onDrop={handleDrop}
           onDragOver={(e) => e.preventDefault()}
         >
@@ -619,7 +619,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
         </div>
 
         {/* ── 右侧控制面板 ── */}
-        <div className="w-[240px] flex-shrink-0 border-l border-border-subtle bg-bg-secondary overflow-y-auto p-3 flex flex-col gap-3">
+        <div className="editor-inspector w-[280px] flex-shrink-0 border-l border-border-subtle bg-bg-secondary overflow-y-auto p-3 flex flex-col gap-3">
           {/* 模型选择 */}
           <ModelSelect
             label="抠图模型"

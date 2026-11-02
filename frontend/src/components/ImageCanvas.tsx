@@ -130,8 +130,7 @@ export default function ImageCanvas({
     ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
 
     // Clear
-    ctx.fillStyle = '#1a1a1a'
-    ctx.fillRect(0, 0, containerSize.w, containerSize.h)
+    ctx.clearRect(0, 0, containerSize.w, containerSize.h)
 
     // Draw image
     if (imageRef.current) {

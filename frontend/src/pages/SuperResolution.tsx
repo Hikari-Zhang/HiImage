@@ -535,10 +535,10 @@ export default function SuperResolution() {
       />
 
       {/* Content */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      <div className="editor-workspace flex-1 flex overflow-hidden min-h-0">
         {/* Image area */}
         <div
-          className="flex-1 bg-[#1a1a1a] flex items-center justify-center relative"
+          className="flex-1 min-w-0 bg-workspace flex items-center justify-center relative"
           onDrop={handleDrop}
           onDragOver={handleDragOver}
         >
@@ -564,7 +564,7 @@ export default function SuperResolution() {
               />
             </div>
           ) : !sourceImage ? (
-            <div className="flex flex-col items-center gap-4 text-fg-secondary">
+            <div className="empty-canvas flex flex-col items-center gap-4 text-fg-secondary">
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽图片到此处，或点击打开文件</p>
               <Button onClick={handleOpenFile}>打开图片</Button>
@@ -595,7 +595,7 @@ export default function SuperResolution() {
         </div>
 
         {/* Control panel */}
-        <div className="w-[240px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-4 overflow-y-auto min-h-0">
+        <div className="editor-inspector w-[280px] bg-bg-secondary border-l border-border-subtle p-3 flex flex-col gap-4 overflow-y-auto min-h-0">
           {/* Model */}
           <ModelSelect
             label="模型"

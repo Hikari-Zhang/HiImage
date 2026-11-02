@@ -5,26 +5,27 @@ export default {
     extend: {
       colors: {
         bg: {
-          primary: '#1e1e1e',
-          secondary: '#252526',
-          tertiary: '#2d2d2d',
-          hover: '#3c3c3c',
-          active: '#094771',
+          primary: 'rgb(var(--bg-primary) / <alpha-value>)',
+          secondary: 'rgb(var(--bg-secondary) / <alpha-value>)',
+          tertiary: 'rgb(var(--bg-tertiary) / <alpha-value>)',
+          hover: 'rgb(var(--bg-hover) / <alpha-value>)',
+          active: 'rgb(var(--bg-active) / <alpha-value>)',
         },
+        workspace: 'rgb(var(--workspace) / <alpha-value>)',
         fg: {
-          primary: '#cccccc',
-          secondary: '#858585',
-          accent: '#569cd6',
+          primary: 'rgb(var(--fg-primary) / <alpha-value>)',
+          secondary: 'rgb(var(--fg-secondary) / <alpha-value>)',
+          accent: 'rgb(var(--accent) / <alpha-value>)',
         },
         border: {
-          subtle: '#3c3c3c',
-          focus: '#007acc',
+          subtle: 'rgb(var(--separator) / <alpha-value>)',
+          focus: 'rgb(var(--control-accent) / <alpha-value>)',
         },
         status: {
-          success: '#4caf50',
-          warning: '#ff9800',
-          error: '#f44336',
-          info: '#2196f3',
+          success: 'rgb(var(--success) / <alpha-value>)',
+          warning: 'rgb(var(--warning) / <alpha-value>)',
+          error: 'rgb(var(--error) / <alpha-value>)',
+          info: 'rgb(var(--accent) / <alpha-value>)',
         },
       },
       width: {
