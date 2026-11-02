@@ -21,7 +21,6 @@ import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -276,119 +275,48 @@ async def get_queue_status():
 
 @router.delete("/{model_id}/files")
 async def delete_model_files(model_id: str):
-    """
-    删除指定模型的本地权重文件（不修改 models.yaml）。
-
-    - rembg   → 删除 ~/.u2net/<rembg_model_name>.onnx
-    - 本地文件 → 删除 PROJECT_ROOT/<local_path>
-    - HF 缓存 → 删除 huggingface cache 中对应的 repo 目录
-    - IOPaint cli 内置模型 → 无文件可删，直接返回提示
-    """
+    """仅删除独占、闲置权重；共享或占用时返回 409，不修改注册表。"""
     from core.model_registry import MODEL_BY_ID
-    from core.paths import PROJECT_ROOT as _PR, MODELS_DIR as _MD, U2NET_HOME as _U2NET, HF_HOME as _HF, resolve_model_cache_path, CACHE_ROOT
-    import shutil
+    from core.model_files import shared_model_ids, delete_files
+    from core.model_resources import model_resources, ModelResourcesBusy
+    from core.model_checker import invalidate_model_cache
+    from core.download_queue import get_download_queue
 
     cfg = MODEL_BY_ID.get(model_id)
     if not cfg:
         raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
+    if cfg.get("provider") == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
+        return {"ok": True, "message": "此模型暂不支持通过文件删除接口清理"}
 
-    provider = cfg.get("provider", "")
-
-    # IOPaint 内置模型（cli 模式）：无独立文件
-    if provider == "IOPaint" and cfg.get("iopaint_mode") == "cli":
-        return {"ok": True, "message": "内置模型无需删除文件（随 iopaint 包安装）"}
-
-    deleted: list[str] = []
-    not_found: list[str] = []
-
-    # ── rembg 模型 ──────────────────────────────────────────────────────────
-    if provider == "rembg":
-        u2net_home = _U2NET
-        rembg_name = cfg.get("rembg_model_name", model_id)
-
-        # 可能是子目录形式（如 briaai/RMBG-2.0）
-        onnx_path = u2net_home / f"{rembg_name}.onnx"
-        onnx_dir = u2net_home / rembg_name  # 子目录形式
-
-        if onnx_path.exists():
-            onnx_path.unlink()
-            deleted.append(str(onnx_path))
-        elif onnx_dir.exists() and onnx_dir.is_dir():
-            shutil.rmtree(onnx_dir)
-            deleted.append(str(onnx_dir))
-        else:
-            not_found.append(str(onnx_path))
-
-    # ── 本地路径文件（realesrgan/facexlib 等）──────────────────────────────
-    if cfg.get("local_path"):
-        # 使用 paths.py 统一解析路径
-        local = Path(resolve_model_cache_path(cfg))
-        # 安全检查：只允许删 CACHE_ROOT 或 PROJECT_ROOT/models 目录下的文件
-        try:
-            local.resolve().relative_to(Path(CACHE_ROOT).resolve())
-        except ValueError:
+    try:
+        # 同一次独占许可内检查和删除，避免检查后又开始使用的竞争窗口。
+        # 此处没有 await；工作线程会在删除结束后才获得使用许可。
+        with model_resources.deleting():
+            shared = shared_model_ids(model_id, MODEL_BY_ID)
+            if shared:
+                affected = [{"id": mid, "name": MODEL_BY_ID[mid].get("name", mid)} for mid in shared]
+                names = "、".join(f"{item['name']} ({item['id']})" for item in affected)
+                raise HTTPException(status_code=409, detail={
+                    "code": "MODEL_FILES_SHARED",
+                    "message": f"权重被其他模型共用，拒绝删除。受影响模型：{names}",
+                    "affected_models": affected,
+                })
+            if get_download_queue().list_active():
+                raise ModelResourcesBusy("当前存在下载或排队任务，请结束后再删除模型文件")
             try:
-                local.resolve().relative_to(Path(_PR).resolve() / "models")
-            except ValueError:
-                raise HTTPException(status_code=400, detail=f"路径安全检查失败，拒绝删除: {local}")
-
-        if local.exists():
-            local.unlink()
-            deleted.append(str(local))
-        else:
-            not_found.append(str(local))
-
-    # ── HuggingFace 缓存（diffusers / IOPaint server / HiImage 等）──────────
-    hf_repo_ids: list[str] = []
-    if cfg.get("hf_models"):
-        # 组合模型：收集所有子模型的 repo_id
-        hf_repo_ids = [sub["id"] for sub in cfg["hf_models"]]
-    elif cfg.get("hf_model_id") and not cfg.get("local_path"):
-        hf_repo_ids = [cfg["hf_model_id"]]
-
-    for repo_id in hf_repo_ids:
-        hf_cache_dir = _HF
-        manual_dir = hf_cache_dir / "manual" / repo_id.replace("/", "--")
-
-        # 1. 优先删手动下载目录（_download_hf 使用的路径）
-        if manual_dir.exists():
-            shutil.rmtree(manual_dir)
-            deleted.append(str(manual_dir))
-        else:
-            # 2. 尝试通过 huggingface_hub scan_cache_dir 找标准缓存目录
-            try:
-                from huggingface_hub import scan_cache_dir as hf_scan
-                hub_dir = hf_cache_dir / "hub"
-                if hub_dir.exists():
-                    cache_info = hf_scan(hub_dir)
-                    for repo in cache_info.repos:
-                        if repo.repo_id == repo_id:
-                            shutil.rmtree(repo.repo_path)
-                            deleted.append(str(repo.repo_path))
-                            break
-                    else:
-                        not_found.append(f"HF cache: {repo_id}")
-                else:
-                    not_found.append(f"HF cache dir 不存在: {hub_dir}")
-            except Exception as e:
-                logger.error(f"[删除模型] 扫描 HF 缓存失败：{cfg.get('name', model_id)} ({repo_id}) — {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=f"扫描 HF 缓存失败: {e}")
-
-    if not deleted and not_found:
-        logger.warning(f"[删除模型] 未找到可删除的文件：{model_id}")
-        return {
-            "ok": False,
-            "message": f"未找到可删除的文件",
-            "not_found": not_found,
-        }
-
-    logger.info(f"[删除模型] {cfg.get('name', model_id)}：已删除 {len(deleted)} 个文件/目录")
-    return {
-        "ok": True,
-        "message": f"已删除 {len(deleted)} 个文件/目录",
-        "deleted": deleted,
-        "not_found": not_found,
-    }
+                return delete_files(cfg)
+            finally:
+                # 包含部分删除后发生 I/O 错误的情形，不继续展示过期的 OK。
+                invalidate_model_cache()
+    except ModelResourcesBusy as exc:
+        raise HTTPException(status_code=409, detail={
+            "code": "MODEL_FILES_BUSY", "message": str(exc),
+        }) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("删除模型文件失败: %s", model_id)
+        raise HTTPException(status_code=500, detail="删除模型文件失败，请检查文件占用和权限后重试") from exc
 
 
 @router.get("/groups")

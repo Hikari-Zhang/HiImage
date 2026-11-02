@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ACTIVE_DOCS = (
     "README.md",
     "docs/SYSTEM_ARCHITECTURE.md",
+    "docs/OPTIMIZATION_BACKLOG.md",
     "docs/system-design.md",
     "docs/PRD.md",
     "docs/SCRIPTS_REFERENCE.md",
@@ -20,6 +22,34 @@ ACTIVE_DOCS = (
 def test_active_documentation_links_commands_and_web_positioning() -> None:
     check_docs.validate_active_docs(ROOT, ACTIVE_DOCS)
     check_docs.validate_phase1_contract(ROOT, ACTIVE_DOCS)
+
+
+def test_architecture_documents_every_declared_business_endpoint() -> None:
+    """API 新增或改名时，完整架构文档也必须同步更新。"""
+    document = (ROOT / 'docs/SYSTEM_ARCHITECTURE.md').read_text(encoding='utf-8')
+    router_files = list((ROOT / 'backend/app/routers').glob('*.py'))
+    router_files.append(ROOT / 'backend/app/websocket/progress.py')
+    endpoints = []
+    for path in router_files:
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        prefix = ''
+        for node in tree.body:
+            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name) and node.value.func.id == 'APIRouter'):
+                prefix = next((ast.literal_eval(item.value) for item in node.value.keywords
+                               if item.arg == 'prefix'), '')
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                if (isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute)
+                        and decorator.func.attr in {'get', 'post', 'put', 'delete', 'websocket'}
+                        and decorator.args):
+                    endpoint = f'{decorator.func.attr.upper()} /api{prefix}{ast.literal_eval(decorator.args[0])}'
+                    endpoints.append(endpoint)
+    assert endpoints, 'No API endpoints were discovered; verify the documentation test parser'
+    missing = [endpoint for endpoint in endpoints if f'`{endpoint}`' not in document]
+    assert not missing, f'Architecture API inventory missing: {missing}'
 
 
 def test_document_validator_rejects_unknown_npm_command(tmp_path: Path) -> None:

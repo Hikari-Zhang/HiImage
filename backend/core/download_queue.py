@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from core.constants import DownloadStatus as DS, Provider, ConfigKey
 from core.utils import fmt_speed, fmt_size
 from core.model_checker import invalidate_model_cache
+from core.model_resources import model_resources
 
 logger = logging.getLogger("download_queue")
 
@@ -283,6 +284,10 @@ class DownloadQueue:
             await self._get_slot_event().wait()
 
     async def _run_download(self, model_id: str) -> None:
+        with model_resources.use():
+            await self._run_download_protected(model_id)
+
+    async def _run_download_protected(self, model_id: str) -> None:
         """在线程池中执行下载，通过 asyncio.Queue 接收进度。"""
         from core.model_registry import MODEL_BY_ID
 
@@ -327,7 +332,11 @@ class DownloadQueue:
 
             # 构造下载函数闭包，将 cancel_check 作为独立参数传递
             def _make_download_fn(fn, _cfg=cfg, _cb=_put, _cc=cancel_check):
-                return lambda: fn(_cfg, progress_cb=_cb, cancel_check=_cc)
+                def protected_download():
+                    # Future 取消不代表线程已退出，许可必须由实际线程持有。
+                    with model_resources.use():
+                        return fn(_cfg, progress_cb=_cb, cancel_check=_cc)
+                return protected_download
 
             if provider == Provider.REMBG:
                 logger.info(f"[_run_download] 使用 rembg 下载: {task.model_name}")

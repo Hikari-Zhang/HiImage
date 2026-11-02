@@ -6,7 +6,6 @@ import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from functools import partial
 from typing import AsyncIterator, Callable, Mapping, TypeVar
 
 from fastapi import FastAPI, Request
@@ -14,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from app.logging_manager import log_manager
 from app.services.task_registry import task_registry
+from core.model_resources import model_resources
 
 
 DEFAULT_MAX_PENDING = 4
@@ -144,7 +144,8 @@ class InferenceScheduler:
                 except asyncio.CancelledError:
                     self._release(admission)
                     raise
-            yield
+            with model_resources.use():
+                yield
         finally:
             self._release(admission)
 
@@ -156,9 +157,13 @@ class InferenceScheduler:
     ) -> T:
         """在线程中执行阻塞调用，协程取消时等待底层调用结束再传播取消。"""
         loop = asyncio.get_running_loop()
+        def protected_call():
+            with model_resources.use():
+                return function(*args, **kwargs)
+
         future = loop.run_in_executor(
             self._executor,
-            partial(function, *args, **kwargs),
+            protected_call,
         )
         cancelled = False
         result: T | None = None

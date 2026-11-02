@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ACTIVE_DOCS = (
     "README.md",
     "docs/SYSTEM_ARCHITECTURE.md",
+    "docs/OPTIMIZATION_BACKLOG.md",
     "docs/system-design.md",
     "docs/PRD.md",
     "docs/SCRIPTS_REFERENCE.md",
