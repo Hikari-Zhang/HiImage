@@ -15,7 +15,7 @@
 | 1 | MODEL-SAFE-01 | 已完成 | 2026-11-02 | 15 项删除专项通过；后端回归 280 项通过；使用临时权重和受控线程验证 | `be77a85` |
 | 2 | DL-01 | 已完成 | 2026-11-02 | 新增后端专项 14 项、前端专项 5 项通过；Python 回归 362 项、前端回归 209 项通过 | `0ff76e2` |
 | 3 | DL-02 | 已完成 | 2026-11-02 | 新增后端 9 项、前端 14 项；Python 回归 371 项、前端回归 223 项通过 | `354861f` |
-| 4 | INFER-01 | 已完成 | 2026-11-02 | 新增 CLI 专项 11 项；Python 回归 382 项通过；Windows 进程树回收已实测 | 未提交 |
+| 4 | INFER-01 | 已完成 | 2026-11-02 | 新增 CLI 专项 11 项；Python 回归 382 项通过；Windows 进程树回收已实测 | `7a9f746` |
 | 5 | DL-03 | 待处理 | 2026-11-02 | 尚未开始修复和验收 | — |
 | 6 | IOPAINT-EXIT-01 | 待处理 | 2026-11-02 | 分阶段替换全部 IOPaint 调用、清理依赖与兼容逻辑；每阶段单独验收 | — |
 | 7 | MODEL-PATH-01 | 待处理 | 2026-11-02 | 尚未开始修复和验收 | — |
@@ -43,7 +43,7 @@
 - 新增 `backend/tests/test_cli_timeout.py` **11 项**：静默/持续日志总超时、成功输出与实时进度、分段 UTF-8/CRLF、启动失败、非零退出、缺失/损坏输出、回调异常、超时后下一项推理继续执行、Windows launcher 后代进程回收。最初两个受控进程用例均复现超时失效；修复后全部通过，并检查临时日志删除及进程退出。
 - 测试环境：Windows，本地 `venv`。`venv/Scripts/python.exe -X utf8 -m pytest backend/tests/test_cli_timeout.py -q` → **11 passed**；`venv/Scripts/python.exe -X utf8 -m pytest backend/tests tests -q` → **382 passed**。完整回归包含专项，不重复累计；存在第三方弃用警告，无失败或跳过。
 - 使用真实短时 Python 子进程替代 IOPaint 可执行程序，没有真实模型加载、网络下载或 GPU 推理。Windows 原生分支已执行；POSIX 分支尚未在 Linux/macOS 实测，不宣称全平台验收。前端未修改，未重复运行前端检查。
-- 提交：未提交。下一项 DL-03 尚未开始；此修复用于 IOPaint 完成迁移前的可靠性保障，不改变 IOPAINT-EXIT-01 的移除目标。
+- 修复提交：`7a9f7464fa9d200dc88e6eeefbe8426bfecc160c`。下一项 DL-03 尚未开始；此修复用于 IOPaint 完成迁移前的可靠性保障，不改变 IOPAINT-EXIT-01 的移除目标。
 
 ### 2026-11-02：DL-02 完成
 
