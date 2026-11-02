@@ -16,6 +16,7 @@ from core.model_files import model_resource_paths
 from core.model_resources import model_resources
 
 logger = logging.getLogger("download_queue")
+SSE_HEARTBEAT_SECONDS = 30
 
 
 @dataclass(eq=False)
@@ -121,7 +122,7 @@ class DownloadQueue:
                 queue.put_nowait(None)
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30)
+                    event = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
                     if event is None:
                         break
                     yield event
@@ -191,17 +192,6 @@ class DownloadQueue:
 
     async def _download(self, task: DownloadTask) -> None:
         cfg = task._config
-        # 暂保留依赖同步下载及失败策略，异步化与必需依赖失败传播属于 DL-03。
-        if cfg.get("dependencies"):
-            from huggingface_hub import snapshot_download
-            from core.paths import get_hf_hub_dir
-            for dep in cfg["dependencies"]:
-                if task._cancel_flag:
-                    return
-                try:
-                    snapshot_download(repo_id=dep, cache_dir=str(get_hf_hub_dir()))
-                except Exception:
-                    logger.exception("依赖下载失败: %s", dep)
         if task._cancel_flag:
             return
         from core.downloaders import download_rembg, download_hf, download_hf_multi, download_direct
@@ -237,8 +227,37 @@ class DownloadQueue:
         def work():
             # 实际线程始终持有删除保护；在取消后的阻塞调用退出前不释放。
             with model_resources.use():
-                if not task._cancel_flag:
-                    function(cfg, progress_cb=report, cancel_check=lambda: task._cancel_flag)
+                if task._cancel_flag:
+                    return
+                dependencies = cfg.get("dependencies", [])
+                if dependencies:
+                    from huggingface_hub import snapshot_download
+                    from core.paths import get_hf_hub_dir
+                    for index, dep in enumerate(dependencies, 1):
+                        if task._cancel_flag:
+                            return
+                        report({"message": f"下载依赖（{index}/{len(dependencies)}）：{dep}"})
+                        try:
+                            snapshot_download(repo_id=dep, cache_dir=str(get_hf_hub_dir()))
+                        except Exception as exc:
+                            if task._cancel_flag:
+                                return
+                            raise RuntimeError(f"必需依赖下载失败 {dep}: {exc}") from exc
+                        # 第三方阻塞调用不能强制中断，返回后先检查取消，不启动下一阶段。
+                        if task._cancel_flag:
+                            return
+                    report({"message": "依赖准备完成，开始下载主模型"})
+                if task._cancel_flag:
+                    return
+                function(cfg, progress_cb=report, cancel_check=lambda: task._cancel_flag)
+                if task._cancel_flag:
+                    return
+                # 缓存桥接也包含磁盘扫描和离线 snapshot 查询，留在同一工作线程。
+                try:
+                    from core.model_setup import ensure_iopaint_hub_links
+                    ensure_iopaint_hub_links(task.model_id)
+                except Exception:
+                    logger.exception("IOPaint 缓存桥接失败: %s", task.model_id)
 
         future = task._future = loop.run_in_executor(None, work)
         cancelled = False
@@ -257,12 +276,6 @@ class DownloadQueue:
             raise asyncio.CancelledError
         if error is not None:
             raise error
-        if not task._cancel_flag:
-            try:
-                from core.model_setup import ensure_iopaint_hub_links
-                ensure_iopaint_hub_links(task.model_id)
-            except Exception:
-                logger.exception("IOPaint 缓存桥接失败: %s", task.model_id)
 
     def _broadcast(self, task: DownloadTask) -> None:
         for queue in self._subscribers.get(task.download_id, []):
