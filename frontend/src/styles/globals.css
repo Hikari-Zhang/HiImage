@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg-primary: 245 245 247;
   --bg-secondary: 255 255 255;
   --bg-tertiary: 255 255 255;
@@ -23,8 +23,8 @@
   --color-accent: rgb(var(--accent));
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
+:root[data-theme='dark'] {
+    color-scheme: dark;
     --bg-primary: 28 28 30;
     --bg-secondary: 36 36 39;
     --bg-tertiary: 47 47 51;
@@ -39,7 +39,6 @@
     --warning: 255 190 65;
     --error: 255 105 110;
     --sidebar-material: rgb(35 36 40 / 88%);
-  }
 }
 
 * { box-sizing: border-box; }
@@ -126,7 +125,10 @@ select { padding-right: 30px; }
   .app-sidebar > div:nth-child(2) > span,
   .app-sidebar nav > p,
   .app-sidebar nav button > span,
-  .app-sidebar > div:last-child { display: none; }
+  .app-sidebar > div:last-child > div:not(.theme-select),
+  .app-sidebar > div:last-child > button { display: none; }
+  .theme-select { justify-content: center; }
+  .theme-select select { position: absolute; inset: 0; width: 100%; opacity: 0; }
   .app-sidebar nav { padding: 20px 8px; }
   .app-sidebar nav button { padding: 12px 0; justify-content: center; }
   .page-header { flex-wrap: wrap; gap: 8px; }

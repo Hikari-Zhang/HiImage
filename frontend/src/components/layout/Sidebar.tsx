@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { Eraser, Maximize, Settings, ChevronLeft, ChevronRight, Layers, ScrollText, Sparkles, Scissors } from 'lucide-react'
 import { clsx } from 'clsx'
 import SidebarItem from './SidebarItem'
+import ThemeSelect from './ThemeSelect'
 import { useBackendStore } from '../../stores/useBackendStore'
 
 const navItems = [
@@ -59,6 +60,7 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="px-2 py-3 border-t border-border-subtle">
+        <ThemeSelect collapsed={collapsed} />
         {/* Backend status */}
         <div className={clsx('flex items-center gap-2 px-2 py-1', collapsed && 'justify-center')}>
           <div className={clsx('w-2 h-2 rounded-full flex-shrink-0', isConnected ? 'bg-status-success' : 'bg-status-warning')} />
