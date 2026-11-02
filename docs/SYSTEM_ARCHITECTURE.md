@@ -461,9 +461,9 @@ model server 具备空闲保活设计，但 IOPaint 执行器在 server 模式�
 
 `ModelChecker` 检查模型记录、缓存、文件大小及可验证的文件头，使用约 5 秒 TTL 缓存。它不是所有权重的完整哈希校验，也不保证模型能够成功推理。IOPaint CLI 类条目按内置模型报告可用，首次真正执行时仍可能下载权重。
 
-`ensure_model_ready` 检查模型并在需要时向 `DownloadQueue` 提交下载、轮询结果，默认等待上限 1800 秒。下载队列与推理队列独立，默认下载并发为 3，设置接口限制在 1–10。同一模型提交去重，状态为 `queued → downloading → done / error / cancelled`。排队可直接移除，进行中的下载通过取消标志协作停止，不保证第三方库立即终止底层传输。
+`ensure_model_ready` 检查模型并在需要时向 `DownloadQueue` 提交下载、轮询结果，默认等待上限 1800 秒。下载队列与推理队列独立，默认下载并发为 3，设置接口限制在 1–10。同一模型的当前排队或下载实例提交去重，每次新下载使用独立 `downloadId`；状态为 `queued → downloading → done / error / cancelled`。排队可直接移除，进行中的下载通过取消标志协作停止，不保证第三方库立即终止底层传输。取消后旧实例继续占用槽位与资源，实际线程退出才释放；同模型重试及共享 HF 仓库、组合依赖或本地同文件的下载会等待，无关资源可并发。队列快照可同时包含仍在退出的取消实例和同模型新排队实例，需用下载实例 ID 区分。
 
-`downloaders.py` 分别处理 rembg、Hugging Face、复合仓库与直接下载，`model_setup.py` 兼容旧 manual 缓存并补全 IOPaint 可识别的 hub 链接。浏览器通过每模型 SSE 的 `status` 事件订阅；`useDownloadManager` 以模块级 Map 复用订阅并限制重试，模型清单同步本身仍由各 hook 挂载触发。
+`downloaders.py` 分别处理 rembg、Hugging Face、复合仓库与直接下载，`model_setup.py` 兼容旧 manual 缓存并补全 IOPaint 可识别的 hub 链接。浏览器通过每模型 SSE 的 `status` 事件订阅，服务端将连接绑定到订阅时的具体下载实例，旧任务不会关闭新实例的连接。`useDownloadManager` 以模块级 Map 复用订阅并限制重试，同一后端/模型的 POST、DELETE 与重试串行提交，并拒绝旧实例或旧操作回调覆盖当前任务；模型清单同步本身仍由各 hook 挂载触发。订阅后补发历史终态和完整重连恢复仍属 DL-02 待修改项。
 
 ### 15.4 新增模型或模式的步骤
 
@@ -530,7 +530,7 @@ model server 具备空闲保活设计，但 IOPaint 执行器在 server 模式�
 | `GET /api/models/health/{model_id}` | 单模型检查 |
 | `POST /api/models/download/bulk` | 把需要下载的模型加入队列 |
 | `POST /api/models/download/{model_id}` | 单模型下载提交 |
-| `DELETE /api/models/download/{model_id}` | 取消下载任务 |
+| `DELETE /api/models/download/{model_id}` | 取消下载任务；可传 `download_id` 仅取消匹配实例，旧 ID 返回 404 |
 | `GET /api/models/subscribe/{model_id}` | SSE `status` 事件订阅 |
 | `GET /api/models/queue` | 活跃及等待下载快照 |
 | `DELETE /api/models/{model_id}/files` | 删除独占闲置的受控缓存文件；共享或占用时返回 409，拒绝删除 |

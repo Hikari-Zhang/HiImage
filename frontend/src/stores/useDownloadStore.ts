@@ -32,6 +32,7 @@ export type TaskStatus = DownloadStatusValue | ModelStatusValue
 export type DownloadTask = {
   modelId: string
   modelName: string
+  downloadId?: string  // 本次下载实例 ID；取消重试时必须更换
   status: TaskStatus
   position: number      // queued 时的排队序号（1-based），downloading/done 时为 0
   message: string

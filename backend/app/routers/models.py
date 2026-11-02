@@ -208,13 +208,14 @@ async def queue_download_single(model_id: str):
 
 
 @router.delete("/download/{model_id}")
-async def cancel_download(model_id: str):
+async def cancel_download(model_id: str, download_id: str | None = None):
     """
     取消指定模型的下载任务（queued 或 downloading 状态均可取消）。
+    可传 download_id，仅取消匹配的下载实例，避免迟到请求取消新任务。
     """
     from core.download_queue import get_download_queue
     queue = get_download_queue()
-    success = queue.cancel(model_id)
+    success = queue.cancel(model_id, download_id=download_id)
     if not success:
         raise HTTPException(status_code=404, detail=f"未找到活跃的下载任务: {model_id!r}")
     return {"ok": True, "message": f"已取消: {model_id}"}

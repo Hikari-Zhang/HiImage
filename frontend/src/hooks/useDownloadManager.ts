@@ -22,8 +22,24 @@ import { createApiClient, readApiResponse, ensureApiSuccess } from '../services/
 /** model_id → EventSource。全局唯一，不随组件卸载而销毁。 */
 const _sseMap = new Map<string, EventSource>()
 
-/** 已取消的 modelId 集合，用于防止 startDownload 的 POST 回调覆盖 cancelled 状态 */
-const _cancelledSet = new Set<string>()
+// 同一后端/模型的操作依次提交，避免慢 POST、DELETE 和重试乱序。
+const _generations = new Map<string, number>()
+const _requestTails = new Map<string, Promise<void>>()
+const _serverIds = new Map<string, string>()
+const _connectionKeys = new WeakMap<EventSource, string>()
+const operationKey = (modelId: string, client: ReturnType<typeof createApiClient>) => `${client.baseUrl}|${modelId}`
+function advance(key: string) {
+  const generation = (_generations.get(key) ?? 0) + 1
+  _generations.set(key, generation)
+  return generation
+}
+function serialize<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const request = (_requestTails.get(key) ?? Promise.resolve()).then(work)
+  const tail = request.then(() => {}, () => {})
+  _requestTails.set(key, tail)
+  void tail.then(() => { if (_requestTails.get(key) === tail) _requestTails.delete(key) })
+  return request
+}
 
 // ── 辅助函数 ──────────────────────────────────────────────────────────────────
 
@@ -31,6 +47,7 @@ function normalizeTask(data: Record<string, unknown>): Partial<DownloadTask> {
   return {
     modelId:    (data.modelId   ?? data.model_id)   as string,
     modelName:  (data.modelName ?? data.model_name) as string,
+    downloadId: (data.downloadId ?? data.download_id) as string | undefined,
     status:     data.status    as DownloadTask['status'],
     position:   (data.position ?? 0)               as number,
     message:    (data.message  ?? '')              as string,
@@ -49,27 +66,40 @@ const SSE_RETRY_DELAY = 2000
 
 /** 建立或复用 SSE 连接（全局单例，不重复建立）。 */
 function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiClient>) {
+  const key = operationKey(modelId, client)
+  const generation = _generations.get(key) ?? 0
+  const downloadId = useDownloadStore.getState().getTask(modelId)?.downloadId
+  const connectionKey = `${key}|${generation}|${downloadId ?? ''}`
+  const sameAttempt = () => (_generations.get(key) ?? 0) === generation
+    && createApiClient(useBackendStore.getState().backendURL).baseUrl === client.baseUrl
+    && useDownloadStore.getState().getTask(modelId)?.downloadId === downloadId
   const existing = _sseMap.get(modelId)
-  if (existing && existing.readyState !== EventSource.CLOSED) {
+  if (existing && existing.readyState !== EventSource.CLOSED && _connectionKeys.get(existing) === connectionKey) {
     console.log(`[SSE] 已有连接复用: ${modelId} readyState=${existing.readyState}`)
     return
   }
 
+  existing?.close()
   const esUrl = client.sseUrl(`${ApiPath.MODELS_SUBSCRIBE}/${encodeURIComponent(modelId)}`)
   console.log(`[SSE] 建立连接: ${esUrl}`)
   const es = new EventSource(esUrl)
   _sseMap.set(modelId, es)
+  _connectionKeys.set(es, connectionKey)
+  const isCurrent = () => _sseMap.get(modelId) === es && sameAttempt()
 
   es.onopen = () => {
+    if (!isCurrent()) return
     console.log(`[SSE] 连接已打开: ${modelId}`)
     // 连接成功，重置重试计数
     _sseRetryCount.delete(modelId)
   }
 
   es.addEventListener('status', (e: MessageEvent) => {
+    if (!isCurrent()) return
     try {
       const data = JSON.parse(e.data) as Record<string, unknown>
       const patch = normalizeTask(data)
+      if (downloadId && patch.downloadId !== downloadId) return
       console.log(`[SSE] 收到 status 事件: ${modelId} status=${patch.status}`, data)
 
       // 收到有效事件，重置重试计数
@@ -81,7 +111,7 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
         showToast('success', `${patch.modelName || modelId} 下载完成`)
         es.close()
         _sseMap.delete(modelId)
-        _syncOne(modelId)
+        void _syncOne(modelId, client, sameAttempt)
       }
 
       if (patch.status === DownloadStatus.ERROR) {
@@ -101,6 +131,7 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
   })
 
   es.onerror = (e) => {
+    if (!isCurrent()) return
     console.error(`[SSE] 连接错误: ${modelId}`, e)
     es.close()
     _sseMap.delete(modelId)
@@ -114,6 +145,7 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
         console.log(`[SSE] 将在 ${SSE_RETRY_DELAY}ms 后重试 (${retries + 1}/${SSE_MAX_RETRIES}): ${modelId}`)
         setTimeout(() => {
           // 重连前再次检查状态，如果已经不再是 queued/downloading 就不重连
+          if (!sameAttempt()) return
           const latest = useDownloadStore.getState().getTask(modelId)
           if (latest?.status === DownloadStatus.QUEUED || latest?.status === DownloadStatus.DOWNLOADING) {
             ensureSubscribed(modelId, client)
@@ -130,11 +162,11 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
 }
 
 /** 下载完成后立即重查单个模型状态，把 store 里的 done → ok。 */
-async function _syncOne(modelId: string) {
+async function _syncOne(modelId: string, client: ReturnType<typeof createApiClient>, isCurrent: () => boolean) {
   try {
-    const client = createApiClient(useBackendStore.getState().backendURL)
     const res = await client.fetch(`${ApiPath.MODELS_HEALTH}/${encodeURIComponent(modelId)}`)
     const data = await readApiResponse<{ status: string; name?: string }>(res, '读取模型状态失败')
+    if (!isCurrent()) return
     useDownloadStore.getState().setTask(modelId, {
       status: data.status === ModelStatus.OK ? ModelStatus.OK : ModelStatus.MISSING,
       speed: '', downloaded: '', totalSize: '', message: '',
@@ -188,86 +220,62 @@ export function useDownloadManager() {
 
   const startDownload = useCallback(async (modelId: string) => {
     const { getTask, setTask } = useDownloadStore.getState()
+    const client = getClient()
+    const key = operationKey(modelId, client)
     const current = getTask(modelId)
-    console.log(`[startDownload] modelId=${modelId} current=`, current)
-
     if (current?.status === DownloadStatus.QUEUED || current?.status === DownloadStatus.DOWNLOADING) {
-      console.log(`[startDownload] 已在队列，只恢复 SSE: ${modelId}`)
-      const client = getClient()
-      ensureSubscribed(modelId, client)
+      // POST 尚未返回时不能订阅同模型的旧实例。
+      if (current.downloadId || !_requestTails.has(key)) ensureSubscribed(modelId, client)
       return
     }
-
-    // 清除取消标记（用户重新发起下载）
-    _cancelledSet.delete(modelId)
-
-    // 先重置为 queued 状态，给用户即时反馈并避免 SSE onerror 竞态
-    // 计算临时排队位置：当前队列中 queued/downloading 的任务数 + 1
-    const allTasks = useDownloadStore.getState().tasks
-    const queuedCount = Object.values(allTasks).filter(
-      (t) => t.status === DownloadStatus.QUEUED || t.status === DownloadStatus.DOWNLOADING
+    const generation = advance(key)
+    const isCurrent = () => _generations.get(key) === generation
+      && createApiClient(useBackendStore.getState().backendURL).baseUrl === client.baseUrl
+    _sseMap.get(modelId)?.close()
+    _sseMap.delete(modelId)
+    const queuedCount = Object.values(useDownloadStore.getState().tasks).filter(
+      (task) => task.status === DownloadStatus.QUEUED || task.status === DownloadStatus.DOWNLOADING
     ).length
-    setTask(modelId, { status: DownloadStatus.QUEUED, position: queuedCount + 1, message: '提交中...', speed: '', downloaded: '', totalSize: '' })
-
-    const client = getClient()
-    console.log(`[startDownload] POST ${client.url(`${ApiPath.MODELS_DOWNLOAD}/${modelId}`)}`)
+    setTask(modelId, { downloadId: undefined, status: DownloadStatus.QUEUED, position: queuedCount + 1,
+      message: '提交中...', speed: '', downloaded: '', totalSize: '' })
     try {
-      const res = await client.fetch(`${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, {
-        method: 'POST',
+      await serialize(key, async () => {
+        const res = await client.fetch(`${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, { method: 'POST' })
+        const patch = normalizeTask(await readApiResponse<Record<string, unknown>>(res, '提交下载失败'))
+        // 即使 UI 已取消也记住实例 ID，使后续 DELETE 只针对本次下载。
+        if (patch.downloadId) _serverIds.set(key, patch.downloadId)
+        if (!isCurrent()) return
+        setTask(modelId, patch)
+        ensureSubscribed(modelId, client)
       })
-      // POST 返回后检查是否已被取消
-      if (_cancelledSet.has(modelId)) {
-        console.log(`[startDownload] POST 返回但已被取消，忽略: ${modelId}`)
-        _cancelledSet.delete(modelId)
-        return
-      }
-      const task = await readApiResponse<Record<string, unknown>>(res, '提交下载失败')
-      console.log(`[startDownload] POST 响应:`, task)
-      // 再次检查（json 解析也是异步的）
-      if (_cancelledSet.has(modelId)) {
-        console.log(`[startDownload] 解析响应后已被取消，忽略: ${modelId}`)
-        _cancelledSet.delete(modelId)
-        return
-      }
-      setTask(modelId, normalizeTask(task))
-      ensureSubscribed(modelId, client)
-    } catch (err: unknown) {
-      // 如果已被取消，不设置 error 状态
-      if (_cancelledSet.has(modelId)) {
-        _cancelledSet.delete(modelId)
-        return
-      }
-      const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[startDownload] 失败:`, msg)
-      setTask(modelId, { status: DownloadStatus.ERROR, message: msg })
-      showToast('error', `下载失败: ${msg}`)
+    } catch (error: unknown) {
+      if (!isCurrent()) return
+      const message = error instanceof Error ? error.message : String(error)
+      setTask(modelId, { status: DownloadStatus.ERROR, message })
+      showToast('error', `下载失败: ${message}`)
     }
   }, [getClient])
 
-  // ── 取消单模型下载 ──────────────────────────────────────────────────────────
-
   const cancelDownload = useCallback(async (modelId: string) => {
-    // 标记为已取消，防止 startDownload 的 POST 回调覆盖状态
-    _cancelledSet.add(modelId)
-
-    const es = _sseMap.get(modelId)
-    if (es) {
-      es.close()
-      _sseMap.delete(modelId)
-    }
-    _sseRetryCount.delete(modelId)
-
-    // 先立即更新前端状态
-    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELLED, message: '', speed: '', downloaded: '' })
-
-    // 再通知后端取消
     const client = getClient()
+    const key = operationKey(modelId, client)
+    advance(key)
+    const currentId = useDownloadStore.getState().getTask(modelId)?.downloadId
+    _sseMap.get(modelId)?.close()
+    _sseMap.delete(modelId)
+    _sseRetryCount.delete(modelId)
+    useDownloadStore.getState().setTask(modelId, { status: DownloadStatus.CANCELLED,
+      message: '正在取消，等待下载线程退出', speed: '', downloaded: '' })
     try {
-      await ensureApiSuccess(await client.fetch(`${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}`, {
-        method: 'DELETE',
-      }), '取消下载失败')
+      await serialize(key, async () => {
+        const downloadId = _serverIds.get(key) ?? currentId
+        const query = downloadId ? `?download_id=${encodeURIComponent(downloadId)}` : ''
+        await ensureApiSuccess(await client.fetch(
+          `${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}${query}`, { method: 'DELETE' }
+        ), '取消下载失败')
+      })
     } catch {
-      // 忽略
+      // 网络失败时保留用户取消意图；后续重试由后端任务去重和资源占用保护。
     }
   }, [getClient])
 
@@ -275,9 +283,11 @@ export function useDownloadManager() {
 
   const startBulkDownload = useCallback(async () => {
     const client = getClient()
+    const generations = new Map(_generations)
     try {
       const res = await client.fetch(`${ApiPath.MODELS_DOWNLOAD}/bulk`, { method: 'POST' })
       const data = await readApiResponse<{ submitted: number; tasks: Record<string, unknown>[] }>(res, '一键下载提交失败')
+      if (createApiClient(useBackendStore.getState().backendURL).baseUrl !== client.baseUrl) return
 
       if (data.submitted === 0) {
         showToast('success', '所有模型均已下载，无需重复下载')
@@ -289,6 +299,10 @@ export function useDownloadManager() {
       for (const taskData of data.tasks) {
         const task = normalizeTask(taskData)
         if (task.modelId) {
+          const key = operationKey(task.modelId, client)
+          if ((_generations.get(key) ?? 0) !== (generations.get(key) ?? 0)) continue
+          if (task.downloadId) _serverIds.set(key, task.downloadId)
+          if (useDownloadStore.getState().getTask(task.modelId)?.downloadId !== task.downloadId) advance(key)
           setTask(task.modelId, task)
           modelIds.push(task.modelId)
           if (task.status === DownloadStatus.QUEUED || task.status === DownloadStatus.DOWNLOADING) {

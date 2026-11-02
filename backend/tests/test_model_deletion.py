@@ -195,16 +195,14 @@ def test_cancelled_download_thread_keeps_deletion_protected(cache, monkeypatch):
 
     async def scenario():
         queue = download_queue.DownloadQueue()
-        task = download_queue.DownloadTask("first", "first", status="downloading")
-        queue._tasks["first"] = task
-        queue._active["first"] = task
-        runner = asyncio.create_task(queue._run_download("first"))
+        task = queue.submit("first")
+        runner = task._runner
         try:
             assert await asyncio.to_thread(started.wait, 2)
             assert queue.cancel("first")
-            await asyncio.wait_for(runner, 1)
-            assert not queue.list_active()
-            # UI 已显示 cancelled，协程也已结束，但实际下载线程仍在运行。
+            assert not runner.done()
+            assert task in queue.list_active()
+            # UI 已显示 cancelled，但线程及槽位都应保留到真实退出。
             response = await delete()
             assert response.status_code == 409
             assert file.exists()

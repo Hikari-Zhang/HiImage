@@ -47,9 +47,13 @@ def deletion_targets(cfg):
     return targets
 
 
-def _reference_paths(cfg):
+def model_resource_paths(cfg):
+    """模型可能读写的缓存路径，包括组合模型和依赖仓库。"""
     result = [p.resolve() for p, _ in deletion_targets(cfg)]
-    for repo in _repositories(cfg, dependencies=True):
+    repos = _repositories(cfg, dependencies=True)
+    if cfg.get("hf_model_id"):
+        repos.add(cfg["hf_model_id"])
+    for repo in repos:
         result.extend(p.resolve() for p, _ in _repo_targets(repo))
     return result
 
@@ -67,7 +71,7 @@ def shared_model_ids(model_id, registry):
             continue
         # 同时覆盖两个本地条目指向同一文件、符号链接及目录内的文件引用。
         if any(a.is_relative_to(b) or b.is_relative_to(a)
-               for a in deleting for b in _reference_paths(other)):
+               for a in deleting for b in model_resource_paths(other)):
             shared.append(other_id)
     return sorted(shared)
 
