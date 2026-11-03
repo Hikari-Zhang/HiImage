@@ -24,15 +24,20 @@ import type { ROI } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
 import { createTaskId } from '../services/taskId'
 import { createTaskProgressSession } from '../services/taskProgress'
-import type { WatermarkCandidate } from '../services/api/processing'
+import type { RedrawOptions, WatermarkCandidate } from '../services/api/processing'
 
 type CanvasTool = 'draw' | 'pan'
+
+const REDRAW_FIELDS = [
+  { key: 'seed', label: '随机种子', min: 0, max: 2147483647, step: 1, placeholder: '42' },
+  { key: 'num_inference_steps', label: '重绘步数', min: 1, max: 50, step: 1, placeholder: '50' },
+  { key: 'guidance_scale', label: '引导强度', min: 1, max: 30, step: 'any', placeholder: '30' },
+] as const
 
 // 后处理方法选项
 const POSTPROCESS_OPTIONS = [
   { value: PostprocessMethod.NONE,        label: '无后处理' },
   { value: PostprocessMethod.POISSON,     label: 'Poisson 融合（修边缘）' },
-  { value: PostprocessMethod.LAMA_REFINE, label: 'LaMa 二次精修' },
   { value: PostprocessMethod.GFPGAN,      label: 'GFPGAN（人脸专用）' },
 ]
 
@@ -46,17 +51,43 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
   } = useImageStore()
 
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError } = useSessionProcess('watermark')
-  const { detectWatermark, inpaint, inpaintWithMask, runPipeline } = useBackendAPI()
+  const { detectWatermark, inpaintWithMask, runPipeline } = useBackendAPI()
   const {
-    device, inpaintModel, defaultDilation, sensitivity, disableNsfw,
+    device, inpaintModel: preferredInpaintModel, defaultDilation, sensitivity, disableNsfw,
     postprocessMethod, postprocessEnabled,
     upscaleModel, upscaleEnabled,
     setDevice, setInpaintModel, setDilation, setSensitivity,
     setPostprocessMethod, setPostprocessEnabled, setUpscaleEnabled, setUpscaleModel,
   } = useEditorSettings('watermark')
-  const { inpaintGroups, upscaleGroups, inpaintDeviceOverrides } = useModelStore()
+  const { inpaintGroups, upscaleGroups, inpaintDeviceOverrides, inpaintPipelines, defaultInpaintModel } = useModelStore()
+  const hasModel = (id: string) => inpaintGroups.some(group => group.options.some(model => model.value === id))
+  const inpaintModel = hasModel(preferredInpaintModel) ? preferredInpaintModel : defaultInpaintModel
+  const repairAvailable = hasModel(inpaintModel)
   const effectiveDevice = inpaintDeviceOverrides?.[inpaintModel] || device
-  const { options: deviceOptions } = useDeviceOptions({ device, setDevice })
+  const { options: deviceOptions, loading: detectingDevices, cudaAvailable } = useDeviceOptions({ device, setDevice })
+  const isRedraw = inpaintPipelines[inpaintModel] === 'flux_fill'
+  const [prompt, setPrompt] = useState('')
+  const [redrawFields, setRedrawFields] = useState({ seed: '', num_inference_steps: '', guidance_scale: '' })
+  const redraw: RedrawOptions | undefined = isRedraw ? { prompt: prompt.trim() || undefined } : undefined
+  let invalidRedraw = false
+  if (redraw) {
+    for (const { key, min, max, step } of REDRAW_FIELDS) {
+      if (redrawFields[key] === '') continue
+      const value = Number(redrawFields[key])
+      if (!Number.isFinite(value) || value < min || value > max || (step === 1 && !Number.isInteger(value))) {
+        invalidRedraw = true
+      }
+      redraw[key] = value
+    }
+  }
+  let redrawDeviceMessage = ''
+  if (isRedraw) {
+    if (detectingDevices) redrawDeviceMessage = '正在检测 CUDA 设备…'
+    else if (cudaAvailable === false) redrawDeviceMessage = '当前后端没有可用的 CUDA 设备。可切换到 LaMa 快速修复。'
+    else if (cudaAvailable !== true) redrawDeviceMessage = '无法确认 CUDA 设备状态，请刷新页面后重试。'
+    else if (device !== 'cuda') redrawDeviceMessage = 'FLUX Fill 局部重绘需要选择 CUDA 设备。'
+  }
+  const repairReady = repairAvailable && !redrawDeviceMessage && !invalidRedraw
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
   const { exportMask, exportCombinedMask } = useMaskExport()
@@ -151,6 +182,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
 
   // Process
   const handleProcess = async () => {
+    if (!repairReady) return
     if (!sourceImage) return
     // 优先使用遮罩模式，否则使用 ROI 模式
     if (maskStrokes.length === 0 && rois.length === 0) return
@@ -190,6 +222,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             postprocess_enabled: postprocessEnabled,
             upscale_enabled: upscaleEnabled,
             upscale_model: upscaleModel,
+            ...(redraw && { redraw }),
             task_id: requestTaskId,
           })
           return result.image
@@ -202,6 +235,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             device,
             dilation: defaultDilation,
             disable_nsfw: disableNsfw,
+            ...(redraw && { redraw }),
             task_id: requestTaskId,
           })
           return result.image
@@ -549,6 +583,38 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             options={deviceOptions}
           />
 
+          {isRedraw && (
+            <fieldset disabled={isProcessing} className="space-y-2">
+              <legend className="text-sm font-medium">局部重绘参数</legend>
+              <label className="block text-xs">
+                重绘提示词
+                <textarea
+                  className="mt-1 block w-full rounded border border-border bg-transparent p-2"
+                  maxLength={1000}
+                  rows={3}
+                  placeholder="留空时根据周围背景和纹理自然补绘"
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                />
+              </label>
+              {REDRAW_FIELDS.map(({ key, label, ...attributes }) => (
+                <label key={key} className="flex items-center justify-between gap-2 text-xs">
+                  {label}
+                  <input
+                    type="number"
+                    className="w-24 rounded border border-border bg-transparent p-1"
+                    {...attributes}
+                    value={redrawFields[key]}
+                    onChange={(event) => setRedrawFields({ ...redrawFields, [key]: event.target.value })}
+                  />
+                </label>
+              ))}
+              <p className="text-xs text-fg-secondary">留空使用模型默认参数。</p>
+              {redrawDeviceMessage && <p role="status" className="text-xs text-fg-secondary">{redrawDeviceMessage}</p>}
+              {invalidRedraw && <p role="alert" className="text-xs text-fg-secondary">请检查随机种子、步数和引导强度的取值范围。</p>}
+            </fieldset>
+          )}
+
           {/* Dilation */}
           <Slider
             label="遮罩扩张"
@@ -619,13 +685,14 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             )}
           </section>
 
+          {!repairAvailable && <p role="status" className="text-xs text-fg-secondary">当前没有可用的修复模型，仍可检测和标记水印。</p>}
           {/* Process button */}
           <div className="mt-auto pt-2 space-y-2">
             {(() => {
               const task = downloadTasks[inpaintModel]
               const isModelBusy = task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED
               const isModelMissing = task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR
-              const canProcess = sourceImage && (maskStrokes.length > 0 || rois.length > 0) && !isModelBusy
+              const canProcess = repairReady && sourceImage && (maskStrokes.length > 0 || rois.length > 0) && !isModelBusy
               return (
                 <Button
                   onClick={handleProcess}
@@ -643,8 +710,8 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
                         : isModelMissing
                           ? '点击下载并处理'
                           : (postprocessEnabled || upscaleEnabled)
-                            ? '去水印 + 增强'
-                            : '去除水印'}
+                            ? (isRedraw ? '重绘 + 增强' : '去水印 + 增强')
+                            : isRedraw ? '开始重绘' : '去除水印'}
                 </Button>
               )
             })()}

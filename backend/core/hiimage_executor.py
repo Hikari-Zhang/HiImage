@@ -15,9 +15,7 @@ class HiImageExecutor(BaseModelExecutor):
 
     支持复合任务：
     - GDINO + SAM + FLUX.1-Fill（智能定位 + 高质量修复）
-    - GDINO + SAM + SDXL（智能定位 + 高分辨率修复）
     - SegFormer + HSV 换色（快速换色）
-    - SegFormer + SD 1.5（风格/纹理替换）
     """
 
     def __init__(self, model_config: Dict[str, Any], device: str):
@@ -27,34 +25,17 @@ class HiImageExecutor(BaseModelExecutor):
 
     def load_model(self) -> None:
         """加载复合模型（按需加载子模型）"""
-        # 根据模型 ID 决定加载哪些子模型
-        model_id = self.model_config.get("id", "")
-
-        if "grounded_sam" in model_id:
-            # 加载 GroundingDINO + SAM
+        pipeline = self.model_config["pipeline"]
+        if pipeline == "grounded_sam_flux":
             from .grounded_segmenter import GroundedSegmenter
+            from .flux_filler import FluxFiller
             self._segmenter = GroundedSegmenter()
-            # 加载修复模型（FLUX 或 SDXL）
-            if "flux" in model_id:
-                from .flux_filler import FluxFiller
-                self._inpainter = FluxFiller(device=self.device)
-            elif "sdxl" in model_id:
-                from .inpainter import Inpainter
-                self._inpainter = Inpainter(
-                    model_name="sdxl",
-                    device=self.device,
-                )
-        elif "auto_segment" in model_id:
-            # 加载 SegFormer
+            self._inpainter = FluxFiller(device=self.device)
+        elif pipeline == "segformer_hsv":
             from .human_parser import HumanParser
             self._segmenter = HumanParser()
-            # 加载 SD 1.5（如果需要）
-            if "sd15" in model_id:
-                from .inpainter import Inpainter
-                self._inpainter = Inpainter(
-                    model_name="sd15",
-                    device=self.device,
-                )
+        else:
+            raise ValueError(f"不支持的复合管线: {pipeline!r}")
 
     def execute(self, image: np.ndarray, **kwargs) -> np.ndarray:
         """
@@ -80,16 +61,8 @@ class HiImageExecutor(BaseModelExecutor):
 
         # Step 2: 修复（如果有 inpainter）
         if self._inpainter is not None:
-            if hasattr(self._inpainter, 'inpaint'):
-                # FluxFiller
-                return self._inpainter.inpaint(
-                    image_rgb=image,
-                    mask=mask,
-                    prompt=prompt,
-                )
-            else:
-                # Inpainter
-                return self._inpainter.remove_watermark_with_mask(image, mask)
+            params = {key: value for key, value in kwargs.items() if key not in {"part", "intent", "prompt"}}
+            return self._inpainter.inpaint(image_rgb=image, mask=mask, prompt=prompt, **params)
         else:
             # 只有分割，没有修复（HSV 换色场景）
             from .color_replacer import replace_color_in_mask

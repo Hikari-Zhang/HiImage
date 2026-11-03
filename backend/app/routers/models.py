@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from app.services.model_catalog import model_groups
 from core.model_checker import ModelChecker
 from core.model_registry import MODELS, MODE_GROUPS
-from core.constants import ModelStatus as MS, DownloadStatus as DS, Provider, IOPaintMode
+from core.constants import ModelStatus as MS, DownloadStatus as DS
 
 logger = logging.getLogger("models")
 
@@ -151,11 +151,7 @@ async def queue_download_bulk():
     checker = ModelChecker()
     loop = asyncio.get_running_loop()
 
-    # 过滤可下载模型（排除 IOPaint cli 内置模型）
-    downloadable = [
-        m for m in MODELS
-        if not (m.get("provider") == Provider.IOPAINT and m.get("iopaint_mode") == IOPaintMode.CLI)
-    ]
+    downloadable = MODELS
 
     # 检测哪些模型需要下载
     results = await loop.run_in_executor(None, checker.check_all)
@@ -193,12 +189,6 @@ async def queue_download_single(model_id: str):
     logger.info(f"[POST /download/{model_id}] 收到请求, cfg 存在={cfg is not None}")
     if not cfg:
         raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
-
-    if cfg.get("provider") == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
-        raise HTTPException(
-            status_code=400,
-            detail="IOPaint 内置模型将在首次使用时自动下载，无需手动触发"
-        )
 
     from core.download_queue import get_download_queue
     queue = get_download_queue()
@@ -288,9 +278,6 @@ async def delete_model_files(model_id: str):
     cfg = MODEL_BY_ID.get(model_id)
     if not cfg:
         raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
-    if cfg.get("provider") == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
-        return {"ok": True, "message": "此模型暂不支持通过文件删除接口清理"}
-
     try:
         # 同一次独占许可内检查和删除，避免检查后又开始使用的竞争窗口。
         # 此处没有 await；工作线程会在删除结束后才获得使用许可。

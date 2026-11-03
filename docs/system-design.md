@@ -64,7 +64,7 @@ API 层负责输入模型、错误响应和任务调度；`backend/app/services/
 
 推理调度器在每个后端进程内固定 1 个执行槽。`HIIMAGE_MAX_PENDING_INFERENCE` 默认 `4`、范围 `0-32`，满载返回结构化 `429`。`GET /api/ready` 返回队列 `running`、`pending`、`capacity`、`accepting` 快照。队列不跨进程共享，因此当前只支持单 worker GPU 调度边界。
 
-关闭时调度器先停止接纳并排空任务，然后由调度器幂等关闭工作线程，再停止 IOPaint model server；调度器关闭失败时额外尝试关闭线程，清理异常会记录且后续服务清理仍执行。
+关闭时调度器先停止接纳并排空任务，然后幂等关闭工作线程；关闭失败时额外尝试关闭线程，取消延后至清理结束传播。
 
 ## 3. 开发运行
 

@@ -7,67 +7,6 @@ import numpy as np
 import pytest
 
 from app.services import image_processing
-from core.iopaint_executor import IOPaintExecutor
-
-
-def test_request_options_reach_inpainter_and_dilate_supplied_mask(monkeypatch):
-    calls = []
-    class Inpainter:
-        def __init__(self, **options):
-            calls.append(options)
-            self.__dict__.update(options)
-        def remove_watermark_with_mask(self, image, mask):
-            calls.append(mask.copy())
-            return image
-    monkeypatch.setitem(sys.modules, 'core.inpainter', SimpleNamespace(Inpainter=Inpainter))
-    image = np.zeros((15, 15, 3), np.uint8)
-    mask = np.zeros((15, 15), np.uint8)
-    mask[7, 7] = 255
-    callback = lambda *_: None
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(image_processing.ModelExecutorFactory, 'create_executor',
-                      lambda *_: IOPaintExecutor({'id': 'wm_lama', 'dilation': 9}, 'cpu'))
-        image_processing.inpaint_image(image, 'wm_lama', 'cpu', mask=mask,
-                                      dilation=2, disable_nsfw=True, progress_callback=callback)
-    assert calls[0]['dilation'] == 2
-    assert calls[0]['disable_nsfw'] is True
-    assert calls[0]['progress_callback'] is callback
-    assert calls[1][7, 9] == 255
-    assert calls[1][7, 10] == 0
-    assert np.count_nonzero(mask) == 1
-
-
-@pytest.mark.parametrize('masked', [False, True])
-def test_route_forwards_processing_parameters(monkeypatch, masked):
-    from app.routers import inpaint
-    image = np.zeros((4, 4, 3), np.uint8)
-    captured = {}
-    monkeypatch.setattr(inpaint, 'decode_image', lambda *_: image)
-    monkeypatch.setattr(inpaint, 'decode_mask', lambda *_: np.ones((4, 4), np.uint8))
-    monkeypatch.setattr(inpaint, 'encode_image', lambda *_: 'result')
-    async def ready(*_):
-        return True, ''
-    async def run(fn, *args, **kwargs):
-        captured.update(kwargs)
-        return image
-    monkeypatch.setattr(inpaint, 'ensure_model_ready_with_progress', ready)
-    monkeypatch.setattr(inpaint.inference_scheduler, 'run_blocking', run)
-    request_type = inpaint.InpaintWithMaskRequest if masked else inpaint.InpaintRequest
-    handler = inpaint.inpaint_with_mask if masked else inpaint.inpaint_with_rois
-    params = {'mask': 'mask'} if masked else {'rois': [[0, 0, 2, 2]]}
-    request = request_type(image='image', dilation=3, disable_nsfw=True,
-                           task_id='options-test', **params)
-    assert asyncio.run(handler(request))['image'] == 'result'
-    assert captured['dilation'] == 3
-    assert captured['disable_nsfw'] is True
-
-
-def test_watermark_catalog_reports_forced_device():
-    from app.services.model_catalog import model_groups
-    models = [m for group in model_groups('watermark_removal')['groups'] for m in group['models']]
-    assert next(m for m in models if m['id'] == 'wm_lama')['device_override'] == 'cpu'
-
-
 @pytest.mark.parametrize('position', [(0, 0), (1200, 800), (2930, 1930)])
 def test_high_resolution_repairs_are_local_and_preserve_every_unmasked_pixel(position):
     from core.inpaint_regions import prepare_mask, repair_regions

@@ -1,10 +1,9 @@
 """
 后处理修复模块 - 修复 inpainting 后的背景错乱
 
-支持三种方法：
+支持两种方法：
   - poisson     : Poisson融合（OpenCV seamlessClone），修复边缘接缝，零额外依赖
   - gfpgan      : GFPGAN 人脸修复，修复人脸区域错乱，首次使用自动下载权重
-  - lama_refine : 用 LaMa 二次精修修复区域，背景一致性最佳
 """
 from __future__ import annotations
 from core.model_session import model_session
@@ -16,7 +15,8 @@ import cv2
 from typing import Optional, Literal
 from core.utils import resolve_default_device
 
-PostMethod = Literal["poisson", "gfpgan", "lama_refine", "none"]
+PostMethod = Literal["poisson", "gfpgan", "none"]
+
 
 # GFPGAN 权重存放目录：使用 paths.py 中的定义
 # 可通过环境变量 GFPGAN_HOME 自定义
@@ -37,7 +37,6 @@ METHOD_GROUPS = [
     ("── 后处理修复 ──", [
         ("none",        "无后处理",                 "跳过后处理，直接输出"),
         ("poisson",     "Poisson融合（修边缘）",     "修复修复区域边缘的明显接缝，零额外模型，速度极快"),
-        ("lama_refine", "LaMa 二次精修",             "用 LaMa 对修复区域做二次修正，背景纹理一致性更高"),
         ("gfpgan",      "GFPGAN（人脸区域专用）",    "修复人脸/人像区域的错乱，首次使用自动下载 ~340MB 权重"),
     ]),
 ]
@@ -63,8 +62,7 @@ def fix_background(
     :param inpainted_rgb: inpainting 输出图像，RGB numpy array
     :param mask:          水印掩码，0/255 灰度图，与图像同尺寸
     :param method:        后处理方法，见 AVAILABLE_METHODS
-    :param device:        推理设备（mps/cuda/cpu），影响 GFPGAN / LaMa
-    :param iopaint_path:  iopaint 可执行路径（lama_refine 模式使用）
+    :param device:        推理设备（mps/cuda/cpu），影响 GFPGAN
     :return:              处理后的 RGB numpy array
     """
     device = resolve_default_device(device)
@@ -77,8 +75,6 @@ def fix_background(
     if method == "gfpgan":
         return _gfpgan_enhance(inpainted_rgb, device=device)
 
-    if method == "lama_refine":
-        return _lama_refine(original_rgb, inpainted_rgb, mask, device=device)
 
     raise ValueError(f"不支持的后处理方法: {method}，可选: {AVAILABLE_METHODS}")
 
@@ -217,39 +213,3 @@ def _ensure_gfpgan_weights() -> str:
         ) from e
 
     return weight_path
-
-
-# ──────────────────────────────────────────────────────────────
-# LaMa 二次精修
-# ──────────────────────────────────────────────────────────────
-
-def _lama_refine(
-    original_rgb: np.ndarray,
-    inpainted_rgb: np.ndarray,
-    mask: np.ndarray,
-    device: str | None = None,
-) -> np.ndarray:
-    """
-    用 LaMa 对 inpainting 结果做二次精修：
-    对 inpainted_rgb 在遮罩区域再跑一次 LaMa，进一步改善背景纹理一致性。
-    """
-    # 构造一个略微收缩的 mask（防止 LaMa 二次修复时再次过度扩散）
-    kernel = np.ones((5, 5), np.uint8)
-    refined_mask = cv2.erode(mask, kernel, iterations=1)
-
-    # 如果 mask 收缩后为空，退化为原始结果
-    if cv2.countNonZero(refined_mask) == 0:
-        return inpainted_rgb
-
-    try:
-        from core.model_registry import get_model
-        from core.model_executor import ModelExecutorFactory
-        
-        model_config = get_model("lama_inpaint")
-        executor = ModelExecutorFactory.create_executor(model_config, device)
-        with model_session(executor):
-            result = executor.execute(inpainted_rgb, mask=refined_mask)
-        return result
-    except Exception as e:
-        print(f"[BackgroundFixer] LaMa 二次精修失败（退化为 inpainting 结果）: {e}")
-        return inpainted_rgb

@@ -48,7 +48,6 @@ export type DownloadStatusValue = typeof DownloadStatus[keyof typeof DownloadSta
 
 export const Provider = {
   REMBG:      'rembg',
-  IOPAINT:    'IOPaint',
   DIFFUSERS:  'diffusers',
   FACEXLIB:   'facexlib',
   REALESRGAN: 'realesrgan',
@@ -73,7 +72,6 @@ export const PostprocessMethod = {
   NONE:        'none',
   POISSON:     'poisson',
   GFPGAN:      'gfpgan',
-  LAMA_REFINE: 'lama_refine',
 } as const
 
 export type PostprocessMethodValue = typeof PostprocessMethod[keyof typeof PostprocessMethod]
@@ -111,15 +109,6 @@ export const ConnectionStatus = {
 } as const
 
 export type ConnectionStatusValue = typeof ConnectionStatus[keyof typeof ConnectionStatus]
-
-// ── IOPaint 运行模式 ──────────────────────────────────────────────────────────
-
-export const IOPaintMode = {
-  CLI:    'cli',
-  SERVER: 'server',
-} as const
-
-export type IOPaintModeValue = typeof IOPaintMode[keyof typeof IOPaintMode]
 
 // ── API 路径 ─────────────────────────────────────────────────────────────────
 

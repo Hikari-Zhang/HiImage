@@ -4,7 +4,7 @@
 所有模型与模式配置均在 core/models.yaml 中维护。
 本文件只负责：
   1. 读取并解析 YAML（首次访问时才执行，避免导入时 I/O）
-  2. 展开 mode_groups.models（按 tags 自动关联）
+  2. 校验版本、模型、管线、参数与模式关联，再展开 mode_groups.models
   3. 提供对外接口：MODELS / MODE_GROUPS / MODEL_BY_ID / MODE_BY_ID
   4. 提供工具函数：get_model / get_mode / get_models_for_mode
 
@@ -16,6 +16,8 @@ import threading
 import yaml
 from pathlib import Path
 from typing import Any
+
+from core.model_schema import validate_registry, ModelConfigError
 
 # YAML 文件与本模块同目录
 _YAML_PATH = Path(__file__).parent / "models.yaml"
@@ -31,15 +33,10 @@ def _load() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     except yaml.YAMLError as e:
         raise RuntimeError(f"models.yaml 格式错误: {e}")
 
-    raw_models: list[dict] = data.get("models", [])
-    raw_modes: list[dict] = data.get("mode_groups", [])
-
-    # 为每个模式自动填充 models 字段（根据 tags 关联）
-    for mode in raw_modes:
-        mode_id = mode["id"]
-        mode["models"] = [m["id"] for m in raw_models if mode_id in m.get("tags", [])]
-
-    return raw_models, raw_modes
+    try:
+        return validate_registry(data)
+    except ModelConfigError as exc:
+        raise ModelConfigError(f"{_YAML_PATH}: {exc}") from exc
 
 
 # ── 懒加载缓存（首次调用 _ensure_loaded() 后才有非空值）─────────────────────────────

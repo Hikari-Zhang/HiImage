@@ -60,7 +60,7 @@ flowchart TB
     subgraph Core[算法与模型 backend/core]
         Algorithms[去水印 / 超分 / 抠图 / 合成<br/>图像算法与模型管道]
         Registry[models.yaml + model_registry<br/>模型声明与能力分组]
-        Executors[执行器与第三方模型<br/>IOPaint / Diffusers / rembg / Real-ESRGAN]
+        Executors[执行器与第三方模型<br/>Diffusers / rembg / Real-ESRGAN]
         Downloads[ModelChecker + DownloadQueue<br/>模型检查与下载]
         Algorithms --> Executors
         Executors -.读取配置.-> Registry
@@ -216,7 +216,7 @@ stateDiagram-v2
 
 队列和单线程执行器仅在当前进程内共享。多 worker 会创建多个独立队列并可能同时占用同一 GPU，因此当前部署边界是单进程、单 worker。
 
-生命周期关闭顺序为：调度器停止接纳并排空已接纳任务、由调度器幂等关闭工作线程，再停止 IOPaint model server。调度器关闭失败时额外尝试关闭工作线程；错误会记录，随后仍尝试清理 model server。外层取消延后到清理结束再传播。
+生命周期关闭顺序为：调度器停止接纳并排空已接纳任务，再幂等关闭工作线程。失败时额外尝试关闭线程；外层取消延后至清理结束传播。已不启动内部修复服务。
 
 ## 10. 运行与验证
 
@@ -293,14 +293,14 @@ HiImage/
 | 文件 | File / Blob / FileReader、JSZip | 浏览器导入、单图下载与批量 ZIP |
 | API | FastAPI、Pydantic 2、Uvicorn | 请求验证、路由、ASGI 生命周期 |
 | 图像 | NumPy、OpenCV、Pillow | 编解码、像素预算、形态学、合成 |
-| 推理 | PyTorch、IOPaint、Diffusers、rembg / ONNX Runtime | 多来源模型执行 |
+| 推理 | PyTorch、Diffusers、rembg / ONNX Runtime | 多来源模型执行 |
 | 文字候选 | rapidocr-onnxruntime 1.4.4 | PaddleOCR v4 ONNX 检测与识别 |
 | 测试 | pytest、httpx、Vitest、Testing Library、Playwright | 单元、契约、交互和浏览器验证 |
 | 网关及交付 | Nginx、Docker Compose | 静态资源、同源代理、CPU/CUDA 部署 |
 
 版本来源分别是 [前端依赖](../frontend/package.json)、[后端依赖](../backend/requirements.txt)、[推理兼容版本组](../backend/requirements-inference.txt)。本地推理版本组为 Diffusers 0.32.2、Transformers 4.48.3、Hugging Face Hub 0.36.2、PEFT 0.14.0。
 
-IOPaint 与部分新管道依赖存在版本声明冲突，安装脚本先安装常规依赖，再单独覆盖兼容版本组并执行补丁。`scripts/post_install.py` 处理已知运行时兼容问题；仅看到 `pip install` 成功不能证明推理可用。
+后端和推理依赖由同一次 pip 解析安装，本地安装器与 Docker 共用 requirements-inference.txt，不再强制覆盖版本。scripts/post_install.py 保留 basicsr 兼容补丁。安装成功不等于真实模型已验收。
 
 当前 CPU/CUDA Dockerfile 另行声明 Transformers 4.47.1、Hub 0.27.1，与本地版本组存在差异。本文记录实际配置，未将它们描述为已经统一；容器需独立验收。
 
@@ -383,17 +383,16 @@ sequenceDiagram
 ```text
 原图 → /api/detect → watermark_ocr.scan_text → 多边形候选 → 用户勾选
     → ROI/笔画合并 PNG → /api/inpaint/with-mask
-    → image_processing.inpaint_image → IOPaintExecutor
-    → prepare_mask → context_boxes → 局部模型修复 → 遮罩内合回原图
+    → 权重就绪检查 → LaMa 或 FLUX Fill worker → 遮罩内合成 → 原尺寸结果
 ```
 
 检测最长边先限制为 1600。常规 OCR 返回空、发现斜向文字或敏感度不低于 0.7 时，对有空间纹理的图像增加 CLAHE 对比度增强及正负 20 度旋转搜索。旋转扩展画布，候选逆变换回原图坐标，按交叠程度合并重复框。候选包含 `region`、`polygon`、`text`、`text_confidence`、`watermark_score` 和 `reasons`。
 
 文字置信度不是水印概率。水印分数来自位置、重复文字、关键词及倾斜等启发式规则，仅用于排序，候选默认不勾选。OCR 运行失败的指定异常会回退传统规则检测并返回 `warning`；增强检测仍找不到候选时明确提示“不代表没有水印”。Logo、残缺文字、半透明和平铺水印仍可能漏检。
 
-`prepare_mask` 统一处理 ROI 或显式 mask 及扩张。`context_boxes` 默认增加 128 像素上下文，合并相交上下文；`repair_regions` 使用局部原尺寸输入，做 2 像素内部边缘融合，只写回扩张后的遮罩范围。IOPaint 模型服务使用 Crop 策略，模型内部仍可能有自身分辨率限制。分区相交后可能合并成大范围，当前没有统一的分块显存预算控制。
+`prepare_mask` 统一处理 ROI 或显式 mask 及扩张。`context_boxes` 默认增加 128 像素上下文，合并相交上下文；`repair_regions` 使用局部原尺寸输入，做 2 像素内部边缘融合，只写回扩张后的遮罩范围。原生 LaMa 在每个局部分区将输入填充到 8 的倍数，再裁回原尺寸。分区相交后可能合并成大范围，当前没有统一的分块显存预算控制。
 
-启用增强时进入 `Pipeline`：修复 → 可选背景后处理 → 可选超分。后处理使用同一份扩张遮罩，并保留遮罩外原像素；启用超分后整图尺寸和像素会变化。后处理方法包括 `none`、`poisson`、`gfpgan`、`lama_refine`，它们面向不同场景，不代表质量排序。
+快速修复默认模型为 wm_lama，执行设备为 CPU。权重下载校验 SHA-256 后才替换缓存文件，加载时再次校验。独立后处理支持 none、poisson、gfpgan。
 
 ### 14.3 抠图与背景合成
 
@@ -426,20 +425,26 @@ sequenceDiagram
 
 ### 15.1 注册表与默认值
 
-唯一主要声明源为 [models.yaml](../backend/core/models.yaml)，`model_registry.py` 首次访问时懒加载并缓存，通过 tags 为模式建立模型关联。当前快照包含 **48 条模型记录、10 个模式定义**；这是配置数量，不表示 48 个模型都已下载或逐一验收。
+唯一主要声明源为 [models.yaml](../backend/core/models.yaml)，`model_registry.py` 首次访问时懒加载并缓存，通过 tags 为模式建立模型关联。当前快照包含 **23 条模型记录、10 个模式定义**。其中 wm_lama 已通过原生执行器恢复。配置数量不代表模型均已验收。
 
 | 模式标签 | 记录数 | 默认模型 |
 |---|---:|---|
-| `watermark_removal` | 15 | `wm_lama` |
+| `watermark_removal` | 2 | wm_lama（CPU） |
 | `cutout` | 6 | `birefnet` |
 | `upscale` | 8 | `RealESRGAN_x4plus` |
 | `background_replace` | 6 | `birefnet` |
-| `outfit_swap` | 7 | `powerpaint` |
-| `face_swap` | 5 | `gfpgan` |
-| `virtual_tryon` | 4 | `sd15` |
-| `prompt_inpaint` | 4 | `powerpaint_prompt` |
-| `auto_segment_edit` | 4 | `auto_segment_hsv` |
+| `outfit_swap` | 1 | 暂停，无默认项 |
+| `face_swap` | 2 | `gfpgan` |
+| `virtual_tryon` | 1 | 暂停，无默认项 |
+| `prompt_inpaint` | 1 | 暂停，无默认项 |
+| `auto_segment_edit` | 2 | `auto_segment_hsv`（仅换色，风格修复待适配） |
 | `instruction_edit` | 3 | `instruct_pix2pix` |
+
+注册表版本为 schema_version: 1。每条模型声明 executor（执行器标识）、architecture（网络或组合结构）、pipeline（显式管线标识）和 capabilities（机器任务能力）。工厂按 executor 分发。Diffusers 和复合执行器按 pipeline 选择实现。provider 和 features 继续用于下载和目录兼容。
+
+`core/model_schema.py` 在发布注册表缓存前校验完整文档：ID 唯一、管线白名单、执行器/架构/能力匹配、模式关联及默认模型、必要权重声明、参数类型/边界/默认值。暂停模式必须使用 null 默认值并提供原因。校验失败给出配置文件及字段位置，失败重载不会替换上一份有效缓存。校验仅检查声明，不读取权重、不导入推理库、不下载，也不保证设备或真实模型可运行。
+
+可单独执行 `python scripts/check_model_registry.py` 检查默认清单，或使用 `--path` 指定待检查的 YAML；通过返回 0，错误返回 1。新增标识需要先扩展代码中的契约白名单，配置不能填写任意 Python 导入路径。
 
 同一记录可有多个 tag，不能累加表中数量作为独立模型数。常用字段包括 `id`、`provider`、`tags`、`display_group`、`hf_model_id`、`hf_models`、`local_path`、`weight_filename`、`supported_params` 和 `device_override`。字段含义和缓存规则必须与执行器一起核对；注册表中的描述、显存估计和推荐标签不是运行时性能保证。
 
@@ -447,25 +452,27 @@ sequenceDiagram
 
 ### 15.2 执行器与生命周期
 
-`ModelExecutorFactory` 位于 `model_executor.py`，创建 IOPaint、Diffusers、HiImage、Restormer、Real-ESRGAN、rembg、facexlib 执行器。主要接口是 `load_model()`、`execute(image, **kwargs)`、`unload_model()`、`supports_mask()`；约定图像为 RGB / RGBA、NumPy uint8，遮罩为同尺寸灰度数组。
+`ModelExecutorFactory` 位于 `model_executor.py`，创建 Diffusers、HiImage 复合编辑、Real-ESRGAN、rembg、GFPGAN 执行器。主要接口是 `load_model()`、`execute(image, **kwargs)`、`unload_model()`、`supports_mask()`；约定图像为 RGB / RGBA、NumPy uint8，遮罩为同尺寸灰度数组。
 
-`base_executor.py` 另有 `BaseExecutor` 抽象，不是当前工厂使用的 `BaseModelExecutor`，扩展时应以实际调用方为准。注册表中的复合 provider 描述也不等于工厂可直接识别的 provider；`get_supported_providers()` 中的声明需与创建分支一起检查。
+`base_executor.py` 另有 `BaseExecutor` 抽象，不是当前工厂使用的 `BaseModelExecutor`，扩展时应以实际调用方为准。`get_supported_providers()` 返回注册表中的兼容来源值。执行器分发使用 executor。
 
-`model_session` 在成功或异常后清理资源，原始推理异常优先于清理异常。它不维护跨请求模型缓存。IOPaint 快速模型通过 CLI 子进程运行；SD 等走 `model_server.py` 管理的本地 HTTP 服务，并通过内部 Socket.IO 监听扩散进度。内部服务端口默认 51821，与 Web API 的 8787 不同。
+`model_session` 在成功或异常后清理资源，原始推理异常优先于清理异常，不维护跨请求缓存。旧 CLI、HTTP 服务及缓存桥接已删除。`app/services/repair_process.py` 在共享调度槽内监督一次性修复 worker，复用 `core/process_runner.py` 的截止时间与进程树回收。ROI、遮罩修复及组合处理链接入同一进程监督层。超时返回 504，回收失败返回 503 并暂停后续推理和权重删除，直至后端重启。
 
-model server 具备空闲保活设计，但 IOPaint 执行器在 server 模式卸载时显式停止服务，当前请求结束后的清理会影响跨请求复用。CLI 分区处理会逐区创建子进程、写入临时 PNG 并加载模型。文档不能据此承诺模型常驻或“第二次必然更快”。
 
-平台默认设备仅在 Apple Silicon macOS 为 MPS，其余为 CPU；环境默认值、已保存配置、请求参数和模型自身覆盖共同影响实际设备。`device_override=cpu` 会覆盖用户请求的 CUDA/MPS，例如当前 LaMa 配置。前端展示覆盖信息，但各第三方管道内部是否回退仍需实测。
+平台默认设备仅在 Apple Silicon macOS 为 MPS，其余为 CPU；环境默认值、已保存配置、请求参数和模型自身覆盖共同影响实际设备。`device_override=cpu` 会覆盖用户请求的 CUDA/MPS（有配置时）。前端展示覆盖信息，但各第三方管道内部是否回退仍需实测。
+
+FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExecutor。Fill 管线使用独立的参数配置，默认 50 步、引导强度 30。运行时在加载权重前校验参数、图像与遮罩。现有自由编辑入口使用 InstructionEditor。FLUX Fill 局部重绘按每块长边最多 1024、像素最多 768×768 进行尺寸约束。去水印接口要求可用的 CUDA 设备，加载采用逐层卸载。API 的 redraw 对象接受 prompt、seed、num_inference_steps 和 guidance_scale。权重下载与本地状态检查使用明确的 Diffusers 文件清单。
+
 
 ### 15.3 下载与完整性检查
 
-`ModelChecker` 检查模型记录、缓存、文件大小及可验证的文件头，使用约 5 秒 TTL 缓存。它不是所有权重的完整哈希校验，也不保证模型能够成功推理。IOPaint CLI 类条目按内置模型报告可用，首次真正执行时仍可能下载权重。
+`ModelChecker` 检查模型记录、缓存、文件大小及可验证的文件头，使用约 5 秒 TTL 缓存。它不是所有权重的完整哈希校验，也不保证模型能够成功推理。已删除旧 CLI 直接判定为已下载的特判。
 
 `ensure_model_ready` 检查模型并在需要时向 `DownloadQueue` 提交下载、轮询结果，默认等待上限 1800 秒。下载队列与推理队列独立，默认下载并发为 3，设置接口限制在 1–10。同一模型的当前排队或下载实例提交去重，每次新下载使用独立 `downloadId`；状态为 `queued → downloading → done / error / cancelled`。排队可直接移除，进行中的下载通过取消标志协作停止，不保证第三方库立即终止底层传输。取消后旧实例继续占用槽位与资源，实际线程退出才释放；同模型重试及共享 HF 仓库、组合依赖或本地同文件的下载会等待，无关资源可并发。队列快照可同时包含仍在退出的取消实例和同模型新排队实例，需用下载实例 ID 区分。
 
-`downloaders.py` 分别处理 rembg、Hugging Face、复合仓库与直接下载，`model_setup.py` 兼容旧 manual 缓存并补全 IOPaint 可识别的 hub 链接。浏览器通过每模型 SSE 的 `status` 事件订阅，服务端将连接绑定到订阅时的具体下载实例，旧任务不会关闭新实例的连接。`useDownloadManager` 以模块级 Map 复用订阅并限制重试，同一后端/模型的 POST、DELETE 与重试串行提交，并拒绝旧实例或旧操作回调覆盖当前任务；模型清单同步本身仍由各 hook 挂载触发。连接后立即发送包含终态的当前快照，终态后关闭流；下载记录不存在返回 404。前端对最近 500 个终态实例的通知去重，状态仍照常同步；单次与批量 POST 的终态也直接处理。连续无有效状态最多重试 3 次，打开连接本身不重置次数；耗尽后以 `statusSyncFailed` 标记状态未确认，模型列表、选择器和批量统计不将其视为真实下载失败。重连原任务无需重新 POST，页面重新挂载也会尝试恢复未确认实例。后端任务记录只保存在当前进程，重启后不保证恢复历史下载状态。
+`downloaders.py` 分别处理 rembg、Hugging Face、复合仓库与直接下载，不再写入兼容服务的合成缓存链接。浏览器通过每模型 SSE 的 `status` 事件订阅，服务端将连接绑定到订阅时的具体下载实例，旧任务不会关闭新实例的连接。`useDownloadManager` 以模块级 Map 复用订阅并限制重试，同一后端/模型的 POST、DELETE 与重试串行提交，并拒绝旧实例或旧操作回调覆盖当前任务；模型清单同步本身仍由各 hook 挂载触发。连接后立即发送包含终态的当前快照，终态后关闭流；下载记录不存在返回 404。前端对最近 500 个终态实例的通知去重，状态仍照常同步；单次与批量 POST 的终态也直接处理。连续无有效状态最多重试 3 次，打开连接本身不重置次数；耗尽后以 `statusSyncFailed` 标记状态未确认，模型列表、选择器和批量统计不将其视为真实下载失败。重连原任务无需重新 POST，页面重新挂载也会尝试恢复未确认实例。后端任务记录只保存在当前进程，重启后不保证恢复历史下载状态。
 
-`DownloadQueue` 将注册表声明的必需依赖、主模型下载及兼容缓存桥接顺序放在同一工作线程，异步层只接收进度和任务结果。依赖失败会记录仓库标识及原因，终止后续依赖和主下载，并通过统一收尾广播失败、释放槽位。取消在各阶段前后检查；当前第三方阻塞调用可能继续到返回，期间仍持有实际槽位、共享资源和删除保护。依赖阶段通过 SSE 显示当前仓库，默认心跳仍为 30 秒。此处针对下载队列，IOPaint 私有服务的初始化链仍在后续移除计划范围内。
+`DownloadQueue` 将注册表声明的必需依赖和主模型下载顺序放在同一工作线程，异步层只接收进度和任务结果。依赖失败会记录仓库标识及原因，终止后续依赖和主下载，并通过统一收尾广播失败、释放槽位。取消在各阶段前后检查；当前第三方阻塞调用可能继续到返回，期间仍持有实际槽位、共享资源和删除保护。依赖阶段通过 SSE 显示当前仓库，默认心跳仍为 30 秒。旧私有服务初始化及缓存桥接已移除。
 
 ### 15.4 新增模型或模式的步骤
 
@@ -556,10 +563,6 @@ model server 具备空闲保活设计，但 IOPaint 执行器在 server 模式�
 
 | 配置项 | 默认或语义 |
 |---|---|
-| `server.port` | 51821，内部模型服务端口，不是 API 监听端口 |
-| `server.keepalive_seconds` | 300，内部服务空闲保活设置 |
-| `server.startup_timeout` | 1800 秒，内部服务启动等待设置 |
-| `server.low_mem` / `cpu_offload` / `cpu_textencoder` | 扩散模型内存选项，默认分别为 true / false / false |
 | `inpaint.default_dilation` | 10 像素；最终请求可覆盖 |
 | `inpaint.default_device` | 环境默认值或平台默认值；已保存值优先 |
 | `download.max_concurrent` | 默认 3；设置接口约束为 1–10 |

@@ -531,23 +531,6 @@ def test_readiness_returns_503_for_configured_unavailable_cuda(
     }
 
 
-def test_iopaint_cli_output_directories_are_unique(tmp_path):
-    from core.inpainter import create_iopaint_temp_dir
-
-    first = create_iopaint_temp_dir(tmp_path)
-    second = create_iopaint_temp_dir(tmp_path)
-    assert first != second
-    assert first.parent == tmp_path
-    assert second.parent == tmp_path
-
-
-def test_inpainter_default_device_is_platform_aware(monkeypatch):
-    from core.inpainter import Inpainter
-
-    monkeypatch.setattr("core.inpainter.default_device_for_platform", lambda: "cpu")
-    assert Inpainter.__init__.__defaults__[2] is None
-
-
 def awaitable_result(awaitable):
     import asyncio
 

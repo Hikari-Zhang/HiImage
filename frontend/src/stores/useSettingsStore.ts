@@ -4,17 +4,11 @@ import { clearHfTokenRequest, saveSettingsRequest } from '../services/settingsSe
 
 interface SettingsResponse {
   device?: string
-  server_port?: number
-  server_keepalive?: number
-  server_startup_timeout?: number
   hf_endpoint?: string
   hf_token_configured?: boolean
   github_mirror?: string
   default_dilation?: number
   disable_nsfw?: boolean
-  low_mem?: boolean
-  cpu_offload?: boolean
-  cpu_textencoder?: boolean
   download_max_concurrent?: number
   upscale_tile?: number
 }
@@ -30,7 +24,7 @@ interface SettingsState {
   sensitivity: number
 
   // Postprocess
-  postprocessMethod: string   // none / poisson / gfpgan / lama_refine
+  postprocessMethod: string   // none / poisson / gfpgan
   postprocessEnabled: boolean
 
   // Upscale
@@ -40,16 +34,6 @@ interface SettingsState {
 
   // Cutout
   cutoutModel: string
-
-  // Server
-  serverPort: number
-  keepaliveSeconds: number
-  startupTimeout: number
-
-  // Memory optimization (diffusion models)
-  lowMem: boolean
-  cpuOffload: boolean
-  cpuTextencoder: boolean
 
   // Network
   hfEndpoint: string
@@ -85,7 +69,7 @@ interface SettingsState {
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   device: 'cpu',
   disableNsfw: true,
-  inpaintModel: 'wm_lama',  // 硬编码兜底值，将从后端API覆盖
+  inpaintModel: '',  // 无可用修复模型时保持为空
   defaultDilation: 10,
   sensitivity: 50,
   postprocessMethod: 'none',
@@ -94,12 +78,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   upscaleEnabled: false,
   upscaleTile: 0,  // 0 = 自动计算
   cutoutModel: 'birefnet',
-  serverPort: 51821,
-  keepaliveSeconds: 300,
-  startupTimeout: 1800,
-  lowMem: true,
-  cpuOffload: false,
-  cpuTextencoder: false,
   hfEndpoint: 'https://huggingface.com',
   hfToken: '',
   hfTokenConfigured: false,
@@ -129,18 +107,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         if (signal?.aborted) throw new DOMException('Settings request cancelled', 'AbortError')
       set({
         device: data.device ?? 'cpu',
-        serverPort: data.server_port ?? 51821,
-        keepaliveSeconds: data.server_keepalive ?? 300,
-        startupTimeout: data.server_startup_timeout ?? 1800,
         hfEndpoint: data.hf_endpoint ?? 'https://huggingface.com',
         hfToken: '',
         hfTokenConfigured: data.hf_token_configured ?? false,
         githubMirror: data.github_mirror ?? '',
         defaultDilation: data.default_dilation ?? 10,
         disableNsfw: data.disable_nsfw ?? true,
-        lowMem: data.low_mem ?? true,
-        cpuOffload: data.cpu_offload ?? false,
-        cpuTextencoder: data.cpu_textencoder ?? false,
         downloadMaxConcurrent: data.download_max_concurrent ?? 3,
         upscaleTile: data.upscale_tile ?? 0,  // 0 = 自动计算
       })
@@ -157,16 +129,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const payload: Record<string, unknown> = {
           device: state.device,
-          server_port: state.serverPort,
-          server_keepalive: state.keepaliveSeconds,
-          server_startup_timeout: state.startupTimeout,
           hf_endpoint: state.hfEndpoint,
           github_mirror: state.githubMirror,
           default_dilation: state.defaultDilation,
           disable_nsfw: state.disableNsfw,
-          low_mem: state.lowMem,
-          cpu_offload: state.cpuOffload,
-          cpu_textencoder: state.cpuTextencoder,
           download_max_concurrent: state.downloadMaxConcurrent,
           upscale_tile: state.upscaleTile,
       }
@@ -195,7 +161,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const defaults = await createApiClient(backendURL).json<Record<string, string>>('/api/models/defaults', undefined, '读取默认模型失败')
       set({
-        inpaintModel: defaults.watermark_removal ?? 'wm_lama',
+        inpaintModel: defaults.watermark_removal ?? '',
         cutoutModel: defaults.cutout ?? 'birefnet',
         defaultsLoaded: true,
       })

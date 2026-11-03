@@ -25,12 +25,6 @@ def configured_default_device(
 
 # 默认值
 DEFAULTS = {
-    "server.keepalive_seconds": 300,
-    "server.port": 51821,
-    "server.startup_timeout": 1800,
-    "server.low_mem": True,
-    "server.cpu_offload": False,
-    "server.cpu_textencoder": False,
     "inpaint.default_dilation": 10,
     "inpaint.default_device": configured_default_device(),
     "image.max_output_mb": 256,

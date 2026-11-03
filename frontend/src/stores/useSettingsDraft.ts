@@ -5,17 +5,11 @@ function savedFields() {
   const saved = useSettingsStore.getState()
   return {
     device: saved.device,
-    port: String(saved.serverPort),
-    keepalive: String(saved.keepaliveSeconds),
-    startupTimeout: String(saved.startupTimeout),
     hfEndpoint: saved.hfEndpoint,
     hfToken: '',
     githubMirror: saved.githubMirror,
     dilation: String(saved.defaultDilation),
     disableNsfw: saved.disableNsfw,
-    lowMem: saved.lowMem,
-    cpuOffload: saved.cpuOffload,
-    cpuTextencoder: saved.cpuTextencoder,
     downloadMaxConcurrent: String(saved.downloadMaxConcurrent),
     upscaleTile: String(saved.upscaleTile),
   }

@@ -63,8 +63,11 @@ def test_rgba_decoder_normalizes_channels(mode):
     ("/cutout/refine", {"original_image": png(), "mask": png(mode="L"), "brush_add": png(4, 4)}),
     ("/postprocess/fix", {"original_image": png(), "inpainted_image": png(4, 4), "mask": png(mode="L")}),
 ])
-def test_routes_reject_mismatched_mask_and_image_dimensions(route, body):
+def test_routes_reject_mismatched_mask_and_image_dimensions(monkeypatch, route, body):
     from app.routers import cutout, inpaint, postprocess
+    # Isolate image validation from the feature availability contract.
+    monkeypatch.setattr(inpaint, "unavailable_response", lambda *_: None)
+    monkeypatch.setattr(postprocess, "unavailable_response", lambda *_: None)
     app = FastAPI()
     for router in (cutout.router, inpaint.router, postprocess.router):
         app.include_router(router)
@@ -78,6 +81,7 @@ def test_routes_reject_mismatched_mask_and_image_dimensions(route, body):
 
 def test_pipeline_checks_upscale_budget_before_running_model(monkeypatch):
     from app.routers import postprocess
+    monkeypatch.setattr(postprocess, "unavailable_response", lambda *_: None)
     from app.services import upscale_budget
     monkeypatch.setattr(upscale_budget, "output_scale", lambda *_args: 2000)
     async def unexpected_inference(*_args):

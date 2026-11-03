@@ -1,6 +1,4 @@
-# Validated together for IOPaint 1.6.0 and FLUX. Install AFTER requirements.txt with --no-deps.
-# Keep this group together: newer diffusers may require huggingface-hub 1.x,
-# while the transformers version used by IOPaint requires huggingface-hub <1.
+# Native inference versions, resolved together with requirements.txt.
 diffusers==0.32.2
 transformers==4.48.3
 huggingface-hub==0.36.2

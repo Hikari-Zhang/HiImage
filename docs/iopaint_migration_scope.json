@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "decision_date": "2026-11-02",
+  "source_commit": "03a0278",
+  "scope_status": "frozen",
+  "runtime_status": "legacy_removed_native_adaptation_pending",
+  "models": {
+    "keep": [
+      "birefnet",
+      "rmbg",
+      "isnet",
+      "isnet_anime",
+      "u2net",
+      "modnet",
+      "flux_fill",
+      "sdxl",
+      "lama_inpaint",
+      "sd15",
+      "gfpgan",
+      "flux_fill_prompt",
+      "sdxl_inpaint_prompt",
+      "sd15_inpaint_prompt",
+      "grounded_sam_flux",
+      "grounded_sam_sdxl",
+      "auto_segment_hsv",
+      "auto_segment_sd15",
+      "flux",
+      "sdxl_img2img",
+      "instruct_pix2pix",
+      "wm_lama",
+      "wm_cv2",
+      "wm_sd15",
+      "wm_sdxl",
+      "RealESRGAN_x4plus",
+      "RealESRGAN_x2plus",
+      "realesr-general-x4v3",
+      "RealESRNet_x4plus",
+      "RealESRGAN_x4plus_anime_6B",
+      "realesr-animevideov3",
+      "clarity-general",
+      "clarity-anime"
+    ],
+    "retire": [
+      "powerpaint",
+      "powerpaint_prompt",
+      "wm_powerpaint_v1",
+      "wm_anytext",
+      "mat",
+      "zits",
+      "wm_migan",
+      "wm_zits",
+      "wm_fcf",
+      "wm_mat",
+      "wm_ldm",
+      "wm_manga",
+      "wm_realistic_vision",
+      "wm_dreamshaper",
+      "wm_anything_v4"
+    ]
+  },
+  "target_defaults": {
+    "background_replace": "birefnet",
+    "outfit_swap": "sd15",
+    "face_swap": "gfpgan",
+    "virtual_tryon": "sd15",
+    "prompt_inpaint": "sd15_inpaint_prompt",
+    "auto_segment_edit": "auto_segment_hsv",
+    "instruction_edit": "instruct_pix2pix",
+    "watermark_removal": "wm_lama",
+    "cutout": "birefnet",
+    "upscale": "RealESRGAN_x4plus"
+  },
+  "repair_routes": {
+    "lama": [
+      "wm_lama",
+      "lama_inpaint"
+    ],
+    "opencv": [
+      "wm_cv2"
+    ],
+    "sd15_inpaint": [
+      "sd15",
+      "sd15_inpaint_prompt",
+      "wm_sd15",
+      "auto_segment_sd15"
+    ],
+    "sdxl_inpaint": [
+      "sdxl",
+      "sdxl_inpaint_prompt",
+      "wm_sdxl",
+      "grounded_sam_sdxl"
+    ],
+    "flux_fill": [
+      "flux_fill",
+      "flux_fill_prompt",
+      "grounded_sam_flux"
+    ]
+  },
+  "retired_id_policy": "explicit_error_no_silent_remap",
+  "weights_policy": "preserve_existing_files",
+  "hard_timeout": {
+    "required": true,
+    "isolation": "supervised_process",
+    "start_method": "spawn",
+    "max_active_workers": 1,
+    "worker_lifetime": "one_request",
+    "timeout_seconds": {
+      "fast": 300,
+      "generative": 1800
+    },
+    "clock": "monotonic",
+    "starts": "before_worker_spawn",
+    "includes": [
+      "worker_start",
+      "local_model_load",
+      "preprocess",
+      "all_regions",
+      "inference",
+      "postprocess",
+      "result_transfer"
+    ],
+    "excludes": [
+      "queue_wait",
+      "dependency_download"
+    ],
+    "reset_per_region": false,
+    "reset_per_stage": false,
+    "download_in_worker": false,
+    "timeout_grace_seconds": 0,
+    "user_cancel_grace_seconds": 0.5,
+    "cleanup_wait_seconds": 5,
+    "kill_process_tree": true,
+    "release_slot_only_after_exit": true,
+    "cleanup_failure_policy": "block_inference_until_exit_or_restart",
+    "timeout_http_status": 504,
+    "timeout_error_code": "INFERENCE_TIMEOUT",
+    "timeout_task_status": "failed",
+    "automatic_retry": false,
+    "cleanup_failure_http_status": 503,
+    "cleanup_failure_error_code": "INFERENCE_CLEANUP_FAILED"
+  },
+  "removal_policy": {
+    "primary_goal": "remove_archived_iopaint",
+    "requires_legacy_quality_baseline": false,
+    "requires_output_equivalence": false,
+    "requires_new_quality_benchmark": false,
+    "cancelled_subtasks": [
+      "EXIT-02"
+    ],
+    "quality_work_tracked_separately": [
+      "QUALITY-01",
+      "GEN-01"
+    ],
+    "preserve_hard_timeout": true,
+    "requires_functional_smoke": true,
+    "requires_clean_install_without_iopaint": true
+  },
+  "removed_model_ids": [
+    "auto_segment_sd15",
+    "grounded_sam_sdxl",
+    "lama_inpaint",
+    "mat",
+    "powerpaint",
+    "powerpaint_prompt",
+    "sd15",
+    "sd15_inpaint_prompt",
+    "sdxl",
+    "sdxl_inpaint_prompt",
+    "wm_anytext",
+    "wm_anything_v4",
+    "wm_cv2",
+    "wm_dreamshaper",
+    "wm_fcf",
+    "wm_ldm",
+    "wm_manga",
+    "wm_mat",
+    "wm_migan",
+    "wm_powerpaint_v1",
+    "wm_realistic_vision",
+    "wm_sd15",
+    "wm_sdxl",
+    "wm_zits",
+    "zits"
+  ],
+  "current_model_ids": [
+    "RealESRGAN_x2plus",
+    "RealESRGAN_x4plus",
+    "RealESRGAN_x4plus_anime_6B",
+    "RealESRNet_x4plus",
+    "auto_segment_hsv",
+    "birefnet",
+    "clarity-anime",
+    "clarity-general",
+    "flux",
+    "flux_fill",
+    "flux_fill_prompt",
+    "gfpgan",
+    "grounded_sam_flux",
+    "instruct_pix2pix",
+    "isnet",
+    "isnet_anime",
+    "modnet",
+    "realesr-animevideov3",
+    "realesr-general-x4v3",
+    "rmbg",
+    "sdxl_img2img",
+    "u2net",
+    "wm_lama"
+  ]
+}

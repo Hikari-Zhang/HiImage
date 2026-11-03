@@ -46,10 +46,7 @@ class Synthesizer:
     :param mode:              处理模式 ID
     :param model_id:          所用模型 ID
     :param device:            推理设备 (mps/cpu/cuda)
-    :param iopaint_path:      IOPaint 可执行路径（换装/换脸场景需要）
-    :param progress_callback: 可选进度回调，签名 (percent: int, message: str)；
-                              扩散模型（SD/AnyText）每个 DDIM 步触发一次（via socket.io），
-                              快速模型（LaMa/ZITS）每批次完成触发一次
+    :param progress_callback: 可选进度回调，签名 (percent: int, message: str)
     """
 
     def __init__(
@@ -84,6 +81,8 @@ class Synthesizer:
         :param reference_rgb: 参考图（新背景/服装/人脸图），模式需要时必传
         :return:              合成结果（RGB numpy, uint8）
         """
+        from core.capabilities import require_model
+        require_model(self.mode, self.model_id)
         # ── Pre-flight：模型完整性预检 ────────────────────────────────────────
         # 在推理开始前检测模型文件是否存在/完整，提供明确的中文错误提示。
         # ImportError 时跳过检测（不阻断推理），保证向后兼容。
@@ -319,7 +318,6 @@ class Synthesizer:
         if not self.prompt.strip():
             raise ValueError("精准替换模式需要输入替换描述（prompt）")
 
-        from core.model_server import inpaint_via_server
 
         source_rgb = self._source_image
         h, w = source_rgb.shape[:2]
@@ -346,100 +344,29 @@ class Synthesizer:
     # ------------------------------------------------------------------
 
     def _run_auto_segment_edit(self) -> np.ndarray:
-        """
-        中文指令 → 解析意图 → SegFormer 自动分割服装部位 → HSV 换色 / SD 换风格。
-        当模型选择 auto_segment_sd15 时，颜色变更也走 SD Inpainting 路径（更真实但更慢）。
-        """
+        """解析编辑指令，由注册的复合管线完成分割和编辑。"""
         if not self.prompt.strip():
             raise ValueError("智能定位模式需要输入编辑指令（prompt）")
 
+        from core.capabilities import FeatureUnavailable
         from core.intent_parser import parse_instruction
-        from core.color_replacer import replace_color_in_mask
-        from core.model_server import inpaint_via_server
+        from core.model_registry import get_model
 
-        source_rgb = self._source_image
-
-        # 按模型选择分割器：grounded_sam_* 使用 GroundingDINO+SAM，其余使用 SegFormer
-        use_grounded = self.model_id.startswith("grounded_sam")
-        use_sd = (self.model_id == "auto_segment_sd15")
-        use_flux_fill = (self.model_id == "grounded_sam_flux")
-        use_sdxl_fill = (self.model_id == "grounded_sam_sdxl")
-
-        # Step 1: 解析中文指令
+        config = get_model(self.model_id)
         intent = parse_instruction(self.prompt)
-
-        # Step 2: 分割目标服装部位
-        if use_grounded:
-            from core.grounded_segmenter import GroundedSegmenter
-            segmenter = GroundedSegmenter()
-            mask = segmenter.segment(source_rgb, intent.part)
-        else:
-            from core.human_parser import HumanParser
-            parser = HumanParser()
-            mask = parser.segment(source_rgb, intent.part)
-
-        if mask is None or mask.max() == 0:
-            raise RuntimeError(
-                f"未能在图像中检测到「{intent.part}」区域，请确认图像中包含该部位"
-            )
-
-        # Step 3: 根据动作类型执行编辑
-        if intent.action == "color_change" and not use_sd and not use_flux_fill and not use_sdxl_fill:
-            # HSV 换色：亚秒级，保留布料光影
-            return replace_color_in_mask(source_rgb, mask, intent.value)
-
-        elif use_flux_fill or use_sdxl_fill:
-            # 高质量 Inpainting 路径（FLUX.1-Fill / SDXL）
+        if config["pipeline"] == "grounded_sam_flux":
             if intent.action == "color_change":
-                inpaint_prompt = f"{intent.value} colored clothing, photorealistic, high quality, detailed fabric texture"
+                prompt = f"{intent.value} colored clothing, photorealistic, high quality, detailed fabric texture"
             else:
-                inpaint_prompt = f"{intent.value} style clothing, high quality, detailed, photorealistic"
-
-            if use_flux_fill:
-                from core.flux_filler import FluxFiller
-                filler = FluxFiller(device=self.device)
-                try:
-                    return filler.inpaint(
-                        image_rgb=source_rgb,
-                        mask=mask,
-                        prompt=inpaint_prompt,
-                    )
-                finally:
-                    filler.offload()
-            else:
-                # grounded_sam_sdxl → SDXL Inpainting（使用 ModelExecutorFactory）
-                from core.model_registry import get_model
-                
-                model_config = get_model("sdxl")
-                executor = ModelExecutorFactory.create_executor(model_config, self.device)
-                with model_session(executor):
-                    result = executor.execute(source_rgb, mask=mask, prompt=inpaint_prompt)
-                return result
-
-        elif intent.action == "color_change" and use_sd:
-            # SD 换色：效果更真实，耗时更长
-            sd_prompt = f"{intent.value} colored clothing, photorealistic, high quality"
-            from core.model_registry import get_model
-            
-            model_config = get_model("sd15")
-            executor = ModelExecutorFactory.create_executor(model_config, self.device)
-            with model_session(executor):
-                result = executor.execute(source_rgb, mask=mask, prompt=sd_prompt)
-            return result
-
-        elif intent.action == "style_change":
-            # 风格替换：调用 SD Inpainting
-            sd_prompt = f"{intent.value} style clothing, high quality, detailed"
-            from core.model_registry import get_model
-            
-            model_config = get_model("sd15")
-            executor = ModelExecutorFactory.create_executor(model_config, self.device)
-            with model_session(executor):
-                result = executor.execute(source_rgb, mask=mask, prompt=sd_prompt)
-            return result
-
+                prompt = f"{intent.value} style clothing, high quality, detailed, photorealistic"
         else:
-            raise ValueError(f"无法解析指令：{self.prompt}\n支持格式：将[部位]换成[颜色/风格]")
+            if intent.action != "color_change":
+                raise FeatureUnavailable("当前分割模型仅支持换色，风格修复等待原生模型适配")
+            prompt = self.prompt
+
+        executor = ModelExecutorFactory.create_executor(config, self.device)
+        with model_session(executor):
+            return executor.execute(self._source_image, part=intent.part, intent=intent, prompt=prompt)
 
     # ------------------------------------------------------------------
     # 方案C：自由编辑（instruction_edit）

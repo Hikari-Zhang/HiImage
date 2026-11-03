@@ -1,11 +1,13 @@
 import type { ApiClient } from '../apiClient'
 
 export interface RawModeGroup {
+  available?: boolean
+  unavailable_reason?: string
   id: string
   name: string
   icon_name: string
   description: string
-  default_model: string
+  default_model: string | null
   needs_reference: boolean
   reference_label?: string
   reference_hint?: string

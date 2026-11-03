@@ -2,6 +2,13 @@ import type { ApiClient } from '../apiClient'
 
 export interface ImageResult { image: string; width: number; height: number }
 export interface MaskResult extends ImageResult { mask: string }
+export interface RedrawOptions {
+  prompt?: string
+  seed?: number
+  num_inference_steps?: number
+  guidance_scale?: number
+}
+
 export interface WatermarkCandidate {
   region: number[]
   polygon: number[][] | null
@@ -46,6 +53,7 @@ export function createProcessingAPI(client: ApiClient) {
     dilation: number
     disable_nsfw: boolean
     task_id: string
+    redraw?: RedrawOptions
   }) => client.json<{ image: string }>('/api/inpaint/with-mask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -78,6 +86,7 @@ export function createProcessingAPI(client: ApiClient) {
     upscale_enabled: boolean
     upscale_model: string
     task_id: string
+    redraw?: RedrawOptions
   }) => client.json<ImageResult>('/api/pipeline/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

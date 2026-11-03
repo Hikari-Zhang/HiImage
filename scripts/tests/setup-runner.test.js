@@ -98,6 +98,13 @@ test('setup installs dependencies when fingerprint is current but dependency pro
   assert.deepEqual(result, { skipped: false });
   assert.ok(commands.some(([, args]) => args.some((arg) => arg.endsWith('requirements.txt'))));
   assert.ok(commands.some(([, args]) => args.some((arg) => arg.endsWith('requirements-dev.txt'))));
+  const installs = commands.filter(([, args]) => args[0] === "install" && args.includes("-r"));
+  assert.equal(installs.length, 1);
+  const uninstall = commands.findIndex(([, args]) => args[0] === "uninstall" && args.includes("iopaint"));
+  const install = commands.findIndex(([, args]) => args === installs[0][1]);
+  assert.ok(uninstall >= 0 && uninstall < install);
+  assert.ok(commands.some(([, args]) => args[0] === "check"));
+  assert.ok(!commands.some(([, args]) => args.includes("--no-deps")));
   assert.equal(markerWrites, 1);
 });
 

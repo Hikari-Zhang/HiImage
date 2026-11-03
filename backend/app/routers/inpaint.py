@@ -4,7 +4,7 @@
 import asyncio
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -12,6 +12,7 @@ from app.services.image_codec import (decode_image, decode_mask, encode_image, c
                                       validate_matching_dimensions)
 from app.services.model_readiness import ensure_model_ready_with_progress
 from app.services.progress import make_progress_callback
+from app.services.repair_process import error_response, run_repair
 from app.services import image_processing
 from app.services.model_catalog import model_groups
 from app.config import get
@@ -19,8 +20,10 @@ from app.shared_executor import inference_admission, inference_scheduler
 from app.task_id import TaskId
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
-from core.model_registry import get_default_model
+from app.services.capabilities import redraw_response, unavailable_response
+from app.redraw_options import RedrawOptions
 from core.utils import resolve_default_device
+from core.model_registry import get_default_model
 
 from app.task_route import TaskRoute
 
@@ -43,6 +46,7 @@ class InpaintRequest(BaseModel):
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     dilation: int = Field(default=10, ge=0, le=100)
     disable_nsfw: bool = False
+    redraw: RedrawOptions | None = None
     task_id: TaskId
 
 
@@ -53,6 +57,7 @@ class InpaintWithMaskRequest(BaseModel):
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     dilation: int = Field(default=10, ge=0, le=100)
     disable_nsfw: bool = False
+    redraw: RedrawOptions | None = None
     task_id: TaskId
 
 
@@ -95,8 +100,12 @@ async def detect_watermark(req: DetectRequest):
 
 
 @router.post("/inpaint", dependencies=[Depends(inference_admission)])
-async def inpaint_with_rois(req: InpaintRequest):
+async def inpaint_with_rois(req: InpaintRequest, request: Request = None):
     """使用 ROI 列表去除水印"""
+    if (err := unavailable_response("watermark_removal", req.model)):
+        return err
+    if err := await redraw_response(req.model, req.device, req.redraw):
+        return err
     if (err := check_image_size(req.image)):
         return err
 
@@ -124,9 +133,11 @@ async def inpaint_with_rois(req: InpaintRequest):
     await progress_manager.send_progress(20, "正在处理...", task_id=req.task_id)
 
     try:
-        result = await inference_scheduler.run_blocking(
-            image_processing.inpaint_image, image, req.model, req.device,
-            rois=req.rois, dilation=req.dilation, disable_nsfw=req.disable_nsfw,
+        result = await run_repair(
+            inference_scheduler, "inpaint", image, request=request,
+            rois=req.rois, options={"model_id": req.model, "device": req.device,
+                                      "dilation": req.dilation, "disable_nsfw": req.disable_nsfw,
+                                      "redraw": req.redraw.model_dump(exclude_none=True) if req.redraw else None},
             progress_callback=make_progress_callback(req.task_id, loop),
         )
         await progress_manager.send_complete(task_id=req.task_id)
@@ -136,13 +147,19 @@ async def inpaint_with_rois(req: InpaintRequest):
         err_str = str(e)
         await progress_manager.send_error(err_str, task_id=req.task_id)
         log_manager.error(f"水印去除失败: {err_str}", source="inpaint")
+        if response := error_response(e):
+            return response
         first_line = err_str.split('\n')[0]
         return JSONResponse(status_code=422, content={"detail": err_str, "message": first_line})
 
 
 @router.post("/inpaint/with-mask", dependencies=[Depends(inference_admission)])
-async def inpaint_with_mask(req: InpaintWithMaskRequest):
+async def inpaint_with_mask(req: InpaintWithMaskRequest, request: Request = None):
     """使用自定义掩码去除水印"""
+    if (err := unavailable_response("watermark_removal", req.model)):
+        return err
+    if err := await redraw_response(req.model, req.device, req.redraw):
+        return err
     if (err := check_image_size(req.image)):
         return err
 
@@ -171,9 +188,11 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
     await progress_manager.send_progress(20, "正在处理...", task_id=req.task_id)
 
     try:
-        result = await inference_scheduler.run_blocking(
-            image_processing.inpaint_image, image, req.model, req.device,
-            mask=mask, dilation=req.dilation, disable_nsfw=req.disable_nsfw,
+        result = await run_repair(
+            inference_scheduler, "inpaint", image, request=request,
+            mask=mask, options={"model_id": req.model, "device": req.device,
+                                      "dilation": req.dilation, "disable_nsfw": req.disable_nsfw,
+                                      "redraw": req.redraw.model_dump(exclude_none=True) if req.redraw else None},
             progress_callback=make_progress_callback(req.task_id, loop),
         )
         await progress_manager.send_complete(task_id=req.task_id)
@@ -183,5 +202,7 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest):
         err_str = str(e)
         await progress_manager.send_error(err_str, task_id=req.task_id)
         log_manager.error(f"掩码修复失败: {err_str}", source="inpaint")
+        if response := error_response(e):
+            return response
         first_line = err_str.split('\n')[0]
         return JSONResponse(status_code=422, content={"detail": err_str, "message": first_line})

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.services.image_codec import decode_image, encode_image, check_image_size
 from app.services.model_readiness import ensure_model_ready_with_progress
 from app.services import image_processing
+from app.services.capabilities import unavailable_response
 from app.shared_executor import inference_admission, inference_scheduler
 from app.task_id import TaskId
 from app.websocket.progress import progress_manager
@@ -66,6 +67,8 @@ async def list_synthesis_models():
 @router.post("/synthesis/run", dependencies=[Depends(inference_admission)])
 async def run_synthesis(req: SynthesisRequest):
     """执行智能合成处理"""
+    if (err := unavailable_response(req.mode, req.model_id)):
+        return err
     if (err := check_image_size(req.source_image)):
         return err
     if req.reference_image and (err := check_image_size(req.reference_image)):

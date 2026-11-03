@@ -7,6 +7,8 @@
 """
 
 import os
+import hashlib
+import tempfile
 import shutil
 import time
 import urllib.request
@@ -209,7 +211,7 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
         _check_cancel(cancel_check)
 
     import inspect
-    from huggingface_hub import list_repo_files, hf_hub_download
+    from huggingface_hub import list_repo_files, hf_hub_download, try_to_load_from_cache
     from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
     hf_cache = str(_HF_HOME)
@@ -227,7 +229,8 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     from core.model_checker import ModelChecker
     checker = ModelChecker()
     pre_check = checker.check_model(cfg["id"])
-    if pre_check.status == "corrupted":
+    required_files = cfg.get("hf_required_files")
+    if pre_check.status == "corrupted" and not required_files:
         # 清理 hub/ 目录（新路径）——直接按路径公式删除，避免 scan_cache_dir
         # 对合成符号链接结构（无真实 blobs）返回不一致结果的问题
         try:
@@ -258,6 +261,10 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
         if not any(f.endswith(s) for s in IGNORE_SUFFIXES)
         and not any(f.startswith(p) for p in IGNORE_PREFIXES)
     ]
+    if required_files:
+        if not required_files.keys() <= set(all_files):
+            raise RuntimeError(f"{name} 的 Diffusers 文件清单与远端仓库不一致")
+        files = list(required_files)
 
     hub_cache_dir = str(Path(hf_cache) / "hub")
     total_files = len(files)
@@ -282,7 +289,13 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
             )
             if _supports_tqdm_class:
                 hf_kwargs["tqdm_class"] = tqdm_cls
-            hf_hub_download(**hf_kwargs)
+            if required_files:
+                cached = try_to_load_from_cache(repo_id, filename, cache_dir=hub_cache_dir)
+                if isinstance(cached, str) and Path(cached).stat().st_size != required_files[filename]:
+                    hf_kwargs["force_download"] = True
+            downloaded = hf_hub_download(**hf_kwargs)
+            if required_files and Path(downloaded).stat().st_size != required_files[filename]:
+                raise RuntimeError(f"文件 {filename} 的字节数与配置不一致，请检查缓存")
         except InterruptedError:
             raise
         except Exception as file_err:
@@ -310,6 +323,7 @@ def download_hf_multi(cfg: dict, progress_cb=None, cancel_check=None) -> None:
             "name": sub_name,
             "hf_model_id": sub["id"],
             "size_mb": sub.get("size_mb"),
+            "hf_required_files": sub.get("hf_required_files"),
         }
 
         def _wrapped_cb(data: dict, _name=sub_name, _idx=repo_idx, _total=total_repos):
@@ -341,6 +355,9 @@ def download_direct(cfg: dict, progress_cb=None, cancel_check=None) -> None:
 
     req = urllib.request.Request(url, headers={"User-Agent": "HiImage/2.0"})
 
+    expected_digest = cfg.get("sha256")
+    digest = hashlib.sha256() if expected_digest else None
+    temporary = None
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
             content_length = resp.headers.get("Content-Length")
@@ -351,13 +368,16 @@ def download_direct(cfg: dict, progress_cb=None, cancel_check=None) -> None:
             last_report_time = start_time
             last_report_bytes = 0
 
-            with open(dest, "wb") as f:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=dest.parent, suffix=".download", delete=False) as f:
+                temporary = Path(f.name)
                 while True:
                     _on_cancel()
                     chunk = resp.read(256 * 1024)
                     if not chunk:
                         break
                     f.write(chunk)
+                    if digest is not None:
+                        digest.update(chunk)
                     downloaded += len(chunk)
 
                     now = time.monotonic()
@@ -374,17 +394,13 @@ def download_direct(cfg: dict, progress_cb=None, cancel_check=None) -> None:
                             "total_size": fmt_size(total_bytes) if total_bytes else "?",
                         })
 
-    except InterruptedError:
-        if dest.exists():
+        _on_cancel()
+        if digest is not None and digest.hexdigest() != expected_digest:
+            raise ValueError(f"{name} 权重 SHA-256 校验失败")
+        os.replace(temporary, dest)
+    finally:
+        if temporary is not None:
             try:
-                dest.unlink()
+                temporary.unlink(missing_ok=True)
             except OSError:
                 pass
-        raise
-    except Exception as e:
-        if dest.exists():
-            try:
-                dest.unlink()
-            except OSError:
-                pass
-        raise

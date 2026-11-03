@@ -29,15 +29,16 @@ from core.utils import default_device_for_platform
 
 @dataclass
 class InpaintStep:
-    model: str = field(default_factory=lambda: get_default_model("watermark_removal"))
+    model: str = field(default_factory=lambda: "")
     device: str = field(default_factory=default_device_for_platform)
     dilation: int = 10
     disable_nsfw: bool = False
+    redraw: dict = field(default_factory=dict)
 
 
 @dataclass
 class PostprocessStep:
-    method: str = "none"       # none / poisson / gfpgan / lama_refine
+    method: str = "none"       # none / poisson / gfpgan
     device: str = field(default_factory=default_device_for_platform)
     enabled: bool = True
 
@@ -85,6 +86,8 @@ class Pipeline:
         :param progress_callback: 可选进度回调 callback(step_name: str, percent: int)
         :return:                 处理后的 RGB numpy array
         """
+        from core.capabilities import require_mode
+        require_mode("watermark_removal")
         cfg = self.config
 
         def _progress(name, pct):
@@ -108,7 +111,7 @@ class Pipeline:
             inpaint_mask = prepare_mask(original_rgb.shape, mask, rois, cfg.inpaint.dilation)
             inpainted = executor.execute(
                 original_rgb, mask=inpaint_mask, dilation=0,
-                disable_nsfw=cfg.inpaint.disable_nsfw,
+                disable_nsfw=cfg.inpaint.disable_nsfw, **cfg.inpaint.redraw,
             )
 
         _progress("inpaint", 50)

@@ -1,6 +1,5 @@
 const path = require('node:path');
 const { markerMatches } = require('./dev-logic');
-const { FLUX_PACKAGES } = require('./python-env');
 
 function getFrontendInstallCommand({ platform, nodeExecutable, npmExecPath }) {
   if (npmExecPath) {
@@ -98,12 +97,12 @@ function runSetup(dependencies) {
     log('PyTorch already matches this platform; skipping reinstall.');
   }
 
+  // Remove the retired distribution from an existing project venv before resolving.
+  runCommand(pip, ['uninstall', '-y', 'iopaint']);
   log('Installing backend requirements...');
-  runCommand(pip, ['install', '-r', path.join(root, 'backend', 'requirements.txt')]);
-  runCommand(pip, ['install', '-r', path.join(root, 'backend', 'requirements-dev.txt')]);
+  runCommand(pip, ['install', '-r', path.join(root, 'backend', 'requirements.txt'), '-r', path.join(root, 'backend', 'requirements-dev.txt')]);
 
-  log('Installing FLUX-compatible overrides...');
-  runCommand(pip, ['install', ...FLUX_PACKAGES, '--no-deps']);
+  runCommand(pip, ['check']);
 
   log('Applying post-install patches...');
   runCommand(python, [path.join(root, 'scripts', 'post_install.py')]);

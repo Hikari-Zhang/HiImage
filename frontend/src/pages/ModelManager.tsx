@@ -8,7 +8,7 @@ import { showToast } from '../components/ui'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
-import { ModelStatus, DownloadStatus, Provider, IOPaintMode, ApiPath } from '../constants'
+import { ModelStatus, DownloadStatus, ApiPath } from '../constants'
 import type { DownloadTask } from '../stores/useDownloadStore'
 import type { ModelStatusValue } from '../constants'
 import { createApiClient, readApiResponse } from '../services/apiClient'
@@ -26,7 +26,6 @@ interface ModelEntry {
   hf_model_id?: string
   download_url?: string
   display_group?: string
-  iopaint_mode?: string
   status: ModelStatusValue
   message: string
 }
@@ -530,13 +529,12 @@ function ModelRow({
   onDelete: (e: React.MouseEvent) => void
   onCancelConfirm: (e: React.MouseEvent) => void
 }) {
-  const isBuiltin = model.provider === Provider.IOPAINT && model.iopaint_mode === IOPaintMode.CLI
   const isDownloading = downloadTask?.status === DownloadStatus.DOWNLOADING
   const isQueued = downloadTask?.status === DownloadStatus.QUEUED
   const syncFailed = downloadTask?.status === DownloadStatus.ERROR && downloadTask.statusSyncFailed === true
   const isDone = downloadTask?.status === DownloadStatus.DONE || model.status === ModelStatus.OK
-  const canDelete = !isBuiltin && isDone && !isDownloading && !isQueued && !syncFailed
-  const canDownload = !isBuiltin && !isDone && !isDownloading && !isQueued
+  const canDelete = isDone && !isDownloading && !isQueued && !syncFailed
+  const canDownload = !isDone && !isDownloading && !isQueued
 
   // 行内进度百分比
   const pct = (() => {
@@ -571,9 +569,6 @@ function ModelRow({
             <span className={clsx('text-[10px] px-1.5 py-0.5 rounded font-medium', BADGE_COLOR[model.badge] ?? 'bg-bg-hover text-fg-secondary')}>
               {model.badge}
             </span>
-          )}
-          {isBuiltin && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-hover text-fg-secondary">内置</span>
           )}
         </div>
 

@@ -63,6 +63,8 @@ def test_pipeline_releases_each_created_model(monkeypatch, stage):
             calls.append("upscale.close")
     monkeypatch.setattr(ModelExecutorFactory, "create_executor", lambda *_args: Executor())
     monkeypatch.setitem(sys.modules, "core.upscaler", SimpleNamespace(Upscaler=Upscaler))
+    monkeypatch.setattr("core.capabilities.require_mode", lambda *_: None)
+    monkeypatch.setattr("core.model_registry.get_model", lambda mid: {"id": mid})
     pipeline = Pipeline(PipelineConfig(upscale=UpscaleStep(enabled=True)))
     image = np.zeros((4, 4, 3), np.uint8)
     if stage == "success":
@@ -73,7 +75,7 @@ def test_pipeline_releases_each_created_model(monkeypatch, stage):
     assert calls == (["inpaint.unload"] if stage == "inpaint" else ["inpaint.unload", "upscale.close"])
 
 
-@pytest.mark.parametrize("name", ["inpaint_with_rois", "inpaint_with_mask", "run_cutout"])
+@pytest.mark.parametrize("name", ["run_cutout"])
 @pytest.mark.parametrize("fail", [False, True])
 def test_web_inference_releases_executor(monkeypatch, name, fail):
     from app.routers import inpaint, cutout
@@ -135,7 +137,7 @@ def test_synthesis_releases_executor_after_failed_inpaint(monkeypatch):
         def unload_model(self):
             calls.append("unload")
     monkeypatch.setattr(ModelExecutorFactory, "create_executor", lambda *_args: Executor())
-    synth = Synthesizer("outfit_swap", "wm_lama", "cpu")
+    synth = Synthesizer("face_swap", "gfpgan", "cpu")
     with pytest.raises(ValueError, match="synthesis failed"):
         synth._inpaint_region(np.zeros((4, 4, 3), np.uint8), [(0, 0, 2, 2)], None)
     assert calls == ["unload"]

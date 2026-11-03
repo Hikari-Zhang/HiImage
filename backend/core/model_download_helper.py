@@ -105,13 +105,6 @@ async def ensure_model_ready(
         await _call_progress_callback(progress_callback, 100, f"模型已就绪: {name}")
         return True, ""
     
-    # IOPaint CLI 模式模型：由 iopaint 在首次使用时自动下载，无需手动触发
-    from core.constants import Provider, IOPaintMode
-    if cfg.get("provider") == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
-        logger.info(f"[ensure_model_ready] IOPaint CLI 模型将在首次使用时自动下载: {name}")
-        await _call_progress_callback(progress_callback, 100, f"模型将自动下载: {name}")
-        return True, ""
-    
     # 3. 模型未下载或下载不完整，触发下载
     logger.info(f"[ensure_model_ready] 模型未就绪，开始下载: {name} (status={check_result.status})")
     await _call_progress_callback(progress_callback, 0, f"开始下载模型: {name}")

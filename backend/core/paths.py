@@ -242,26 +242,6 @@ def resolve_model_cache_path(cfg: dict) -> Path:
         return resolve_model_path(local_path)
 
 
-def detect_iopaint_path() -> str:
-    """
-    从当前 Python 环境的 Scripts/bin 目录查找 iopaint 可执行文件。
-
-    检查顺序（Windows 兼容）：
-      1. <python_dir>/iopaint.exe  （Windows）
-      2. <python_dir>/iopaint      （macOS / Linux）
-      3. 均未找到时返回 "iopaint"，依赖系统 PATH
-
-    用法：
-        from core.paths import detect_iopaint_path
-        iopaint = detect_iopaint_path()
-    """
-    python_dir = Path(sys.executable).parent
-    for candidate in (python_dir / "iopaint.exe", python_dir / "iopaint"):
-        if candidate.exists():
-            return str(candidate)
-    return "iopaint"
-
-
 # ──────────────────────────────────────────────────────────────
 # 向后兼容：保留旧的环境变量设置函数
 # ──────────────────────────────────────────────────────────────

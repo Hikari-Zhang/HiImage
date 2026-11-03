@@ -16,17 +16,11 @@ type SettingsTab = 'general' | 'models'
 // 默认值（用于「恢复默认」）
 const DEFAULTS = {
   device: 'cpu',
-  serverPort: 51821,
-  keepaliveSeconds: 300,
-  startupTimeout: 1800,
   hfEndpoint: 'https://huggingface.com',
   hfToken: '',
   githubMirror: '',
   defaultDilation: 10,
   disableNsfw: true,
-  lowMem: true,
-  cpuOffload: false,
-  cpuTextencoder: false,
   downloadMaxConcurrent: 3,
   upscaleTile: 0,  // 0 = 自动计算
 }
@@ -40,10 +34,9 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
   const ready = useFirstVisible(isVisible)
 
   const {
-    activeTab, setActiveTab, device, setDevice, port, setPort, keepalive, setKeepalive,
-    startupTimeout, setStartupTimeout, hfEndpoint, setHfEndpoint, hfToken, setHfToken,
+    activeTab, setActiveTab, device, setDevice,
+    hfEndpoint, setHfEndpoint, hfToken, setHfToken,
     githubMirror, setGithubMirror, dilation, setDilation, disableNsfw, setDisableNsfw,
-    lowMem, setLowMem, cpuOffload, setCpuOffload, cpuTextencoder, setCpuTextencoder,
     downloadMaxConcurrent, setDownloadMaxConcurrent, upscaleTile, setUpscaleTile,
     isSaving, setIsSaving, settingsLoadError, setSettingsLoadError,
   } = useSettingsDraft(backendURL)
@@ -98,17 +91,11 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
       // 先把 draft 写入 store
       store.setSettings({
         device,
-        serverPort: Number(port) || DEFAULTS.serverPort,
-        keepaliveSeconds: Number(keepalive) || DEFAULTS.keepaliveSeconds,
-        startupTimeout: Number(startupTimeout) || DEFAULTS.startupTimeout,
         hfEndpoint,
         hfToken,
         githubMirror,
         defaultDilation: Number(dilation) || DEFAULTS.defaultDilation,
         disableNsfw,
-        lowMem,
-        cpuOffload,
-        cpuTextencoder,
         downloadMaxConcurrent: Math.max(1, Math.min(10, Number(downloadMaxConcurrent) || 3)),
         upscaleTile: Number(upscaleTile) || 0,
       })
@@ -136,17 +123,11 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
 
   const handleReset = () => {
     setDevice(DEFAULTS.device)
-    setPort(String(DEFAULTS.serverPort))
-    setKeepalive(String(DEFAULTS.keepaliveSeconds))
-    setStartupTimeout(String(DEFAULTS.startupTimeout))
     setHfEndpoint(DEFAULTS.hfEndpoint)
     setHfToken(DEFAULTS.hfToken)
     setGithubMirror(DEFAULTS.githubMirror)
     setDilation(String(DEFAULTS.defaultDilation))
     setDisableNsfw(DEFAULTS.disableNsfw)
-    setLowMem(DEFAULTS.lowMem)
-    setCpuOffload(DEFAULTS.cpuOffload)
-    setCpuTextencoder(DEFAULTS.cpuTextencoder)
     setDownloadMaxConcurrent(String(DEFAULTS.downloadMaxConcurrent))
     setUpscaleTile(String(DEFAULTS.upscaleTile))
     showToast('success', '已恢复默认值，点击保存生效')
@@ -271,33 +252,6 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
           <h3 className="text-sm font-medium mb-3">服务器配置</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-fg-secondary mb-1 block">IOPaint 端口</label>
-              <input
-                type="text"
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-fg-secondary mb-1 block">保活时间 (秒)</label>
-              <input
-                type="text"
-                value={keepalive}
-                onChange={(e) => setKeepalive(e.target.value)}
-                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-fg-secondary mb-1 block">启动超时 (秒)</label>
-              <input
-                type="text"
-                value={startupTimeout}
-                onChange={(e) => setStartupTimeout(e.target.value)}
-                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
-              />
-            </div>
-            <div>
               <label className="text-xs text-fg-secondary mb-1 block">
                 最大同时下载数
                 <span className="ml-1 text-[10px] text-fg-tertiary">（1 - 10）</span>
@@ -377,81 +331,6 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
                 />
               </button>
             </div>
-          </div>
-        </section>
-
-        {/* Memory Optimization */}
-        <section className="bg-bg-tertiary rounded-lg p-4">
-          <h3 className="text-sm font-medium mb-1">内存优化</h3>
-          <p className="text-[11px] text-fg-secondary mb-3">仅对扩散模型（AnyText、SD 系列）生效，修改后重启后端进程才能应用</p>
-          <div className="space-y-1">
-
-            {/* Low-mem toggle */}
-            <div className="flex items-center justify-between py-2 border-b border-border-subtle">
-              <div>
-                <div className="text-xs text-fg-primary">低内存模式 <span className="text-[10px] text-fg-accent ml-1">推荐</span></div>
-                <div className="text-[11px] text-fg-secondary mt-0.5">
-                  启用 Attention Slicing + VAE Tiling，显著降低显存峰值，速度略降
-                </div>
-              </div>
-              <button
-                onClick={() => setLowMem(!lowMem)}
-                className={clsx(
-                  'relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ml-3',
-                  lowMem ? 'bg-border-focus' : 'bg-bg-hover'
-                )}
-              >
-                <div className={clsx(
-                  'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
-                  lowMem ? 'translate-x-[22px]' : 'translate-x-[2px]'
-                )} />
-              </button>
-            </div>
-
-            {/* CPU Offload toggle */}
-            <div className="flex items-center justify-between py-2 border-b border-border-subtle">
-              <div>
-                <div className="text-xs text-fg-primary">CPU 显存卸载</div>
-                <div className="text-[11px] text-fg-secondary mt-0.5">
-                  将模型权重动态卸载到内存，显存降至最低，速度明显下降
-                </div>
-              </div>
-              <button
-                onClick={() => setCpuOffload(!cpuOffload)}
-                className={clsx(
-                  'relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ml-3',
-                  cpuOffload ? 'bg-border-focus' : 'bg-bg-hover'
-                )}
-              >
-                <div className={clsx(
-                  'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
-                  cpuOffload ? 'translate-x-[22px]' : 'translate-x-[2px]'
-                )} />
-              </button>
-            </div>
-
-            {/* CPU Text Encoder toggle */}
-            <div className="flex items-center justify-between py-2">
-              <div>
-                <div className="text-xs text-fg-primary">Text Encoder 在 CPU 运行</div>
-                <div className="text-[11px] text-fg-secondary mt-0.5">
-                  文字编码器在 CPU 执行，释放约 1 GB 显存，对速度影响较小
-                </div>
-              </div>
-              <button
-                onClick={() => setCpuTextencoder(!cpuTextencoder)}
-                className={clsx(
-                  'relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ml-3',
-                  cpuTextencoder ? 'bg-border-focus' : 'bg-bg-hover'
-                )}
-              >
-                <div className={clsx(
-                  'absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform',
-                  cpuTextencoder ? 'translate-x-[22px]' : 'translate-x-[2px]'
-                )} />
-              </button>
-            </div>
-
           </div>
         </section>
 

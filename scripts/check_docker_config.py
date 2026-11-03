@@ -255,24 +255,11 @@ def validate_frontend_dockerfile(content: str) -> None:
 
 
 def validate_flux_install(run_instructions: list[str], source: str) -> None:
-    """Require all FLUX compatibility packages in one --no-deps RUN instruction."""
-    flux_run = next(
-        (
-            line
-            for line in run_instructions
-            if "python -m pip install --no-deps" in line
-        ),
-        "",
-    )
-    require(flux_run, f"{source} must use pip install with --no-deps for FLUX packages")
-    expected_packages = (
-        '"diffusers==${FLUX_DIFFUSERS_VERSION}"',
-        '"transformers==${FLUX_TRANSFORMERS_VERSION}"',
-        '"huggingface-hub==${FLUX_HUGGINGFACE_HUB_VERSION}"',
-        '"peft==${FLUX_PEFT_VERSION}"',
-    )
-    for package in expected_packages:
-        require(package in flux_run, f"{source} FLUX install missing {package}")
+    """Native dependencies must use the normal resolver and be validated."""
+    require(not any("--no-deps" in line for line in run_instructions),
+            f"{source} must not bypass dependency resolution")
+    require(any("python -m pip check" in line for line in run_instructions),
+            f"{source} must run pip check")
 
 
 def validate_backend_install_steps(content: str, source: str) -> list[str]:
@@ -286,6 +273,8 @@ def validate_backend_install_steps(content: str, source: str) -> list[str]:
         ),
         f"{source} must install backend requirements",
     )
+    require("backend/requirements-inference.txt" in content,
+            f"{source} must copy the shared inference requirements")
     validate_flux_install(run_instructions, source)
     require(
         any(

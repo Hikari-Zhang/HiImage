@@ -9,14 +9,14 @@ describe('useSettingsStore.loadSettings', () => {
   it('does not hydrate a late response from an aborted page request', async () => {
     let finish!: (response: Response) => void
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { finish = resolve })))
-    useSettingsStore.setState({ serverPort: 52000 })
+    useSettingsStore.setState({ defaultDilation: 20 })
     const controller = new AbortController()
     const loading = useSettingsStore.getState().loadSettings('', controller.signal)
     const rejected = expect(loading).rejects.toMatchObject({ name: 'AbortError' })
     controller.abort()
-    finish(new Response(JSON.stringify({ server_port: 51821 })))
+    finish(new Response(JSON.stringify({ default_dilation: 10 })))
     await rejected
-    expect(useSettingsStore.getState().serverPort).toBe(52000)
+    expect(useSettingsStore.getState().defaultDilation).toBe(20)
     expect(useSettingsStore.getState().isLoading).toBe(false)
   })
 

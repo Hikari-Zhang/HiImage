@@ -252,12 +252,6 @@ class DownloadQueue:
                 function(cfg, progress_cb=report, cancel_check=lambda: task._cancel_flag)
                 if task._cancel_flag:
                     return
-                # 缓存桥接也包含磁盘扫描和离线 snapshot 查询，留在同一工作线程。
-                try:
-                    from core.model_setup import ensure_iopaint_hub_links
-                    ensure_iopaint_hub_links(task.model_id)
-                except Exception:
-                    logger.exception("IOPaint 缓存桥接失败: %s", task.model_id)
 
         future = task._future = loop.run_in_executor(None, work)
         cancelled = False

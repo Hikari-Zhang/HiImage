@@ -11,6 +11,7 @@ from app.services.task_registry import task_registry, TaskConflict, TaskCapacity
 from app.shared_executor import inference_admission, InferenceQueueFull
 from app.task_id import TaskId
 from app.logging_manager import log_manager
+from core.process_runner import ProcessCleanupError
 
 TASK_ID_ADAPTER = TypeAdapter(TaskId)
 
@@ -50,6 +51,9 @@ class TaskRoute(APIRoute):
                 raise
             except asyncio.CancelledError:
                 task_registry.finish(task_id, "interrupted")
+                raise
+            except ProcessCleanupError:
+                task_registry.finish(task_id, "failed", 503)
                 raise
             except (HTTPException, RequestValidationError) as error:
                 task_registry.finish(task_id, "failed", getattr(error, "status_code", 422))

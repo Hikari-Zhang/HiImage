@@ -1,13 +1,13 @@
 """
-模型执行器框架 —— 解耦 IOPaint 硬编码
+模型执行器框架
 
 所有模型执行器需实现 BaseModelExecutor 接口。
-ModelExecutorFactory 根据 models.yaml 的 provider 字段自动分发。
+ModelExecutorFactory 根据 models.yaml 的 executor 字段自动分发。
 
 新增模型只需：
 1. 实现 BaseModelExecutor 接口
 2. 在 ModelExecutorFactory.create_executor() 中注册
-3. 在 models.yaml 中添加配置（设置对应的 provider）
+3. 在 models.yaml 中添加配置（设置对应的 executor）
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
@@ -69,7 +69,7 @@ class BaseModelExecutor(ABC):
 
 
 class ModelExecutorFactory:
-    """根据 provider 创建对应的执行器"""
+    """根据 executor 创建对应的执行器"""
 
     @staticmethod
     def create_executor(model_config: Dict[str, Any], device: str):
@@ -80,53 +80,30 @@ class ModelExecutorFactory:
         :param device: 推理设备 (mps/cpu/cuda)
         :return: BaseModelExecutor 实例
         """
-        provider = model_config.get("provider")
+        executor = model_config.get("executor")
 
-        if provider == "IOPaint":
-            from .iopaint_executor import IOPaintExecutor
-            return IOPaintExecutor(model_config, device)
-
-        elif provider == "diffusers":
+        if executor == "lama":
+            from .lama_executor import LamaExecutor
+            return LamaExecutor(model_config, device)
+        if executor == "diffusers":
             from .diffusers_executor import DiffusersExecutor
             return DiffusersExecutor(model_config, device)
-
-        elif provider == "HiImage":
+        if executor == "composite":
             from .hiimage_executor import HiImageExecutor
             return HiImageExecutor(model_config, device)
-
-        elif provider == "restormer":
-            from .restormer_executor import RestormerExecutor
-            return RestormerExecutor(model_config, device)
-
-        elif provider == "realesrgan":
-            # 复用现有 upscaler 实现
+        if executor == "realesrgan":
             from .realesrgan_executor import RealESRGANExecutor
             return RealESRGANExecutor(model_config, device)
-
-        elif provider == "rembg":
+        if executor == "rembg":
             from .rembg_executor import RembgExecutor
             return RembgExecutor(model_config, device)
-
-        elif provider == "facexlib":
+        if executor == "gfpgan":
             from .facexlib_executor import FacexlibExecutor
             return FacexlibExecutor(model_config, device)
-
-        else:
-            raise ValueError(
-                f"未知的 provider: {provider}，"
-                f"模型 ID: {model_config.get('id', 'unknown')}"
-            )
+        raise ValueError(f"未知执行器: {executor!r}，模型 ID: {model_config.get('id', 'unknown')}")
 
     @staticmethod
     def get_supported_providers() -> list:
-        """返回所有支持的 provider 列表（用于验证 models.yaml）"""
-        return [
-            "IOPaint",
-            "diffusers",
-            "HiImage",
-            "restormer",
-            "nafnet",
-            "realesrgan",
-            "rembg",
-            "facexlib",
-        ]
+        """兼容旧目录调用方，返回已注册的 provider。"""
+        from .model_schema import PIPELINE_SPECS
+        return sorted({spec[1] for spec in PIPELINE_SPECS.values()})

@@ -53,7 +53,7 @@ def resolve_effective_device(model_name: str, device: str) -> str:
 
     查找顺序：
       1. 按 model_name 直接匹配 MODEL_BY_ID
-      2. 按 iopaint_model_id 字段回退匹配（兼容 IOPaint server 模式的模型 ID）
+      2. 按 engine_model_id 字段回退匹配（兼容原生引擎的模型别名）
       3. 均未找到或无 device_override 时，返回原始 device
 
     用法：
@@ -64,9 +64,9 @@ def resolve_effective_device(model_name: str, device: str) -> str:
         from core.model_registry import MODEL_BY_ID, MODELS  # lazy import 避免循环依赖
         cfg = MODEL_BY_ID.get(model_name)
         if cfg is None:
-            # 按 iopaint_model_id 回退查找
+            # 按 engine_model_id 回退查找
             for m in MODELS:
-                if m.get("iopaint_model_id") == model_name:
+                if m.get("engine_model_id") == model_name:
                     cfg = m
                     break
         if cfg:

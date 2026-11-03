@@ -96,14 +96,14 @@ def test_cuda_dockerfile_rejects_mutated_torch_stack_constraints(
         ("backend/Dockerfile.cuda", checker.validate_cuda_dockerfile),
     ],
 )
-def test_backend_dockerfiles_reject_echoed_flux_packages(
+def test_backend_dockerfiles_require_dependency_validation(
     relative_path: str,
     validator,
 ) -> None:
     content = read(relative_path)
-    mutated = content.replace("python -m pip install --no-deps", "echo --no-deps")
+    mutated = content.replace("python -m pip check", "echo dependency-check")
 
-    with pytest.raises(AssertionError, match="pip install.*--no-deps"):
+    with pytest.raises(AssertionError, match="pip check"):
         validator(mutated)
 
 

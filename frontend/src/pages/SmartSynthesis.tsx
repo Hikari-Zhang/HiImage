@@ -45,6 +45,8 @@ type ModeGroup = {
   name: string
   Icon: LucideIcon
   description: string
+  available: boolean
+  unavailableReason: string
   defaultModel: string
   needsReference: boolean
   referenceLabel?: string
@@ -64,7 +66,9 @@ function parseModeGroup(raw: RawModeGroup): ModeGroup {
     name: raw.name,
     Icon: ICON_MAP[raw.icon_name] ?? Image,
     description: raw.description,
-    defaultModel: raw.default_model,
+    available: raw.available !== false,
+    unavailableReason: raw.unavailable_reason ?? "",
+    defaultModel: raw.default_model ?? "",
     needsReference: raw.needs_reference,
     referenceLabel: raw.reference_label,
     referenceHint: raw.reference_hint,
@@ -241,6 +245,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
   // ── 执行合成 ──────────────────────────────────────────────────────────────
 
   const handleProcess = async () => {
+    if (activeModeConfig?.available === false) return
     if (!sourceImage) return
     if (activeModeConfig?.needsReference && !referenceImage) {
       showToast('warning', `请先上传${activeModeConfig.referenceLabel}`)
@@ -743,6 +748,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
             options={deviceOptions}
           />
 
+          {activeModeConfig?.available === false && <p role="status" className="text-xs text-fg-secondary">{activeModeConfig.unavailableReason}</p>}
           {/* 操作按钮 */}
           <div className="mt-auto pt-2 space-y-2">
             {(() => {
@@ -753,6 +759,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
                   onClick={handleProcess}
                   disabled={
                     isProcessing
+                    || activeModeConfig?.available === false
                     || !sourceImage
                     || (activeModeConfig?.needsReference && !referenceImage)
                     || (activeModeConfig?.needsROI && rois.length === 0)

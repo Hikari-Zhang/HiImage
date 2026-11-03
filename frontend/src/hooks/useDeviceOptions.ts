@@ -25,11 +25,12 @@ const DEFAULT_OPTIONS: DeviceOption[] = [
 export function useDeviceOptions(selection?: {
   device: string
   setDevice: (device: string) => void
-}): { options: DeviceOption[]; loading: boolean } {
+}): { options: DeviceOption[]; loading: boolean; cudaAvailable: boolean | null } {
   const { getDevices } = useBackendAPI()
   const settings = useSettingsStore()
   const { device, setDevice } = selection ?? settings
   const [options, setOptions] = useState<DeviceOption[]>(DEFAULT_OPTIONS)
+  const [cudaAvailable, setCudaAvailable] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -72,6 +73,7 @@ export function useDeviceOptions(selection?: {
         ]
 
         setOptions(newOptions)
+        setCudaAvailable(availMap.cuda?.available ?? null)
 
         // 若当前选中设备不可用，自动切换到最优可用设备
         const currentInfo = availMap[device]
@@ -101,5 +103,5 @@ export function useDeviceOptions(selection?: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return { options, loading }
+  return { options, loading, cudaAvailable }
 }

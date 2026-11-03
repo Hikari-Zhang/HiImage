@@ -12,9 +12,6 @@ _CONFIG_PATH = os.path.join(_PROJECT_ROOT, 'config', 'settings.json')
 
 # 默认值（与 settings.json 保持一致）
 _DEFAULTS = {
-    'server.keepalive_seconds': 300,
-    'server.port': 51821,
-    'server.startup_timeout': 1800,
     'inpaint.default_dilation': 10,
     'inpaint.default_device': 'mps',
     'network.hf_endpoint': 'https://huggingface.com',
@@ -53,7 +50,7 @@ def _load() -> dict:
 
 def get(key: str, default: Any = None) -> Any:
     """
-    读取配置项，key 格式为 'section.name'（如 'server.keepalive_seconds'）。
+    读取配置项，key 格式为 'section.name'（如 'inpaint.default_device'）。
     未找到时返回内置默认值，若内置也无则返回 default 参数。
     """
     cfg = _load()

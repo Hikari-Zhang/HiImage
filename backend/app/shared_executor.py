@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from app.logging_manager import log_manager
 from app.services.task_registry import task_registry
 from core.model_resources import model_resources
+from core.process_runner import ProcessCleanupError
 
 
 DEFAULT_MAX_PENDING = 4
@@ -70,6 +71,7 @@ class InferenceScheduler:
         self._accepting = True
         self._drain_waiters: list[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = []
         self._executor_shutdown = False
+        self._cleanup_failed = False
 
     def snapshot(self) -> dict[str, int | bool]:
         """返回线程安全的队列状态快照。"""
@@ -90,6 +92,8 @@ class InferenceScheduler:
     def _reserve(self, label: str) -> _Admission:
         loop = asyncio.get_running_loop()
         with self._lock:
+            if self._cleanup_failed:
+                raise ProcessCleanupError("推理进程回收失败，请重启后端")
             if not self._accepting or len(self._queue) >= self._capacity:
                 log_manager.warning(
                     f"拒绝推理任务: {label}",
@@ -101,6 +105,12 @@ class InferenceScheduler:
             self._queue.append(admission)
         log_manager.info(f"接纳推理任务: {label}", source="inference_scheduler")
         return admission
+
+    def fail_process_cleanup(self) -> None:
+        model_resources.fail_process_cleanup()
+        with self._lock:
+            self._cleanup_failed = True
+            self._accepting = False
 
     def _release(self, admission: _Admission) -> None:
         next_admission = None
@@ -144,6 +154,9 @@ class InferenceScheduler:
                 except asyncio.CancelledError:
                     self._release(admission)
                     raise
+            with self._lock:
+                if self._cleanup_failed:
+                    raise ProcessCleanupError("推理进程回收失败，请重启后端")
             with model_resources.use():
                 yield
         finally:
@@ -211,6 +224,11 @@ class InferenceScheduler:
 
 def install_inference_queue_handler(app: FastAPI) -> None:
     """安装统一的推理队列满响应。"""
+
+    @app.exception_handler(ProcessCleanupError)
+    async def _process_cleanup_handler(_request: Request, error: ProcessCleanupError):
+        from app.services.repair_process import error_response
+        return error_response(error)
 
     @app.exception_handler(InferenceQueueFull)
     async def _queue_full_handler(

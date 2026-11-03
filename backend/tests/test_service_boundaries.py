@@ -53,6 +53,8 @@ def test_model_catalog_preserves_order_scale_capabilities_and_cutout_default(mon
 
 @pytest.mark.parametrize("use_mask", [False, True])
 def test_inpaint_service_forwards_masks_rois_and_callback_and_cleans_up(monkeypatch, use_mask):
+    monkeypatch.setattr("core.capabilities.require_model", lambda *_: None)
+    monkeypatch.setattr(image_processing, "get_model", lambda mid: {"id": mid})
     calls = []
     image = np.zeros((2, 2, 3), np.uint8)
     mask = np.zeros((2, 2), np.uint8)
@@ -66,7 +68,7 @@ def test_inpaint_service_forwards_masks_rois_and_callback_and_cleans_up(monkeypa
         def unload_model(self):
             calls.append("unload")
     monkeypatch.setattr(image_processing.ModelExecutorFactory, "create_executor", lambda *_args: Executor())
-    image_processing.inpaint_image(image, "wm_lama", "cpu", mask=mask if use_mask else None,
+    image_processing.inpaint_image(image, "test-native-inpaint", "cpu", mask=mask if use_mask else None,
                                   rois=[[0, 0, 1, 1]], progress_callback=callback)
     assert calls[0][0] is image
     assert calls[0][1]["progress_callback"] is callback
@@ -147,7 +149,12 @@ def test_model_readiness_keeps_download_updates_on_the_requested_task(monkeypatc
 
 def test_pipeline_http_delivers_real_stage_callbacks_on_its_task_channel(monkeypatch):
     from app.routers import postprocess
+    from app.services import repair_process
     from app.shared_executor import InferenceScheduler
+    # Exercise orchestration with a fake backend; production pipeline remains unavailable.
+    monkeypatch.setattr(postprocess, "unavailable_response", lambda *_: None)
+    monkeypatch.setattr("core.capabilities.require_mode", lambda *_: None)
+    monkeypatch.setattr("core.model_registry.get_model", lambda mid: {"id": mid})
     events = []
     threads = []
     class Executor:
@@ -162,6 +169,18 @@ def test_pipeline_http_delivers_real_stage_callbacks_on_its_task_channel(monkeyp
         async def send_complete(self, message, *, task_id):
             events.append((task_id, 100, message))
     monkeypatch.setattr(image_processing.ModelExecutorFactory, "create_executor", lambda *_args: Executor())
+    monkeypatch.setattr(repair_process, "get_model", lambda _: {"executor": "test"})
+
+    def run_pipeline_in_test(operation, image, mask, rois, options, timeout, stop, report):
+        assert operation == "pipeline"
+        return image_processing.pipeline_image(image, mask, rois, options, progress_callback=report)
+
+    monkeypatch.setattr(repair_process, "_run_process", run_pipeline_in_test)
+
+    async def ready(*_args):
+        return True, ""
+
+    monkeypatch.setattr(postprocess, "ensure_model_ready_with_progress", ready)
     manager = Progress()
     monkeypatch.setattr(postprocess, "progress_manager", manager)
     monkeypatch.setattr(progress, "progress_manager", manager)

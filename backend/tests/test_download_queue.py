@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from core import download_queue, downloaders, model_registry, model_setup
+from core import download_queue, downloaders, model_registry
 
 
 async def until(predicate, timeout=2):
@@ -59,7 +59,6 @@ def harness(monkeypatch):
         "c": {"id": "c", "name": "C", "hf_model_id": "test/independent"},
     })
     monkeypatch.setattr(downloaders, "download_hf", state.download)
-    monkeypatch.setattr(model_setup, "ensure_iopaint_hub_links", lambda *_: None)
     return state
 
 
@@ -554,7 +553,7 @@ def test_cancel_during_dependency_wait_stops_later_dependencies_and_main(harness
     asyncio.run(scenario())
 
 
-def test_dependencies_main_and_cache_bridge_run_in_order_on_worker(harness, dependencies, monkeypatch):
+def test_dependencies_and_main_run_in_order_on_worker(harness, dependencies, monkeypatch):
     import huggingface_hub
     events = []
     threads = []
@@ -566,19 +565,15 @@ def test_dependencies_main_and_cache_bridge_run_in_order_on_worker(harness, depe
     def main(*_, **__):
         events.append("main")
         threads.append(threading.get_ident())
-    def bridge(*_):
-        events.append("bridge")
-        threads.append(threading.get_ident())
     monkeypatch.setattr(huggingface_hub, "snapshot_download", dependency)
     monkeypatch.setattr(downloaders, "download_hf", main)
-    monkeypatch.setattr(model_setup, "ensure_iopaint_hub_links", bridge)
     dependencies.release.set()
 
     async def scenario():
         task = harness.queue.submit("a")
         await task._runner
         assert task.status == "done"
-        assert events == ["test/dep-one", "test/dep-two", "main", "bridge"]
+        assert events == ["test/dep-one", "test/dep-two", "main"]
         assert len(set(threads)) == 1
         assert threads[0] != threading.get_ident()
         assert not harness.queue.list_active()

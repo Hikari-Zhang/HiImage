@@ -4,16 +4,16 @@ import { useSettingsStore } from './useSettingsStore'
 
 const draft = getSettingsDraftStore('draft-test')
 beforeEach(() => {
-  useSettingsStore.setState({ serverPort: 51821, hfEndpoint: 'https://huggingface.com' })
+  useSettingsStore.setState({ defaultDilation: 10, hfEndpoint: 'https://huggingface.com' })
   draft.getState().reset()
 })
 
 describe('settings drafts', () => {
   it('retains unsaved edits when saved settings are fetched again', () => {
-    draft.getState().setPort('52000')
-    useSettingsStore.setState({ serverPort: 53000 })
+    draft.getState().setDilation('20')
+    useSettingsStore.setState({ defaultDilation: 30 })
     draft.getState().syncFromSettings()
-    expect(draft.getState().port).toBe('52000')
+    expect(draft.getState().dilation).toBe('20')
     expect(draft.getState().dirty).toBe(true)
   })
 
@@ -32,8 +32,8 @@ describe('settings drafts', () => {
   it('isolates drafts for different backends', () => {
     const other = getSettingsDraftStore('another-backend')
     other.getState().reset()
-    draft.getState().setPort('52000')
-    expect(other.getState().port).toBe('51821')
-    expect(getSettingsDraftStore('draft-test').getState().port).toBe('52000')
+    draft.getState().setDilation('20')
+    expect(other.getState().dilation).toBe('10')
+    expect(getSettingsDraftStore('draft-test').getState().dilation).toBe('20')
   })
 })

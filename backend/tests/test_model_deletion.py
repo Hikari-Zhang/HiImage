@@ -177,7 +177,7 @@ def test_real_registry_sharing_includes_watermark_and_synthesis_models():
 
 
 def test_cancelled_download_thread_keeps_deletion_protected(cache, monkeypatch):
-    from core import downloaders, model_setup
+    from core import downloaders
 
     register(first={"hf_model_id": "owner/shared"})
     file = weight()
@@ -191,7 +191,6 @@ def test_cancelled_download_thread_keeps_deletion_protected(cache, monkeypatch):
             finished.set()
 
     monkeypatch.setattr(downloaders, "download_hf", download)
-    monkeypatch.setattr(model_setup, "ensure_iopaint_hub_links", lambda *_: None)
 
     async def scenario():
         queue = download_queue.DownloadQueue()

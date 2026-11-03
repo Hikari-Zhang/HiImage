@@ -14,6 +14,11 @@ class ModelResourceGuard:
         self._condition = threading.Condition()
         self._users = 0
         self._deleting = False
+        self._cleanup_failed = False
+
+    def fail_process_cleanup(self):
+        with self._condition:
+            self._cleanup_failed = True
 
     @contextmanager
     def use(self):
@@ -30,6 +35,8 @@ class ModelResourceGuard:
     @contextmanager
     def deleting(self):
         with self._condition:
+            if self._cleanup_failed:
+                raise ModelResourcesBusy("推理进程回收失败，请重启后端")
             if self._users or self._deleting:
                 raise ModelResourcesBusy("当前有下载、推理或删除任务正在使用模型资源，请结束后重试")
             self._deleting = True

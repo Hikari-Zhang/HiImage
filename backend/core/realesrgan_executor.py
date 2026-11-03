@@ -23,7 +23,7 @@ class RealESRGANExecutor(BaseModelExecutor):
         """加载 Real-ESRGAN 模型"""
         from .upscaler import Upscaler
 
-        model_name = self.model_config.get("iopaint_model_id", self.model_config["id"])
+        model_name = self.model_config.get("engine_model_id", self.model_config["id"])
         self._upscaler = Upscaler(model_name=model_name, device=self.device)
 
     def execute(self, image: np.ndarray, **kwargs) -> np.ndarray:

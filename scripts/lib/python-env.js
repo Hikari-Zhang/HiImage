@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 
-const SETUP_VERSION = 2;
+const SETUP_VERSION = 3;
 const FLUX_PACKAGES = fs.readFileSync(path.join(__dirname, '..', '..', 'backend', 'requirements-inference.txt'), 'utf8')
   .split(/\r?\n/).map((line) => line.split('#')[0].trim()).filter(Boolean);
 
@@ -165,7 +165,8 @@ function isPythonEnvironmentReady(python, config, runProbe = spawnSync) {
     [
       '-c',
         'import sys, fastapi, torch, uvicorn, rapidocr_onnxruntime; '
-        + 'from importlib.metadata import version; from packaging.requirements import Requirement; '
+        + 'from importlib.metadata import version, distributions; from packaging.requirements import Requirement; '
+        + 'assert not any(d.metadata.get("Name", "").lower() == "iopaint" for d in distributions()), "Retired dependency still installed"; '
         + `requirements = [Requirement(spec) for spec in ${JSON.stringify(FLUX_PACKAGES)}]; `
         + 'assert all(version(req.name) in req.specifier for req in requirements), "Inference dependencies are incompatible"; '
       + 'print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|{torch.__version__}")',

@@ -19,7 +19,7 @@ describe('Settings', () => {
   beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     useBackendStore.setState({ backendURL: '', isConnected: false, wsConnected: false })
-    useSettingsStore.setState({ device: 'cpu', serverPort: 51821, isLoading: false })
+    useSettingsStore.setState({ device: 'cpu', defaultDilation: 10, isLoading: false })
     getSettingsDraftStore('').getState().reset()
   })
 
@@ -88,7 +88,7 @@ describe('Settings', () => {
         return jsonResponse({ ok: true })
       }
       if (url.endsWith('/api/settings')) {
-        return jsonResponse({ device: 'cpu', server_port: 51821, upscale_tile: 512 })
+        return jsonResponse({ device: 'cpu', default_dilation: 10, upscale_tile: 512 })
       }
       if (url.endsWith('/api/health')) return jsonResponse({ status: 'ok' })
       if (url.endsWith('/api/devices')) return jsonResponse({ devices: [] })
@@ -137,7 +137,7 @@ describe('Settings', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/api/devices')) return jsonResponse({ devices: [] })
       if (String(input).endsWith('/api/health')) return jsonResponse({ status: 'ok' })
-      return jsonResponse({ device: 'cpu', server_port: 51821 })
+      return jsonResponse({ device: 'cpu', default_dilation: 10 })
     }))
     const first = render(<Settings isVisible />)
     await waitFor(() => expect(useSettingsStore.getState().isLoading).toBe(false))
@@ -158,7 +158,7 @@ describe('Settings', () => {
       if (init?.method === 'PUT') return pendingSave
       if (String(input).endsWith('/api/devices')) return jsonResponse({ devices: [] })
       if (String(input).endsWith('/api/health')) return jsonResponse({ status: 'ok' })
-      return jsonResponse({ device: 'cpu', server_port: 51821 })
+      return jsonResponse({ device: 'cpu', default_dilation: 10 })
     })
     vi.stubGlobal('fetch', fetchMock)
     const first = render(<Settings isVisible />)

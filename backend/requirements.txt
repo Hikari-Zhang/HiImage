@@ -1,35 +1,4 @@
-# ==============================================================
-# HiImage Backend - Python Dependencies
-#
-# ⚠️  STEP 1: Install PyTorch for your platform FIRST (before this file):
-#
-#   Windows / Linux — NVIDIA GPU (RTX 50系 / CUDA 12.8):
-#     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-#
-#   Windows / Linux — NVIDIA GPU (RTX 40系 及更早 / CUDA 12.4):
-#     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-#
-#   macOS (Apple Silicon, MPS):
-#     pip install torch torchvision torchaudio
-#
-#   CPU only:
-#     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-#
-# STEP 2: Install backend dependencies (推荐使用脚本自动处理依赖冲突):
-#   python scripts/install_deps.py
-#
-#   或手动两步安装：
-#     pip install -r backend/requirements.txt
-#     pip install -r backend/requirements-inference.txt --no-deps
-#
-# STEP 3: Apply post-install patches:
-#   python scripts/post_install.py
-#
-# For 100% reproducible installs, use platform-specific locked files:
-#   macOS ARM64 (MPS):      pip install -r backend/requirements-locked-macos.txt
-#   Windows/Linux CUDA 12.4: pip install -r backend/requirements-locked-cuda124.txt
-# ==============================================================
-
+# Install platform PyTorch first, then: pip install -r backend/requirements.txt
 # ---- PyTorch (platform-specific, must be installed BEFORE this file — see above) ----
 # Minimum versions; actual version depends on your platform/CUDA:
 #   macOS MPS: torch>=2.1.0 (standard pip install)
@@ -38,26 +7,19 @@
 torch>=2.1.0
 torchvision>=0.16.0
 
-# ---- FastAPI stack (must match iopaint 1.6.0 deps) ----
-# DO NOT pin websockets>=12.0 — gradio-client 0.12.0 requires websockets<12.0
+# ---- FastAPI stack ----
 fastapi==0.108.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.5.2
 python-multipart>=0.0.9
 
 # ---- Image processing ----
-# numpy: gradio 4.21.0 声明 ~=1.0，但 numpy 2.x 实际兼容，pip 冲突警告可忽略
 numpy>=1.26.0
 opencv-python>=4.10.0
-# Pillow: iopaint 1.6.0 声明 ==9.5.0，gradio 4.21.0 声明 <11.0，
-#         但 9.5–12.x 实际均可正常运行。
-#         新版 torch (2.4+) 在 Windows 会将 Pillow 升至 12+，此处放宽以允许。
-#         pip 冲突警告可忽略（iopaint/gradio 功能不受影响）。
 Pillow>=9.5.0
 PyYAML>=6.0          # 运行时读取 core/models.yaml（已随 transformers/diffusers 安装）
 
 # ---- AI models (pinned to verified versions) ----
-iopaint==1.6.0
 basicsr>=1.4.2   # post-install patch required, see below
 realesrgan>=0.3.0
 facexlib>=0.3.0
@@ -71,18 +33,10 @@ onnxruntime>=1.18.0
 rapidocr-onnxruntime==1.4.4  # PaddleOCR v4 ONNX，随包提供模型，CPU 文字候选检测
 # sentencepiece: GroundingDINO / SAM tokenizer 的运行时依赖
 sentencepiece>=0.1.99
-# hf_xet: HuggingFace Xet Storage 加速传输，缺失时 iopaint 子进程会打印 warning
 hf_xet>=1.0.0
 
-# ---- 提示词驱动编辑依赖 ----
-# ⚠️  以下包与 iopaint 1.6.0 存在版本冲突，pip 的严格解析器会报 ResolutionImpossible。
-#    请勿直接 pip install -r requirements.txt，改用：
-#      python scripts/install_deps.py
-#    或手动执行（--no-deps 绕过冲突检查）：
-#      pip install -r backend/requirements-inference.txt --no-deps
-#
-# diffusers 0.32+ 新增 FluxImg2ImgPipeline / FluxFillPipeline，
-# iopaint 1.6.0 声明 diffusers==0.27.2，但实际运行 0.32+ 兼容。
+# ---- Native inference dependencies ----
+-r requirements-inference.txt
 accelerate>=0.20.0
 
 

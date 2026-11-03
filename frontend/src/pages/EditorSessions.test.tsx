@@ -4,13 +4,15 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-rou
 import WatermarkRemoval from './WatermarkRemoval'
 import SuperResolution from './SuperResolution'
 import CutoutPage from './CutoutPage'
+import { useModelStore } from '../stores/useModelStore'
 import { useCutoutStore } from '../stores/useCutoutStore'
 import { useImageStore, useUpscaleImageStore } from '../stores/useImageStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { getEditorSettingsStore } from '../stores/useEditorSettings'
 import { useUpscaleBatchStore } from '../stores/useUpscaleBatchStore'
 
-const api = vi.hoisted(() => ({ upscale: vi.fn(), inpaintWithMask: vi.fn(), detectWatermark: vi.fn() }))
+const api = vi.hoisted(() => ({ upscale: vi.fn(), inpaintWithMask: vi.fn(), runPipeline: vi.fn(), detectWatermark: vi.fn() }))
+const hardware = vi.hoisted(() => ({ cudaAvailable: true as boolean | null, loading: false }))
 const dimensions = vi.hoisted(() => vi.fn(async () => ({ width: 8, height: 8 })))
 vi.mock('../services/imageDimensions', async (importOriginal) => ({
   ...await importOriginal<typeof import('../services/imageDimensions')>(),
@@ -19,7 +21,7 @@ vi.mock('../services/imageDimensions', async (importOriginal) => ({
 
 vi.mock('../hooks/useBackendAPI', () => ({ useBackendAPI: () => api }))
 vi.mock('../hooks/useDeviceOptions', () => ({
-  useDeviceOptions: () => ({ options: [{ value: 'cpu', label: 'CPU', disabled: false }], loading: false }),
+  useDeviceOptions: () => ({ options: [{ value: 'cpu', label: 'CPU', disabled: false }, { value: 'cuda', label: 'CUDA', disabled: false }], ...hardware }),
 }))
 vi.mock('../hooks/useDownloadManager', () => ({ useDownloadManager: () => ({ startDownload: vi.fn() }) }))
 vi.mock('../hooks/useMaskExport', () => ({
@@ -80,6 +82,11 @@ function deferredResult() {
 describe('real editor interaction with deferred inference responses', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    hardware.cudaAvailable = true
+    hardware.loading = false
+    // A fake future repair backend keeps generic editor isolation regressions meaningful.
+    useModelStore.setState({ defaultInpaintModel: '', inpaintPipelines: {}, inpaintGroups: [{ label: 'test', options: [{ value: 'test-repair', label: 'test' }] }] })
+    getEditorSettingsStore('watermark').setState({ inpaintModel: 'test-repair', device: 'cpu' })
     vi.stubGlobal('IntersectionObserver', class {
       observe() {}
       unobserve() {}
@@ -98,6 +105,79 @@ describe('real editor interaction with deferred inference responses', () => {
   })
 
   afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  it('disables repair when no engine exists while keeping detection available', () => {
+    useModelStore.setState({ inpaintGroups: [] })
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    expect(screen.getByRole('button', { name: '去除水印' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '自动检测' })).toBeEnabled()
+    expect(screen.getByText(/没有可用的修复模型/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '去除水印' }))
+    expect(api.inpaintWithMask).not.toHaveBeenCalled()
+  })
+
+  function selectRedraw(device: 'cpu' | 'cuda') {
+    useModelStore.setState({
+      inpaintGroups: [{ label: '修复', options: [{ value: 'flux_fill', label: 'FLUX Fill' }, { value: 'test-repair', label: 'LaMa' }] }],
+      inpaintPipelines: { flux_fill: 'flux_fill' },
+    })
+    getEditorSettingsStore('watermark').setState({ inpaintModel: 'flux_fill', device })
+  }
+
+  it.each([false, null])('blocks redraw when CUDA availability is %s', (available) => {
+    selectRedraw('cuda')
+    hardware.cudaAvailable = available
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    expect(screen.getByRole('button', { name: '开始重绘' })).toBeDisabled()
+    expect(api.inpaintWithMask).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('submits FLUX parameters with enhancement %s', async (postprocessEnabled) => {
+    selectRedraw('cpu')
+    getEditorSettingsStore('watermark').setState({ postprocessEnabled })
+    const request = postprocessEnabled ? api.runPipeline : api.inpaintWithMask
+    request.mockResolvedValueOnce({ image: 'redrawn' })
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    const submit = screen.getByRole('button', { name: postprocessEnabled ? '重绘 + 增强' : '开始重绘' })
+    expect(submit).toBeDisabled()
+    fireEvent.change(screen.getByRole('combobox', { name: '设备' }), { target: { value: 'cuda' } })
+    expect(submit).toBeEnabled()
+    fireEvent.change(screen.getByLabelText('重绘步数'), { target: { value: '51' } })
+    expect(submit).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('重绘步数'), { target: { value: '12' } })
+    fireEvent.change(screen.getByLabelText('重绘提示词'), { target: { value: ' Wet pavement ' } })
+    fireEvent.change(screen.getByLabelText('随机种子'), { target: { value: '0' } })
+    fireEvent.change(screen.getByLabelText('引导强度'), { target: { value: '23.5' } })
+    fireEvent.click(submit)
+    await waitFor(() => expect(screen.getByTestId('comparison')).toHaveTextContent('redrawn'))
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({
+      device: 'cuda',
+      redraw: { prompt: 'Wet pavement', seed: 0, num_inference_steps: 12, guidance_scale: 23.5 },
+    }))
+  })
+
+  it('hides redraw controls and omits redraw options when switching to LaMa', async () => {
+    selectRedraw('cpu')
+    useModelStore.setState({ defaultInpaintModel: 'test-repair' })
+    api.inpaintWithMask.mockResolvedValueOnce({ image: 'cleaned' })
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    fireEvent.change(screen.getByLabelText('重绘提示词'), { target: { value: 'Wet pavement' } })
+    fireEvent.click(screen.getByRole('button', { name: /FLUX Fill/ }))
+    fireEvent.click(screen.getByText('LaMa', { exact: true }))
+    expect(screen.queryByLabelText('重绘提示词')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '去除水印' }))
+    await waitFor(() => expect(api.inpaintWithMask).toHaveBeenCalledOnce())
+    expect(api.inpaintWithMask.mock.calls[0][0]).not.toHaveProperty('redraw')
+  })
+
+  it('uses the catalog default when the saved repair model is retired', () => {
+    selectRedraw('cpu')
+    useModelStore.setState({ defaultInpaintModel: 'test-repair' })
+    getEditorSettingsStore('watermark').setState({ inpaintModel: 'retired-model' })
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    expect(screen.getByRole('button', { name: 'LaMa' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '去除水印' })).toBeEnabled()
+  })
 
   it('finishes an upscale after another editor uploads a different source', async () => {
     const result = deferredResult()

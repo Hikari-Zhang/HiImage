@@ -71,7 +71,7 @@ def resolve_hf_model_path(repo_id: str) -> str:
 # 延迟导入：model_registry 在模块级加载 models.yaml，
 # 这里同样在模块级引入（一次性，无性能问题）。
 from core.model_registry import MODELS, MODEL_BY_ID
-from core.constants import ModelStatus as MS, Provider, IOPaintMode
+from core.constants import ModelStatus as MS, Provider
 
 # 状态字面量（保留向后兼容的类型别名）
 ModelStatus = Literal["ok", "missing", "partial", "corrupted", "unknown"]
@@ -139,16 +139,6 @@ class ModelChecker:
 
         if provider == Provider.REMBG:
             result = self._check_rembg(cfg)
-        elif provider == Provider.IOPAINT and cfg.get("iopaint_mode") == IOPaintMode.CLI:
-            # IOPaint 内置的快速模型（lama/migan/zits 等）：随 iopaint 包一起安装，
-            # 无独立权重文件，无需下载，直接标记为 ok/builtin
-            result = ModelCheckResult(
-                model_id=model_id,
-                name=cfg.get("name", model_id),
-                provider=provider,
-                status=MS.OK,
-                message="内置模型（随 iopaint 包安装，无需单独下载）",
-            )
         elif cfg.get("local_path"):
             result = self._check_local_path(cfg)
         elif cfg.get("hf_models"):
@@ -268,6 +258,7 @@ class ModelChecker:
                 "provider":  provider,
                 "hf_model_id": sub["id"],
                 "size_mb":   sub.get("size_mb"),
+                "hf_required_files": sub.get("hf_required_files"),
             }
             sub_results.append(self._check_hf_cache(sub_cfg))
 
@@ -297,6 +288,34 @@ class ModelChecker:
             expected_size_mb=total_size_mb,
         )
 
+    def _check_required_hf_files(self, cfg: dict) -> ModelCheckResult:
+        from huggingface_hub import try_to_load_from_cache
+
+        repo_id = cfg["hf_model_id"]
+        index = try_to_load_from_cache(repo_id, "model_index.json", cache_dir=str(self.hf_cache_dir))
+        directory = (Path(index).parent if isinstance(index, str)
+                     else self.hf_cache_dir.parent / "manual" / repo_id.replace("/", "--"))
+        total = 0
+        status, message = MS.OK, "Diffusers 文件齐全"
+        for filename, expected in cfg["hf_required_files"].items():
+            file = directory / filename
+            try:
+                size = file.stat().st_size
+            except OSError:
+                status, message = MS.PARTIAL, f"缺少模型文件: {filename}"
+                break
+            if not file.is_file() or size != expected:
+                status, message = MS.CORRUPTED, f"模型文件字节数异常: {filename}"
+                break
+            total += size
+        if not directory.is_dir():
+            status, message = MS.MISSING, "未找到本地 Diffusers 模型"
+        return ModelCheckResult(
+            model_id=cfg["id"], name=cfg.get("name", repo_id), provider=cfg["provider"],
+            status=status, message=message, file_path=str(directory), size_bytes=total,
+            expected_size_mb=cfg.get("size_mb"),
+        )
+
     def _check_hf_cache(self, cfg: dict) -> ModelCheckResult:
         """
         HuggingFace Hub 缓存模型。
@@ -305,6 +324,8 @@ class ModelChecker:
           1. 优先检查标准 hub/ 缓存（新下载位置，hf_hub_download 写入格式）
           2. 再 fallback 到 manual/ 路径（旧下载位置，向后兼容）
         """
+        if cfg.get("hf_required_files"):
+            return self._check_required_hf_files(cfg)
         repo_id = cfg["hf_model_id"]
         name = cfg.get("name", "")
         provider = cfg.get("provider", "")
@@ -320,7 +341,7 @@ class ModelChecker:
                     if repo.repo_id == repo_id:
                         if repo.nb_files == 0:
                             # hub/ 目录存在但无 blob 文件：
-                            # 可能是 ensure_iopaint_hub_links 创建的合成符号链接
+                            # 兼容已有的本地缓存符号链接
                             # （snapshots/main → manual/<repo>），实际文件在 manual/。
                             # 继续检查 manual/ 以获取更准确状态（包括 git-lfs 指针检测）。
                             _hub_nb_files_zero = True

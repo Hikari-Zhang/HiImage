@@ -22,7 +22,7 @@ describe('model list page lifecycle', () => {
         signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true })
       })
       return Promise.resolve(new Response(JSON.stringify({ models: [{
-        id: 'test', name: '测试模型', provider: 'iopaint', tags: [], status: 'missing', message: '',
+        id: 'test', name: '测试模型', provider: 'diffusers', tags: [], status: 'missing', message: '',
       }] })))
     }))
     const page = render(<StrictMode><ModelManager /></StrictMode>)

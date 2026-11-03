@@ -20,8 +20,10 @@ def detect_watermark(image: np.ndarray, sensitivity: float):
 
 
 def inpaint_image(image: np.ndarray, model_id: str, device: str, *,
-                  rois=None, mask=None, dilation=10, disable_nsfw=False,
+                  rois=None, mask=None, dilation=10, disable_nsfw=False, redraw=None,
                   progress_callback: ProgressCallback | None = None):
+    from core.capabilities import require_model
+    require_model("watermark_removal", model_id)
     executor = ModelExecutorFactory.create_executor(get_model(model_id), device)
     with model_session(executor):
         params = {"progress_callback": progress_callback, "dilation": dilation,
@@ -30,7 +32,7 @@ def inpaint_image(image: np.ndarray, model_id: str, device: str, *,
             params["mask"] = mask
         elif executor.supports_mask():
             params["rois"] = rois
-        return executor.execute(image, **params)
+        return executor.execute(image, **params, **(redraw or {}))
 
 
 def cutout_image(image: np.ndarray, model_id: str, device: str):
@@ -100,7 +102,8 @@ def pipeline_image(original: np.ndarray, mask, rois, options: dict,
     from core.pipeline import Pipeline, PipelineConfig, InpaintStep, PostprocessStep, UpscaleStep
     config = PipelineConfig(
         inpaint=InpaintStep(model=options["inpaint_model"], device=options["device"],
-                           dilation=options["dilation"], disable_nsfw=options["disable_nsfw"]),
+                           dilation=options["dilation"], disable_nsfw=options["disable_nsfw"],
+                           redraw={key: value for key, value in (options.get("redraw") or {}).items() if value is not None}),
         postprocess=PostprocessStep(method=options["postprocess_method"], device=options["device"],
                                    enabled=options["postprocess_enabled"]),
         upscale=UpscaleStep(model=options["upscale_model"], device=options["device"],

@@ -219,7 +219,7 @@ def test_scheduler_shutdown_joins_executor_without_blocking_event_loop(
 
 
 @pytest.mark.parametrize("cancel_count", [1, 3])
-def test_lifespan_cancellation_waits_for_drain_executor_and_server_stop(
+def test_lifespan_cancellation_waits_for_drain_executor(
     monkeypatch,
     cancel_count,
 ):
@@ -234,19 +234,11 @@ def test_lifespan_cancellation_waits_for_drain_executor_and_server_stop(
         started = threading.Event()
         release = threading.Event()
         executor_finished = threading.Event()
-        stop_calls = []
         original_close = scheduler.close_executor
 
         def observed_close():
             original_close()
             executor_finished.set()
-
-        class FakeServer:
-            def stop(self):
-                stop_calls.append({
-                    "snapshot": scheduler.snapshot(),
-                    "executor_finished": executor_finished.is_set(),
-                })
 
         monkeypatch.setattr(scheduler, "close_executor", observed_close)
         monkeypatch.setattr(main, "inference_scheduler", scheduler)
@@ -254,27 +246,17 @@ def test_lifespan_cancellation_waits_for_drain_executor_and_server_stop(
         monkeypatch.setattr(main.log_manager, "set_loop", lambda _loop: None)
         monkeypatch.setattr(main, "get", lambda _key, default=None: default)
         monkeypatch.setattr(main, "apply_default_env_vars", lambda: None)
-        monkeypatch.setitem(
-            sys.modules,
-            "core.model_server",
-            SimpleNamespace(get_server=lambda: FakeServer()),
-        )
-        monkeypatch.setitem(
-            sys.modules,
-            "core.model_setup",
-            SimpleNamespace(ensure_iopaint_hub_links=lambda: None),
-        )
 
         context = main.lifespan(main.app)
         await context.__aenter__()
 
-        async def iopaint_work():
-            async with scheduler.admission("iopaint"):
+        async def model_work():
+            async with scheduler.admission("native model"):
                 await scheduler.run_blocking(
                     lambda: (started.set(), release.wait(2))[1]
                 )
 
-        work = asyncio.create_task(iopaint_work())
+        work = asyncio.create_task(model_work())
         await asyncio.to_thread(started.wait, 1)
         shutdown = asyncio.create_task(context.__aexit__(None, None, None))
         await asyncio.sleep(0)
@@ -284,7 +266,7 @@ def test_lifespan_cancellation_waits_for_drain_executor_and_server_stop(
             shutdown.cancel()
             await asyncio.sleep(0)
 
-        assert stop_calls == []
+        assert scheduler.snapshot()["running"] == 1
         with pytest.raises(InferenceQueueFull):
             async with scheduler.admission("late"):
                 pass
@@ -294,20 +276,14 @@ def test_lifespan_cancellation_waits_for_drain_executor_and_server_stop(
         with pytest.raises(asyncio.CancelledError):
             await shutdown
 
-        assert stop_calls == [{
-            "snapshot": {
-                "running": 0,
-                "pending": 0,
-                "capacity": 1,
-                "accepting": False,
-            },
-            "executor_finished": True,
-        }]
+        assert executor_finished.is_set()
+        assert scheduler.snapshot() == {"running": 0, "pending": 0, "capacity": 1, "accepting": False}
+
 
     run(scenario())
 
 
-def test_lifespan_drains_iopaint_work_before_stopping_server(
+def test_lifespan_drains_model_work_before_stopping_server(
     monkeypatch,
 ):
     import sys
@@ -320,38 +296,23 @@ def test_lifespan_drains_iopaint_work_before_stopping_server(
         scheduler = InferenceScheduler(max_pending=0)
         started = threading.Event()
         release = threading.Event()
-        stop_calls = []
-
-        class FakeServer:
-            def stop(self):
-                stop_calls.append(scheduler.snapshot())
 
         monkeypatch.setattr(main, "inference_scheduler", scheduler)
         monkeypatch.setattr(main, "setup_logging", lambda: None)
         monkeypatch.setattr(main.log_manager, "set_loop", lambda _loop: None)
         monkeypatch.setattr(main, "get", lambda _key, default=None: default)
         monkeypatch.setattr(main, "apply_default_env_vars", lambda: None)
-        monkeypatch.setitem(
-            sys.modules,
-            "core.model_server",
-            SimpleNamespace(get_server=lambda: FakeServer()),
-        )
-        monkeypatch.setitem(
-            sys.modules,
-            "core.model_setup",
-            SimpleNamespace(ensure_iopaint_hub_links=lambda: None),
-        )
 
         context = main.lifespan(main.app)
         await context.__aenter__()
 
-        async def iopaint_work():
-            async with scheduler.admission("iopaint"):
+        async def model_work():
+            async with scheduler.admission("native model"):
                 await scheduler.run_blocking(
                     lambda: (started.set(), release.wait(2))[1]
                 )
 
-        work = asyncio.create_task(iopaint_work())
+        work = asyncio.create_task(model_work())
         await asyncio.to_thread(started.wait, 1)
         shutdown = asyncio.create_task(context.__aexit__(None, None, None))
         await asyncio.sleep(0)
@@ -360,22 +321,18 @@ def test_lifespan_drains_iopaint_work_before_stopping_server(
         with pytest.raises(InferenceQueueFull):
             async with scheduler.admission("late"):
                 pass
-        assert stop_calls == []
+        assert scheduler.snapshot()["running"] == 1
 
         release.set()
         await work
         await shutdown
-        assert stop_calls == [{
-            "running": 0,
-            "pending": 0,
-            "capacity": 1,
-            "accepting": False,
-        }]
+        assert scheduler.snapshot() == {"running": 0, "pending": 0, "capacity": 1, "accepting": False}
+
 
     run(scenario())
 
 
-def test_lifespan_stops_server_and_closes_executor_when_scheduler_shutdown_fails(
+def test_lifespan_closes_executor_when_scheduler_shutdown_fails(
     monkeypatch,
 ):
     import sys
@@ -394,10 +351,6 @@ def test_lifespan_stops_server_and_closes_executor_when_scheduler_shutdown_fails
             def close_executor(self):
                 calls.append("scheduler.close_executor")
 
-        class FakeServer:
-            def stop(self):
-                calls.append("server.stop")
-
         errors = []
         monkeypatch.setattr(main, "inference_scheduler", FailingScheduler())
         monkeypatch.setattr(main, "setup_logging", lambda: None)
@@ -409,16 +362,6 @@ def test_lifespan_stops_server_and_closes_executor_when_scheduler_shutdown_fails
         )
         monkeypatch.setattr(main, "get", lambda _key, default=None: default)
         monkeypatch.setattr(main, "apply_default_env_vars", lambda: None)
-        monkeypatch.setitem(
-            sys.modules,
-            "core.model_server",
-            SimpleNamespace(get_server=lambda: FakeServer()),
-        )
-        monkeypatch.setitem(
-            sys.modules,
-            "core.model_setup",
-            SimpleNamespace(ensure_iopaint_hub_links=lambda: None),
-        )
 
         async with main.lifespan(main.app):
             pass
@@ -426,7 +369,6 @@ def test_lifespan_stops_server_and_closes_executor_when_scheduler_shutdown_fails
         assert calls == [
             "scheduler.shutdown",
             "scheduler.close_executor",
-            "server.stop",
         ]
         assert any("drain failed" in message for message in errors)
 

@@ -77,7 +77,7 @@ async def _run_cleanup_resilient(
 
 
 async def _shutdown_runtime() -> None:
-    """完整清理调度器与 IOPaint，最后恢复调用者取消语义。"""
+    """完整清理调度器，最后恢复调用者取消语义。"""
     stop_accepting = getattr(inference_scheduler, "stop_accepting", None)
     if stop_accepting is not None:
         stop_accepting()
@@ -100,18 +100,6 @@ async def _shutdown_runtime() -> None:
                 f"推理工作线程关闭失败: {close_error}",
                 source="backend",
             )
-
-    try:
-        from core.model_server import get_server
-
-        server = get_server()
-        if server:
-            server.stop()
-    except BaseException as error:
-        log_manager.error(
-            f"IOPaint Server 关闭失败: {error}",
-            source="backend",
-        )
 
     if cancelled:
         raise asyncio.CancelledError
@@ -136,22 +124,6 @@ async def lifespan(app: FastAPI):
 
     # 为依赖环境变量的库设置默认路径（仅设置未定义的环境变量）
     apply_default_env_vars()
-    # 在主线程预导入 model_server，确保 signal.signal(SIGTERM) 在主线程注册。
-    # 若推迟到首次推理请求时导入，会在线程池工作线程中触发
-    # "signal only works in main thread" ValueError。
-    try:
-        import core.model_server  # noqa: F401  — 副作用：注册 SIGTERM 处理器
-    except Exception as _e:
-        print(f"[Backend] model_server 预导入失败（非致命）: {_e}")
-
-    # 为已下载的 IOPaint server 模式模型补全 hub/ 软链接，
-    # 使 iopaint scan_diffusers_models() 能识别本地缓存，避免重复触发下载
-    try:
-        from core.model_setup import ensure_iopaint_hub_links
-        ensure_iopaint_hub_links()
-    except Exception as _e:
-        print(f"[Backend] iopaint hub 链接补全失败（非致命）: {_e}")
-
     print(f"[Backend] HiImage API 启动")
     print(f"[Backend] 项目根目录: {PROJECT_ROOT}")
     print(f"[Backend] 模型目录: {MODELS_DIR}")
@@ -162,7 +134,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: 先排空已接纳推理，再停止 IOPaint Server。
+    # Shutdown: 排空已接纳推理并关闭工作线程。
     await _shutdown_runtime()
     print("[Backend] HiImage API 关闭")
 

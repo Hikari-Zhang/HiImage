@@ -71,17 +71,13 @@ def test_get_settings_response_uses_an_explicit_non_sensitive_allowlist(monkeypa
     assert response.status_code == 200
     assert set(response.json()) == {
         "device",
-        "server_port",
-        "server_keepalive",
-        "server_startup_timeout",
+
         "hf_endpoint",
         "hf_token_configured",
         "github_mirror",
         "default_dilation",
         "disable_nsfw",
-        "low_mem",
-        "cpu_offload",
-        "cpu_textencoder",
+
         "download_max_concurrent",
         "upscale_tile",
     }
