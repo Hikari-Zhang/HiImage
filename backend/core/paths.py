@@ -203,11 +203,22 @@ def resolve_hf_model_path(repo_id: str) -> str:
     return repo_id
 
 
+def model_cache_root(cfg: dict) -> Optional[Path]:
+    """返回按模型类型管理的权重目录。"""
+    if cfg.get("executor") == "gfpgan":
+        return GFPGAN_HOME
+    return {
+        "realesrgan": REALESRGAN_HOME,
+        "restormer": RESTORMER_HOME,
+        "gfpgan": GFPGAN_HOME,
+    }.get(cfg.get("provider"))
+
+
 def resolve_model_cache_path(cfg: dict) -> Path:
     """
     统一解析模型缓存路径（下载/加载/检查均使用此函数）。
 
-    根据 provider 类型，自动定位到正确的缓存子目录：
+    根据模型类型定位到正确的缓存子目录：
       - realesrgan  → REALESRGAN_HOME / weight_filename  （~/.cache/realesrgan/）
       - restormer   → RESTORMER_HOME / weight_filename   （~/.cache/restormer/）
       - gfpgan      → GFPGAN_HOME / weight_filename      （~/.cache/gfpgan/）
@@ -221,25 +232,12 @@ def resolve_model_cache_path(cfg: dict) -> Path:
         from core.paths import resolve_model_cache_path
         path = resolve_model_cache_path(cfg)
     """
-    provider = cfg.get("provider", "")
-    weight_filename = cfg.get("weight_filename", "")
-
-    # 如果没有 weight_filename，尝试从 local_path 提取
-    if not weight_filename:
-        local_path = cfg.get("local_path", "")
-        weight_filename = os.path.basename(local_path)
-
-    # 根据 provider 定位到正确的缓存目录
-    if provider == "realesrgan":
-        return REALESRGAN_HOME / weight_filename
-    elif provider == "restormer":
-        return RESTORMER_HOME / weight_filename
-    elif provider == "gfpgan":
-        return GFPGAN_HOME / weight_filename
-    else:
-        # 向后兼容：使用原有的 resolve_model_path
-        local_path = cfg.get("local_path", "")
+    local_path = cfg.get("local_path", "")
+    root = model_cache_root(cfg)
+    if root is None:
         return resolve_model_path(local_path)
+    weight_filename = cfg.get("weight_filename") or os.path.basename(local_path)
+    return root / weight_filename
 
 
 # ──────────────────────────────────────────────────────────────

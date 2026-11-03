@@ -33,8 +33,7 @@ def deletion_targets(cfg):
     if cfg.get("local_path"):
         local = Path(paths.resolve_model_cache_path(cfg))
         roots = [paths.CACHE_ROOT, paths.MODELS_DIR]
-        provider_root = {"realesrgan": paths.REALESRGAN_HOME, "gfpgan": paths.GFPGAN_HOME,
-                         "restormer": paths.RESTORMER_HOME}.get(cfg.get("provider"))
+        provider_root = paths.model_cache_root(cfg)
         if provider_root is not None:
             roots.append(provider_root)
         root = next((r for r in roots if local.resolve().is_relative_to(r.resolve())

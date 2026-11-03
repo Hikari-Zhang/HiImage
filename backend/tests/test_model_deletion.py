@@ -107,6 +107,36 @@ def test_shared_local_file_is_protected(cache):
     assert file.exists()
 
 
+@pytest.mark.parametrize("override", [False, True])
+def test_custom_gfpgan_cache_does_not_block_lama_deletion(cache, monkeypatch, override):
+    monkeypatch.setattr(paths, "MODELS_DIR", cache / "models")
+    env = {"HIIMAGE_CACHE": str(paths.CACHE_ROOT)}
+    gfpgan_dir = paths.CACHE_ROOT / "gfpgan"
+    if override:
+        gfpgan_dir = cache / "separate-gfpgan-cache"
+        env["GFPGAN_HOME"] = str(gfpgan_dir)
+    monkeypatch.setattr(paths, "GFPGAN_HOME", paths.cache_dirs_from_env(env)["GFPGAN_HOME"])
+    gfpgan = model_registry.get_model("gfpgan")
+    lama = model_registry.get_model("wm_lama")
+    register(gfpgan=gfpgan, wm_lama=lama)
+
+    gfpgan_file = gfpgan_dir / "GFPGANv1.4.pth"
+    lama_file = paths.MODELS_DIR / "lama" / "big-lama.pt"
+    for file in (gfpgan_file, lama_file):
+        file.parent.mkdir(parents=True)
+        file.write_bytes(b"temporary model")
+
+    response = asyncio.run(delete("wm_lama"))
+    assert response.status_code == 200, response.text
+    assert not lama_file.exists()
+    assert gfpgan_file.exists()
+
+    assert paths.resolve_model_cache_path(gfpgan) == gfpgan_file
+    response = asyncio.run(delete("gfpgan"))
+    assert response.status_code == 200, response.text
+    assert not gfpgan_file.exists()
+
+
 def test_rembg_deletes_actual_onnx_filename(cache):
     register(first={"provider": "rembg", "rembg_model_name": "display-name", "onnx_filename": "actual.onnx"})
     file = paths.U2NET_HOME / "actual.onnx"
