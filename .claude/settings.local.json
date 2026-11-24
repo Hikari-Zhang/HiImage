@@ -12,7 +12,11 @@
       "Bash(python -c \"from core.model_checker import ModelChecker, resolve_hf_model_path, invalidate_model_cache; print\\('model_checker OK'\\)\")",
       "Bash(rtk gain *)",
       "Skill(update-config)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(python -c \"with open\\(r'D:\\\\Git\\\\HiImage\\\\backend\\\\app\\\\routers\\\\models.py'\\) as f: print\\(sum\\(1 for _ in f\\), 'lines'\\)\")",
+      "Bash(python *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }

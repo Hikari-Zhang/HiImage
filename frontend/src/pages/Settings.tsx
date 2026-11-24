@@ -1,3 +1,4 @@
+import ImmichSettings from '../components/ImmichSettings'
 import { useState, useEffect } from 'react'
 import LazyPage from '../components/layout/PageBoundary'
 import { getSettingsDraftStore, useSettingsDraft } from '../stores/useSettingsDraft'
@@ -11,7 +12,7 @@ import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useFirstVisible } from '../hooks/useFirstVisible'
 const loadModelManager = () => import('./ModelManager')
 
-type SettingsTab = 'general' | 'models'
+type SettingsTab = 'general' | 'models' | 'immich'
 
 // 默认值（用于「恢复默认」）
 const DEFAULTS = {
@@ -133,6 +134,16 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
     showToast('success', '已恢复默认值，点击保存生效')
   }
 
+  useEffect(() => {
+    const selectImmichTab = () => {
+      const [path, query] = window.location.hash.split('?', 2)
+      if (path === '#/settings' && new URLSearchParams(query).get('tab') === 'immich') setActiveTab('immich')
+    }
+    selectImmichTab()
+    window.addEventListener('hashchange', selectImmichTab)
+    return () => window.removeEventListener('hashchange', selectImmichTab)
+  }, [setActiveTab])
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <PageHeader title="设置" />
@@ -142,6 +153,7 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
         {([
           { key: 'general', label: '通用设置' },
           { key: 'models',  label: '模型管理' },
+          { key: 'immich', label: 'Immich' },
         ] as { key: SettingsTab; label: string }[]).map((tab) => (
           <button
             key={tab.key}
@@ -157,6 +169,8 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
           </button>
         ))}
       </div>
+
+      {activeTab === 'immich' && <ImmichSettings key={backendURL} />}
 
       {activeTab === 'models' && (
         <div className="flex flex-1 min-h-0 overflow-hidden">

@@ -1,3 +1,5 @@
+import ImmichActions, { type ImmichActionsHandle } from '../components/ImmichActions'
+import { bindImmichSource } from '../services/immich'
 import { useRef, useCallback } from 'react'
 import { useUpscaleBatchStore } from '../stores/useUpscaleBatchStore'
 import { Upload, Download, Images, List, CheckCircle2 } from 'lucide-react'
@@ -61,6 +63,7 @@ export default function SuperResolution() {
   const downloadTasks = useDownloadStore((s) => s.tasks)
   const { startDownload } = useDownloadManager()
 
+  const immichActionsRef = useRef<ImmichActionsHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // 当前模型的默认 outscale（从 store 读，fallback 4）
@@ -113,7 +116,10 @@ export default function SuperResolution() {
     const files = Array.from(e.target.files ?? [])
     if (files.length === 0) return
     e.target.value = ''
+    importFiles(files)
+  }
 
+  const importFiles = (files: File[]) => {
     if (mode === 'batch') {
       // 批量模式：只存 File 引用，不读文件（懒加载缩略图）
       const validation = validateBatchFiles(Array.from(files))
@@ -535,6 +541,26 @@ export default function SuperResolution() {
       />
 
       {/* Content */}
+      <div className="flex-none px-3 py-1 border-b border-border-subtle">
+        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="upscale" revision={sourceRevision} original={sourceImage}
+          result={mode === 'single' ? resultImage : null} multiple={mode === 'batch'}
+          limit={mode === 'batch' ? MAX_BATCH_FILES - batchItems.length : 1}
+          onImport={async items => {
+            if (mode === 'batch') {
+              importFiles(items.map(item => item.file))
+              return
+            }
+            const item = items[0]
+            const image = await fileToDataUrl(item.file)
+            if (useUpscaleImageStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
+            loadSource(image)
+            bindImmichSource('upscale', {
+              token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
+              revision: useUpscaleImageStore.getState().sourceRevision,
+            })
+          }} />
+      </div>
+
       <div className="editor-workspace flex-1 flex overflow-hidden min-h-0">
         {/* Image area */}
         <div
@@ -567,7 +593,7 @@ export default function SuperResolution() {
             <div className="empty-canvas flex flex-col items-center gap-4 text-fg-secondary">
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽图片到此处，或点击打开文件</p>
-              <Button onClick={handleOpenFile}>打开图片</Button>
+              <Button onClick={() => immichActionsRef.current?.chooseSource()}>打开图片</Button>
               <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileInput} />
             </div>
           ) : resultImage ? (
@@ -811,7 +837,7 @@ export default function SuperResolution() {
                 {sourceImage && !resultImage && (
                   <Button
                     variant="ghost"
-                    onClick={handleOpenFile}
+                    onClick={() => immichActionsRef.current?.chooseSource()}
                     icon={<Upload size={14} />}
                     className="w-full"
                     size="sm"
@@ -826,7 +852,7 @@ export default function SuperResolution() {
             {mode === 'batch' && (
               <Button
                 variant="ghost"
-                onClick={handleOpenFile}
+                onClick={() => immichActionsRef.current?.chooseSource()}
                 disabled={isBatchProcessing}
                 icon={<Images size={14} />}
                 className="w-full"

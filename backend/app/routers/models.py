@@ -21,13 +21,14 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.services.model_catalog import model_groups
 from core.model_checker import ModelChecker
-from core.model_registry import MODELS, MODE_GROUPS
+from core.model_registry import MODELS, MODE_GROUPS, MODEL_BY_ID
 from core.constants import ModelStatus as MS, DownloadStatus as DS
 
 logger = logging.getLogger("models")
@@ -113,12 +114,39 @@ async def models_list():
             **{k: v for k, v in m.items() if k not in ("supported_params",)},
             "status":  r.status if r else MS.UNKNOWN,
             "message": r.message if r else "",
+            "has_local_path": bool(r and r.file_path),
         })
 
     return {
         "models": result,
         "mode_groups": MODE_GROUPS,
     }
+
+
+@router.post("/{model_id}/open-folder")
+def open_model_folder(model_id: str, request: Request):
+    """在本机 Windows 文件资源管理器中打开模型所在目录。"""
+    if os.name != "nt" or not request.client or request.client.host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(status_code=403, detail="请在运行 HiImage 后端的 Windows 电脑上打开模型目录")
+    if request.headers.get("x-hiimage-action") != "open-folder":
+        raise HTTPException(status_code=403, detail="无效的打开目录请求")
+    if model_id not in MODEL_BY_ID:
+        raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
+
+    result = ModelChecker().check_model(model_id, use_cache=False)
+    if not result.file_path:
+        raise HTTPException(status_code=404, detail="模型文件或目录不存在")
+    path = Path(result.file_path)
+    folder = path if path.is_dir() else path.parent if path.is_file() else None
+    if folder is None:
+        raise HTTPException(status_code=404, detail="模型文件或目录不存在")
+
+    try:
+        os.startfile(str(folder.absolute()), "explore")
+    except OSError as exc:
+        logger.exception("打开模型目录失败: %s", model_id)
+        raise HTTPException(status_code=500, detail="无法打开模型目录，请检查后端是否运行在 Windows 桌面会话中") from exc
+    return {"ok": True}
 
 
 # ── 下载队列 API ─────────────────────────────────────────────────────────────

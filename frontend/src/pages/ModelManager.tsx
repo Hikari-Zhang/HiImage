@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   CheckCircle2, XCircle, AlertCircle, Loader2, Trash2, RefreshCw,
-  Package, Download, ChevronDown, ChevronUp, Clock,
+  Package, Download, ChevronDown, ChevronUp, Clock, FolderOpen,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { showToast } from '../components/ui'
@@ -28,6 +28,7 @@ interface ModelEntry {
   display_group?: string
   status: ModelStatusValue
   message: string
+  has_local_path?: boolean
 }
 
 interface ModeGroup {
@@ -74,6 +75,13 @@ function parseMB(s: string): number {
 export default function ModelManager() {
   const backendURL = useBackendStore((s) => s.backendURL)
   const client = createApiClient(backendURL)
+  let showOpenFolder = false
+  try {
+    const backendAddress = new URL(client.url(ApiPath.MODELS_LIST), window.location.href)
+    showOpenFolder = ['localhost', '127.0.0.1', '[::1]'].includes(backendAddress.hostname)
+  } catch {
+    // 无效的后端地址无法打开本地目录。
+  }
 
   const [models, setModels] = useState<ModelEntry[]>([])
   const [modeGroups, setModeGroups] = useState<ModeGroup[]>([])
@@ -186,6 +194,17 @@ export default function ModelManager() {
         : models.filter((m) => m.tags?.includes(groupId))
     const ok = list.filter((m) => m.status === ModelStatus.OK).length
     return { total: list.length, ok }
+  }
+
+  const handleOpenFolder = async (modelId: string) => {
+    try {
+      await client.json(`/api/models/${encodeURIComponent(modelId)}/open-folder`, {
+        method: 'POST',
+        headers: { 'X-HiImage-Action': 'open-folder' },
+      }, '打开模型目录失败')
+    } catch (e: unknown) {
+      showToast('error', e instanceof Error ? e.message : String(e))
+    }
   }
 
   // ── 删除文件 ─────────────────────────────────────────────────────────────────
@@ -418,6 +437,7 @@ export default function ModelManager() {
                     onDownload={(e) => { e.stopPropagation(); startDownload(model.id) }}
                     onCancel={(e) => { e.stopPropagation(); cancelDownload(model.id) }}
                     onDelete={(e) => { e.stopPropagation(); handleDelete(model) }}
+                    onOpenFolder={showOpenFolder ? () => handleOpenFolder(model.id) : undefined}
                     onCancelConfirm={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
                   />
                 )
@@ -518,7 +538,7 @@ function GroupItem({
 
 function ModelRow({
   model, downloadTask, isDeleting, isConfirming,
-  onDownload, onCancel, onDelete, onCancelConfirm,
+  onDownload, onCancel, onDelete, onCancelConfirm, onOpenFolder,
 }: {
   model: ModelEntry
   downloadTask: DownloadTask | undefined
@@ -528,6 +548,7 @@ function ModelRow({
   onCancel: (e: React.MouseEvent) => void
   onDelete: (e: React.MouseEvent) => void
   onCancelConfirm: (e: React.MouseEvent) => void
+  onOpenFolder?: () => void
 }) {
   const isDownloading = downloadTask?.status === DownloadStatus.DOWNLOADING
   const isQueued = downloadTask?.status === DownloadStatus.QUEUED
@@ -657,6 +678,20 @@ function ModelRow({
             className="p-1.5 rounded text-fg-secondary hover:text-status-error hover:bg-status-error/10 transition-colors"
           >
             <XCircle size={13} />
+          </button>
+        )}
+
+        {onOpenFolder && !isConfirming && (
+          <button
+            type="button"
+            onClick={onOpenFolder}
+            disabled={isDeleting || !(model.has_local_path ?? isDone)}
+            title={(model.has_local_path ?? isDone) ? '打开模型所在目录' : '暂无本地模型文件'}
+            aria-label={`打开 ${model.name} 所在目录`}
+            className="flex items-center gap-1 px-2 py-1.5 rounded text-[11px] text-fg-secondary enabled:hover:text-fg-accent enabled:hover:bg-fg-accent/10 disabled:opacity-40 transition-colors"
+          >
+            <FolderOpen size={13} />
+            打开目录
           </button>
         )}
 

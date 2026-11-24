@@ -100,6 +100,13 @@ CPU 与 GPU 栈使用彼此独立的命名卷，分别持久化：
 
 应用关闭时先停止接纳并排空已接纳推理，由调度器关闭工作线程；关闭失败时执行线程清理兜底，取消延后至清理结束传播。
 
+## Immich
+
+1. 为 HiImage 后端设置随机的 `HIIMAGE_IMMICH_ACCESS_TOKEN`（至少 24 字符），然后重启后端。Docker 部署可以在 Compose 使用的 `.env` 中设置。本地开发则在启动后端的环境中设置。
+2. 在「设置 → Immich」输入该令牌，填写**从 HiImage 后端可访问**的 Immich 地址和 API Key，测试并保存。使用远程服务时通过 HTTPS 访问 HiImage 和 Immich。请将 HiImage 配置目录限制为部署账户可读写，API Key 保存在其中。
+3. Immich API Key 的读取权限为 `user.read`、`asset.read`、`asset.view` 和 `asset.download`。浏览相册另需 `album.read`。上传需 `asset.upload`，写入相册需 `albumAsset.create`。
+4. 编辑器中使用「从 Immich 选择」和「保存到 Immich」。替换需选用允许替换的连接模式、Immich 2.7.5、开启回收站，并为 API Key 增加 `asset.delete` 和 `sharedLink.read`。原图仅在验证新图和迁移后进入回收站，可在 Immich 内恢复。可在设置中查看最近写回记录。
+
 ## 验证
 
 ```bash

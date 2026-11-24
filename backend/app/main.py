@@ -21,7 +21,7 @@ except ImportError:
     def apply_default_env_vars(): pass  # type: ignore[misc]
 
 from app.config import get
-from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, cutout, tasks, models as models_router_module
+from app.routers import system, inpaint, upscale, settings, logs, postprocess, synthesis, cutout, tasks, immich, models as models_router_module
 from app.websocket.progress import router as ws_router
 from app.logging_manager import log_manager, setup_logging
 from app.shared_executor import (
@@ -46,6 +46,7 @@ def cors_middleware_options(value: str | None) -> dict:
         "allow_credentials": bool(origins) and not wildcard,
         "allow_methods": ["*"],
         "allow_headers": ["*"],
+        "expose_headers": ["X-Immich-Source"],
     }
 
 
@@ -156,6 +157,7 @@ app.include_router(system.router, prefix="/api", tags=["system"])
 app.include_router(tasks.router, prefix="/api", tags=["tasks"])
 app.include_router(inpaint.router, prefix="/api", tags=["inpaint"])
 app.include_router(upscale.router, prefix="/api", tags=["upscale"])
+app.include_router(immich.router, prefix="/api", tags=["immich"])
 app.include_router(settings.router, prefix="/api", tags=["settings"])
 app.include_router(logs.router, prefix="/api", tags=["logs"])
 app.include_router(postprocess.router, prefix="/api", tags=["postprocess"])

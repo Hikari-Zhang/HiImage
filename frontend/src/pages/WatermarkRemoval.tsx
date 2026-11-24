@@ -1,3 +1,5 @@
+import ImmichActions, { type ImmichActionsHandle } from '../components/ImmichActions'
+import { bindImmichSource } from '../services/immich'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Upload, Wand2, Trash2, Download, Move, Square, PenTool, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -108,6 +110,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
     }
   }
 
+  const immichActionsRef = useRef<ImmichActionsHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Open file
@@ -379,6 +382,20 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
       />
 
       {/* Content area */}
+      <div className="flex-none px-3 py-1 border-b border-border-subtle">
+        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="watermark" revision={sourceRevision} original={sourceImage} result={resultImage}
+          onImport={async items => {
+            const item = items[0]
+            const image = await fileToDataUrl(item.file)
+            if (useImageStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
+            setSourceImage(image)
+            bindImmichSource('watermark', {
+              token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
+              revision: useImageStore.getState().sourceRevision,
+            })
+          }} />
+      </div>
+
       <div className="editor-workspace flex-1 flex overflow-hidden min-h-0">
         {/* Canvas area */}
         <div
@@ -390,7 +407,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             <div className="empty-canvas absolute inset-0 flex flex-col items-center justify-center gap-4 text-fg-secondary">
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽图片到此处，或点击打开文件</p>
-              <Button onClick={handleOpenFile}>打开图片</Button>
+              <Button onClick={() => immichActionsRef.current?.chooseSource()}>打开图片</Button>
               <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileInput} />
             </div>
           ) : showResult && resultImage && sourceImage ? (
@@ -442,7 +459,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
                     </button>
                     <div className="w-px bg-border-subtle mx-0.5" />
                     <button
-                      onClick={handleOpenFile}
+                      onClick={() => immichActionsRef.current?.chooseSource()}
                       className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
                       title="打开图片"
                     >

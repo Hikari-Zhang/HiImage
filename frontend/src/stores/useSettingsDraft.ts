@@ -16,7 +16,7 @@ function savedFields() {
 }
 
 type Fields = ReturnType<typeof savedFields> & {
-  activeTab: 'general' | 'models'
+  activeTab: 'general' | 'models' | 'immich'
   isSaving: boolean
   settingsLoadError: string
 }

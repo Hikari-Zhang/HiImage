@@ -129,6 +129,24 @@ flowchart TB
 
 `backend/app/services/` 承担主要图像处理编排、模型就绪检查、统一模型分组及进度适配。主要推理路径为 `router → service → core`，路由之间不互相导入公共函数，算法通过传入回调报告进度。`backend/core/` 负责路径、模型注册、下载队列和推理执行器。主要耗时推理在线程或子进程中运行。模型状态检查接口使用 `asyncio.to_thread`；设备探测、部分输入预检和模型就绪检查仍含同步操作，不能据此认为所有耗时工作都已移出 ASGI 事件循环。
 
+### Immich 集成
+
+| 接口 | 职责 |
+| --- | --- |
+| `GET /api/immich/connection` | 读取脱敏配置 |
+| `POST /api/immich/connection/test` | 测试版本、身份和读取 |
+| `PUT /api/immich/connection` | 保存已验证的连接 |
+| `GET /api/immich/albums` | 查询相册 |
+| `GET /api/immich/assets` | 分页筛选静态图片 |
+| `GET /api/immich/assets/{source}/thumbnail` | 读取缩略图 |
+| `GET /api/immich/assets/{source}/original` | 读取经校验的原图并签发来源引用 |
+| `POST /api/immich/save` | 上传新结果并按需加入相册 |
+| `POST /api/immich/replace/preview` | 核对替换资格和待迁移信息，签发短期确认引用 |
+| `POST /api/immich/replace` | 上传并核验新图、迁移相册，最后将原图移入回收站 |
+| `GET /api/immich/operations` | 查询当前连接的最近写回记录 |
+
+以上接口均要求部署者设置的独立访问令牌。Immich API Key 只由后端读取并发送到配置的上游，连接和写回记录保存在配置卷的 `immich/` 目录。替换会校验来源引用、目标校验值与归属、拍摄时间、收藏和相册，并在移入回收站前重新校验原图及回收站状态。网络超时造成的未知状态保留在写回记录中。
+
 ## 5. 通信与数据流
 
 1. 浏览器读取用户选择的文件；批量入口执行类型、20 MB 单文件、128 MB 输入总量和批量数量验证，发起超分 API 前解码尺寸并检查 256 MB 输出 RGBA 预算。不要把批量入口限制等同于所有单图页面共有的前端限制。

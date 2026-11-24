@@ -1,3 +1,5 @@
+import ImmichActions, { type ImmichActionsHandle } from '../components/ImmichActions'
+import { bindImmichSource } from '../services/immich'
 /**
  * 抠图页面 —— AI 智能抠图，支持画笔微调与边缘精修
  */
@@ -333,6 +335,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
   }, [])
 
   // ── 文件上传 ──
+  const immichActionsRef = useRef<ImmichActionsHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadSource = useCallback((dataUrl: string) => {
@@ -521,6 +524,20 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
     <div className="flex flex-col h-full">
       <PageHeader title="抠图" right={<SendToEditor image={compositeResult || resultImage} current="cutout" />} />
 
+      <div className="flex-none px-3 py-1 border-b border-border-subtle">
+        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="cutout" revision={sourceRevision} original={sourceImage} result={compositeResult || resultImage}
+          onImport={async items => {
+            const item = items[0]
+            const image = await fileToDataUrl(item.file)
+            if (useCutoutStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
+            setSourceImage(image)
+            bindImmichSource('cutout', {
+              token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
+              revision: useCutoutStore.getState().sourceRevision,
+            })
+          }} />
+      </div>
+
       <div className="editor-workspace flex flex-1 min-h-0">
         {/* ── 左侧画布区域 ── */}
         <div
@@ -533,7 +550,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
             /* 上传提示 */
             <div
               className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer"
-              onClick={handleOpenFile}
+              onClick={() => immichActionsRef.current?.chooseSource()}
             >
               <div className="w-16 h-16 rounded-full bg-bg-hover flex items-center justify-center mb-4">
                 <Upload size={28} className="text-fg-secondary" />

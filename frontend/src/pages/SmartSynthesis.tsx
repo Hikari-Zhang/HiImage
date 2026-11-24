@@ -1,3 +1,5 @@
+import ImmichActions, { type ImmichActionsHandle } from '../components/ImmichActions'
+import { bindImmichSource } from '../services/immich'
 import type { RawModeGroup, SynthesisModel } from '../services/api/catalog'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import {
@@ -125,6 +127,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
   const [allModels, setAllModels] = useState<SynthesisModel[]>([])
   const [configLoading, setConfigLoading] = useState(true)
 
+  const immichActionsRef = useRef<ImmichActionsHandle>(null)
   const sourceFileInputRef = useRef<HTMLInputElement>(null)
   const referenceFileInputRef = useRef<HTMLInputElement>(null)
 
@@ -382,6 +385,20 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
         right={<div className="flex items-center gap-2"><SendToEditor image={resultImage} current="synthesis" /><span className="text-xs text-fg-secondary">{activeModeConfig?.name ?? '...'} | {device}</span></div>}
       />
 
+      <div className="flex-none px-3 py-1 border-b border-border-subtle">
+        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenSource} editor="synthesis" revision={sourceRevision} original={sourceImage} result={resultImage}
+          onImport={async items => {
+            const item = items[0]
+            const image = await fileToDataUrl(item.file)
+            if (useSynthesisImageStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
+            setSourceImage(image)
+            bindImmichSource('synthesis', {
+              token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
+              revision: useSynthesisImageStore.getState().sourceRevision,
+            })
+          }} />
+      </div>
+
       <div className="editor-workspace flex-1 flex overflow-hidden min-h-0">
         {/* ── 画布区域 ── */}
         <div
@@ -393,7 +410,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
             <div className="empty-canvas absolute inset-0 flex flex-col items-center justify-center gap-4 text-fg-secondary">
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽主图到此处，或点击打开</p>
-              <Button onClick={handleOpenSource}>打开主图</Button>
+              <Button onClick={() => immichActionsRef.current?.chooseSource()}>打开主图</Button>
               <input ref={sourceFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleSourceFileInput} />
             </div>
           ) : showResult && resultImage && sourceImage ? (
@@ -458,7 +475,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
                     </button>
                     <div className="w-px bg-border-subtle mx-0.5" />
                     <button
-                      onClick={handleOpenSource}
+                      onClick={() => immichActionsRef.current?.chooseSource()}
                       className="w-8 h-8 rounded flex items-center justify-center hover:bg-bg-hover text-fg-secondary transition-colors"
                       title="更换主图"
                     >
@@ -581,6 +598,11 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
                 )}
               </div>
               <input ref={referenceFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleReferenceFileInput} />
+              <ImmichActions editor="synthesis" revision={-1} original={null} result={null} inputLabel="从 Immich 选参考图"
+                onImport={async ([item]) => {
+                  setReferenceImage(await fileToDataUrl(item.file))
+                  setReferenceFileName(item.file.name)
+                }} />
               {referenceImage && (
                 <button
                   onClick={() => { setReferenceImage(null); setReferenceFileName('') }}
