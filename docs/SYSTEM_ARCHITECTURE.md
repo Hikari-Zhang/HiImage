@@ -139,7 +139,7 @@ flowchart TB
 | `GET /api/immich/albums` | 查询相册 |
 | `GET /api/immich/assets` | 分页筛选静态图片 |
 | `GET /api/immich/assets/{source}/thumbnail` | 读取缩略图 |
-| `GET /api/immich/assets/{source}/original` | 读取经校验的原图并签发来源引用 |
+| `GET /api/immich/assets/{source}/original` | 读取经校验的原图并签发来源引用。拍摄时间可用时通过 `X-Immich-Taken-At` 返回 UTC 时间 |
 | `POST /api/immich/save` | 上传新结果并按需加入相册 |
 | `POST /api/immich/replace/preview` | 核对替换资格和待迁移信息，签发短期确认引用 |
 | `POST /api/immich/replace` | 上传并核验新图、迁移相册，最后将原图移入回收站 |
@@ -552,9 +552,10 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | `GET /api/synthesis/modes` | 注册模式元数据；不等同于全部 Synthesizer 分支已实现 |
 | `GET /api/synthesis/models` | 合成模型元数据 |
 | `GET /api/postprocess/methods` | 后处理方法清单 |
-| `GET /api/models/list` | 模型元数据和当前文件状态 |
+| `GET /api/models/list` | 模型元数据、当前文件状态和打开本地目录的可用性 |
 | `GET /api/models/health` | 全量模型文件检查 |
 | `GET /api/models/health/{model_id}` | 单模型检查 |
+| `POST /api/models/{model_id}/open-folder` | 从 Windows 后端的回环连接打开已存在的本地模型目录，请求需带 `X-HiImage-Action: open-folder` |
 | `POST /api/models/download/bulk` | 把需要下载的模型加入队列 |
 | `POST /api/models/download/{model_id}` | 单模型下载提交 |
 | `DELETE /api/models/download/{model_id}` | 取消下载任务；可传 `download_id` 仅取消匹配实例，旧 ID 返回 404 |

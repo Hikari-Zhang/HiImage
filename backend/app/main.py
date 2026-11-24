@@ -46,7 +46,7 @@ def cors_middleware_options(value: str | None) -> dict:
         "allow_credentials": bool(origins) and not wildcard,
         "allow_methods": ["*"],
         "allow_headers": ["*"],
-        "expose_headers": ["X-Immich-Source"],
+        "expose_headers": ["X-Immich-Source", "X-Immich-Taken-At"],
     }
 
 

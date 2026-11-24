@@ -97,14 +97,31 @@ async def model_health(model_id: str):
     return _result_to_dict(result)
 
 
-@router.get("/list")
-async def models_list():
-    """
-    返回所有注册模型的元数据（来自 models.yaml），
-    附带实时完整性状态。
-    """
-    checker = ModelChecker()
-    check_map = {r.model_id: r for r in await asyncio.to_thread(checker.check_all)}
+def _can_open_model_folders(request: Request | None) -> bool:
+    return (
+        os.name == "nt"
+        and request is not None
+        and request.client is not None
+        and request.client.host in {"127.0.0.1", "::1"}
+    )
+
+
+def _model_folder(file_path: str | None) -> Path | None:
+    if not file_path:
+        return None
+    path = Path(file_path)
+    try:
+        if path.is_dir():
+            return path
+        if path.is_file():
+            return path.parent
+    except OSError:
+        pass
+    return None
+
+
+def _model_list_entries():
+    check_map = {r.model_id: r for r in ModelChecker().check_all()}
 
     result = []
     for m in MODELS:
@@ -114,19 +131,25 @@ async def models_list():
             **{k: v for k, v in m.items() if k not in ("supported_params",)},
             "status":  r.status if r else MS.UNKNOWN,
             "message": r.message if r else "",
-            "has_local_path": bool(r and r.file_path),
+            "has_local_path": r is not None and _model_folder(r.file_path) is not None,
         })
+    return result
 
+
+@router.get("/list")
+async def models_list(request: Request = None):
+    """返回注册模型、文件状态和当前客户端可用的目录操作。"""
     return {
-        "models": result,
+        "models": await asyncio.to_thread(_model_list_entries),
         "mode_groups": MODE_GROUPS,
+        "can_open_model_folders": _can_open_model_folders(request),
     }
 
 
 @router.post("/{model_id}/open-folder")
 def open_model_folder(model_id: str, request: Request):
     """在本机 Windows 文件资源管理器中打开模型所在目录。"""
-    if os.name != "nt" or not request.client or request.client.host not in {"127.0.0.1", "::1"}:
+    if not _can_open_model_folders(request):
         raise HTTPException(status_code=403, detail="请在运行 HiImage 后端的 Windows 电脑上打开模型目录")
     if request.headers.get("x-hiimage-action") != "open-folder":
         raise HTTPException(status_code=403, detail="无效的打开目录请求")
@@ -134,10 +157,7 @@ def open_model_folder(model_id: str, request: Request):
         raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
 
     result = ModelChecker().check_model(model_id, use_cache=False)
-    if not result.file_path:
-        raise HTTPException(status_code=404, detail="模型文件或目录不存在")
-    path = Path(result.file_path)
-    folder = path if path.is_dir() else path.parent if path.is_file() else None
+    folder = _model_folder(result.file_path)
     if folder is None:
         raise HTTPException(status_code=404, detail="模型文件或目录不存在")
 

@@ -73,4 +73,22 @@ describe('model list page lifecycle', () => {
     expect(await screen.findByText('下载失败')).toBeInTheDocument()
     expect(screen.queryByTitle('重新连接下载状态')).not.toBeInTheDocument()
   })
+
+  it.each([false, true])('uses backend folder capability (%s) and existing paths', async (canOpen) => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      can_open_model_folders: canOpen,
+      models: [
+        { id: 'installed', name: '已安装模型', provider: 'lama', tags: [], status: 'ok', message: '', has_local_path: true },
+        { id: 'missing', name: '缺失模型', provider: 'diffusers', tags: [], status: 'missing', message: '', has_local_path: false },
+      ],
+    })))
+    render(<ModelManager />)
+    expect(await screen.findByText('已安装模型')).toBeInTheDocument()
+    if (canOpen) {
+      expect(screen.getByRole('button', { name: '打开 已安装模型 所在目录' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: '打开 缺失模型 所在目录' })).toBeDisabled()
+    } else {
+      expect(screen.queryByRole('button', { name: /所在目录/ })).not.toBeInTheDocument()
+    }
+  })
 })

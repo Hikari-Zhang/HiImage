@@ -75,12 +75,15 @@ function parseMB(s: string): number {
 export default function ModelManager() {
   const backendURL = useBackendStore((s) => s.backendURL)
   const client = createApiClient(backendURL)
+  const [folderBackend, setFolderBackend] = useState<string | null>(null)
   let showOpenFolder = false
-  try {
-    const backendAddress = new URL(client.url(ApiPath.MODELS_LIST), window.location.href)
-    showOpenFolder = ['localhost', '127.0.0.1', '[::1]'].includes(backendAddress.hostname)
-  } catch {
-    // 无效的后端地址无法打开本地目录。
+  if (folderBackend === backendURL) {
+    try {
+      const backendAddress = new URL(client.url(ApiPath.MODELS_LIST), window.location.href)
+      showOpenFolder = ['localhost', '127.0.0.1', '[::1]'].includes(backendAddress.hostname)
+    } catch {
+      // 无效的后端地址无法打开本地目录。
+    }
   }
 
   const [models, setModels] = useState<ModelEntry[]>([])
@@ -111,10 +114,13 @@ export default function ModelManager() {
     const timer = setTimeout(() => controller.abort(), 15000)  // 15s 超时
     try {
       const res = await client.fetch(ApiPath.MODELS_LIST, { signal: controller.signal })
-      const data = await readApiResponse<{ models?: ModelEntry[]; mode_groups?: ModeGroup[] }>(res, '读取模型列表失败')
+      const data = await readApiResponse<{
+        models?: ModelEntry[]; mode_groups?: ModeGroup[]; can_open_model_folders?: boolean
+      }>(res, '读取模型列表失败')
       if (controller.signal.aborted) return
       setModels(data.models ?? [])
       setModeGroups(data.mode_groups ?? [])
+      setFolderBackend(data.can_open_model_folders ? backendURL : null)
     } catch (e: unknown) {
       if (controller.signal.aborted || (e instanceof Error && e.name === 'AbortError')) {
         // 超时静默处理，不弹 Toast，loading 会在 finally 里清掉
@@ -685,8 +691,8 @@ function ModelRow({
           <button
             type="button"
             onClick={onOpenFolder}
-            disabled={isDeleting || !(model.has_local_path ?? isDone)}
-            title={(model.has_local_path ?? isDone) ? '打开模型所在目录' : '暂无本地模型文件'}
+            disabled={isDeleting || !model.has_local_path}
+            title={model.has_local_path ? '打开模型所在目录' : '暂无本地模型文件'}
             aria-label={`打开 ${model.name} 所在目录`}
             className="flex items-center gap-1 px-2 py-1.5 rounded text-[11px] text-fg-secondary enabled:hover:text-fg-accent enabled:hover:bg-fg-accent/10 disabled:opacity-40 transition-colors"
           >

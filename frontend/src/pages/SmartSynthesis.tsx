@@ -186,6 +186,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
   const handleSourceFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    e.target.value = ''
     try {
       const dataUrl = await fileToDataUrl(file)
       setSourceImage(dataUrl)
@@ -411,7 +412,6 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽主图到此处，或点击打开</p>
               <Button onClick={() => immichActionsRef.current?.chooseSource()}>打开主图</Button>
-              <input ref={sourceFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleSourceFileInput} />
             </div>
           ) : showResult && resultImage && sourceImage ? (
             <ImageCompare

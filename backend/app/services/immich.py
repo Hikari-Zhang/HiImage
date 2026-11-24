@@ -108,7 +108,7 @@ class Immich:
                 ) as response:
                     if not 200 <= response.status_code < 300:
                         status = response.status_code
-                        raise HTTPException(status if status in {401, 403, 404, 413, 429} else 502,
+                        raise HTTPException(status if status in {400, 401, 403, 404, 413, 422, 429} else 502,
                                             f"Immich 请求失败（{status}）")
                     data = bytearray()
                     for chunk in response.iter_content(64 * 1024):

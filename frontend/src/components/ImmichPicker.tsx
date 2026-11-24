@@ -77,7 +77,13 @@ export default function ImmichPicker({ close, limit, multiple, onImport }: {
         if (multiple && blob.size > MAX_FILE_BYTES) throw new Error('单图超过 20 MB')
         if (multiple && bytes + blob.size > MAX_TOTAL_INPUT_BYTES) throw new Error('本次批量导入超过 128 MB')
         bytes += blob.size
-        ready.push({ id: asset.id, taken: asset.taken, file: new File([blob], asset.name, { type: blob.type }), token: response.headers.get('X-Immich-Source') ?? '', backend: api.backend })
+        ready.push({
+          id: asset.id,
+          taken: response.headers.get('X-Immich-Taken-At') ?? undefined,
+          file: new File([blob], asset.name, { type: blob.type }),
+          token: response.headers.get('X-Immich-Source') ?? '',
+          backend: api.backend,
+        })
       } catch (error) {
         errors.push(`${asset.name}：${error instanceof Error ? error.message : String(error)}`)
       }

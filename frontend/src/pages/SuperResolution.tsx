@@ -594,7 +594,6 @@ export default function SuperResolution() {
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽图片到此处，或点击打开文件</p>
               <Button onClick={() => immichActionsRef.current?.chooseSource()}>打开图片</Button>
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileInput} />
             </div>
           ) : resultImage ? (
             <div className="w-full h-full p-4">

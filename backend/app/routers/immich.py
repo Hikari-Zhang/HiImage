@@ -133,7 +133,7 @@ def timestamp(value):
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).isoformat()
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, OverflowError):
         raise HTTPException(422, "日期格式无效") from None
 
 
@@ -157,7 +157,13 @@ def unseal(token, secret, generation):
 
 
 def taken_at(asset):
-    return (asset.get("exifInfo") or {}).get("dateTimeOriginal") or asset.get("fileCreatedAt")
+    for value in ((asset.get("exifInfo") or {}).get("dateTimeOriginal"), asset.get("fileCreatedAt")):
+        if value:
+            try:
+                return timestamp(value)
+            except HTTPException:
+                continue
+    return None
 
 
 @router.get("/assets/{source}/original")
@@ -167,10 +173,13 @@ def original(source: UUID, remote=Depends(client)):
         raise HTTPException(415, "此资产无法导入")
     data = remote.call("GET", f"/assets/{source}/original", limit=service.image_limit(), binary=True)
     mime, _ = service.image_format(data)
-    token = seal({"id": str(source), "checksum": service.checksum(data), "taken": taken_at(row),
+    taken = taken_at(row)
+    token = seal({"id": str(source), "checksum": service.checksum(data), "taken": taken,
                   "generation": remote.config["generation"], "expires": time.time() + 86400}, remote.config["signing_key"])
-    return Response(data, media_type=mime, headers={"X-Immich-Source": token, "Cache-Control": "no-store",
-                                                    "X-Content-Type-Options": "nosniff"})
+    headers = {"X-Immich-Source": token, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+    if taken:
+        headers["X-Immich-Taken-At"] = taken
+    return Response(data, media_type=mime, headers=headers)
 
 
 @router.post("/save")
@@ -214,7 +223,7 @@ def upload_result(remote, path, fingerprint, data, name, mime, taken, operation,
     try:
         uploaded = remote.upload(data, name, mime, taken, operation, favorite=favorite)
     except HTTPException as exc:
-        if exc.status_code in {401, 403, 413, 429}:
+        if exc.status_code in {400, 401, 403, 413, 422, 429}:
             record["state"] = "rejected"
             service.write_record(path, record)
         raise
@@ -319,8 +328,7 @@ def verify_target(asset, taken, expected, digest):
             or asset.get("type") != "IMAGE" or asset.get("visibility") != "timeline"
             or asset.get("checksum") != digest or asset.get("isTrashed") is not False
             or asset.get("isFavorite") is not expected["favorite"]
-            or not asset.get("hasMetadata") or not taken_at(asset)
-            or timestamp(taken_at(asset)) != timestamp(taken)):
+            or not asset.get("hasMetadata") or taken_at(asset) != timestamp(taken)):
         raise HTTPException(409, "新图的内容、归属、收藏或拍摄时间尚未验证")
 
 

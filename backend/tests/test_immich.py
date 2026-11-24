@@ -1,8 +1,11 @@
 """Exercise the actual proxy routes with a controllable Immich upstream."""
 import io
+import json
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import pytest
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -34,6 +37,8 @@ class Upstream:
         self.trash_enabled = True
         self.upload_status = "created"
         self.upload_error = False
+        self.upload_rejection = None
+        self.upload_fields = []
         self.migration_error = False
         self.target_checksum = service.checksum(RESULT)
         self.features_checks = 0
@@ -52,7 +57,8 @@ class Upstream:
         if path == "/shared-links":
             return []
         if path == "/search/metadata":
-            return {"assets": {"items": [{"id": SOURCE, "type": "IMAGE", "originalFileName": "original.png"}],
+            return {"assets": {"items": [{"id": SOURCE, "type": "IMAGE", "originalFileName": "original.png",
+                                          "localDateTime": "2024-01-02T11:04:05Z"}],
                                "nextPage": None}}
         if path.endswith("/original") or path.endswith("/thumbnail"):
             return ORIGINAL
@@ -72,8 +78,11 @@ class Upstream:
                     "fileCreatedAt": TAKEN, "hasMetadata": True,
                     "checksum": service.checksum(ORIGINAL) if original else self.target_checksum}
         if (method, path) == ("POST", "/assets"):
+            self.upload_fields.append(options["data"])
             if self.upload_error:
-                raise HTTPException(502, "upload timeout")
+                raise requests.Timeout("upload timeout")
+            if self.upload_rejection:
+                raise HTTPException(self.upload_rejection, "upload rejected")
             return {"id": TARGET, "status": self.upload_status}
         if (method, path) == ("DELETE", "/assets"):
             assert self.target_album
@@ -91,7 +100,20 @@ def integration(monkeypatch, tmp_path):
     monkeypatch.setenv("HIIMAGE_IMMICH_ACCESS_TOKEN", TOKEN)
     monkeypatch.setattr(service, "ROOT", tmp_path)
     monkeypatch.setattr(immich, "CONFIG", tmp_path / "connection.json")
-    monkeypatch.setattr(service.Immich, "call", lambda _self, *args, **kwargs: upstream.call(*args, **kwargs))
+
+    def request(_session, method, url, **options):
+        response = requests.Response()
+        try:
+            body = upstream.call(method, urlsplit(url).path.removeprefix("/api"), **options)
+            response.status_code = 200
+        except HTTPException as error:
+            body = {"message": error.detail}
+            response.status_code = error.status_code
+        response._content = body if isinstance(body, bytes) else json.dumps(body).encode()
+        response._content_consumed = True
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", request)
     app = FastAPI()
     app.include_router(immich.router, prefix="/api")
     with TestClient(app, base_url="http://testserver/api/immich/") as client:
@@ -138,6 +160,42 @@ def test_configure_browse_import_and_save(integration):
     assert ("DELETE", "/assets") not in upstream.calls
 
 
+def test_original_supplies_actual_capture_time_for_save(integration):
+    client, upstream = integration
+    generation = configure(client, "upload")
+    item = client.get("assets").json()["items"][0]
+    original = client.get(f"assets/{SOURCE}/original")
+    taken = original.headers["X-Immich-Taken-At"]
+
+    assert item["taken"] == "2024-01-02T11:04:05Z"
+    assert taken == "2024-01-02T03:04:05+00:00"
+    result = submit(client, "save", operation=str(uuid4()), generation=generation, taken=taken)
+    assert result.status_code == 200
+    assert upstream.upload_fields[0]["fileCreatedAt"] == taken
+
+
+@pytest.mark.parametrize("action", ["save", "replace"])
+def test_rejected_upload_can_retry_same_operation(integration, action):
+    client, upstream = integration
+    generation = configure(client)
+    params = {"operation": str(uuid4())}
+    if action == "replace":
+        params["confirmation"] = confirmation(client)
+    else:
+        params["generation"] = generation
+
+    upstream.upload_rejection = 400
+    assert submit(client, action, **params).status_code == 400
+    assert client.get("operations").json()[0]["state"] == "rejected"
+    assert not upstream.trashed
+
+    upstream.upload_rejection = None
+    result = submit(client, action, **params)
+    assert result.status_code == 200
+    assert result.json()["state"] == ("replaced" if action == "replace" else "created")
+    assert upstream.calls.count(("POST", "/assets")) == 2
+
+
 @pytest.mark.parametrize("failure", ["upload_error", "duplicate", "checksum", "migration_error", "disable_before_delete"])
 def test_original_stays_when_replacement_cannot_be_verified(integration, failure):
     client, upstream = integration
@@ -148,9 +206,14 @@ def test_original_stays_when_replacement_cannot_be_verified(integration, failure
         upstream.target_checksum = "wrong"
     else:
         setattr(upstream, failure, True)
-    result = submit(client, "replace", operation=str(uuid4()), confirmation=confirmation(client))
+    params = {"operation": str(uuid4()), "confirmation": confirmation(client)}
+    result = submit(client, "replace", **params)
     assert result.status_code in {409, 502} or result.json()["migration_pending"] is True
     assert ("DELETE", "/assets") not in upstream.calls
+    if failure == "upload_error":
+        upstream.upload_error = False
+        assert submit(client, "replace", **params).status_code == 409
+        assert upstream.calls.count(("POST", "/assets")) == 1
 
 
 @pytest.mark.parametrize("delete_timeout", [False, True])

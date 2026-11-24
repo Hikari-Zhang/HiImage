@@ -121,6 +121,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    e.target.value = ''
     fileToDataUrl(file).then((dataUrl) => {
       setSourceImage(dataUrl)
       setShowResult(false)
@@ -408,7 +409,6 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
               <Upload size={48} strokeWidth={1} />
               <p className="text-sm">拖拽图片到此处，或点击打开文件</p>
               <Button onClick={() => immichActionsRef.current?.chooseSource()}>打开图片</Button>
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileInput} />
             </div>
           ) : showResult && resultImage && sourceImage ? (
             <ImageCompare beforeSrc={sourceImage} afterSrc={resultImage} beforeLabel="原图" afterLabel="处理后" />
