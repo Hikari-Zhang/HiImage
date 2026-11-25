@@ -165,6 +165,7 @@ function isPythonEnvironmentReady(python, config, runProbe = spawnSync) {
     [
       '-c',
         'import sys, fastapi, torch, uvicorn, rapidocr_onnxruntime; '
+        + 'from realesrgan import RealESRGANer; '
         + 'from importlib.metadata import version, distributions; from packaging.requirements import Requirement; '
         + 'assert not any(d.metadata.get("Name", "").lower() == "iopaint" for d in distributions()), "Retired dependency still installed"; '
         + `requirements = [Requirement(spec) for spec in ${JSON.stringify(FLUX_PACKAGES)}]; `

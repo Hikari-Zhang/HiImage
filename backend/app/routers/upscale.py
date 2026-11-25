@@ -21,6 +21,7 @@ from core.utils import resolve_default_device
 from app.task_route import TaskRoute
 
 router = APIRouter(route_class=TaskRoute)
+UPSCALE_DEPENDENCY_MESSAGE = "超分辨率依赖未就绪，请运行 npm run setup 后重启后端。"
 
 
 def enforce_output_pixel_budget(image: np.ndarray, model_name: str, outscale: int | None) -> int:
@@ -160,6 +161,9 @@ async def upscale_image_batch(req: BatchUpscaleRequest):
                 f"批量超分模型加载失败: {error}",
                 source="upscale_batch",
             )
+            if isinstance(error, ImportError):
+                await progress_manager.send_error(UPSCALE_DEPENDENCY_MESSAGE, task_id=req.task_id)
+                raise HTTPException(503, UPSCALE_DEPENDENCY_MESSAGE) from error
             raise RuntimeError(f"模型加载失败: {error}") from error
 
         success_count = 0
@@ -321,6 +325,9 @@ async def upscale_image(req: UpscaleRequest):
             image = None
         if result is not None:
             result = None
-        await progress_manager.send_error(str(e), task_id=req.task_id)
+        message = UPSCALE_DEPENDENCY_MESSAGE if isinstance(e, ImportError) else str(e)
+        await progress_manager.send_error(message, task_id=req.task_id)
         log_manager.error(f"超分辨率失败: {str(e)}", source="upscale")
+        if isinstance(e, ImportError):
+            raise HTTPException(503, message) from e
         raise

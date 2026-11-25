@@ -13,7 +13,7 @@ const {
   selectTorchConfig,
 } = require('../lib/python-env');
 
-test('isPythonEnvironmentReady probes torch, FastAPI and Uvicorn together', () => {
+test('isPythonEnvironmentReady probes the backend and Real-ESRGAN runtime', () => {
   let probeArgs;
   const ready = isPythonEnvironmentReady(
     'python',
@@ -26,6 +26,7 @@ test('isPythonEnvironmentReady probes torch, FastAPI and Uvicorn together', () =
 
   assert.equal(ready, true);
   assert.match(probeArgs[1], /fastapi, torch, uvicorn/);
+  assert.match(probeArgs[1], /from realesrgan import RealESRGANer/);
   assert.match(probeArgs[1], /sys\.version_info/);
   assert.match(probeArgs[1], /version\(req.name\) in req.specifier/);
   for (const spec of FLUX_PACKAGES) assert.ok(probeArgs[1].includes(spec));

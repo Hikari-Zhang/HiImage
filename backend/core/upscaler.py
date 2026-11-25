@@ -233,6 +233,8 @@ class Upscaler:
             self._current_tile = self._tile
 
         self._ensure_model_loaded()
+        # Batch requests preload the model before the first image supplies its dimensions.
+        self._upsampler.tile_size = self._current_tile
 
         # Real-ESRGAN 内部使用 BGR
         img_bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -310,13 +312,12 @@ class Upscaler:
                   num_block 决定深度：6（anime_6B）或 23（其他）
         """
         try:
+            import torch
             from realesrgan import RealESRGANer
             from basicsr.archs.rrdbnet_arch import RRDBNet
-        except ImportError as e:
+        except (ImportError, OSError, RuntimeError) as e:
             raise ImportError(
-                f"缺少依赖包: {e}\n"
-                "请在项目虚拟环境中执行：\n"
-                "  pip install realesrgan basicsr facexlib"
+                f"超分辨率依赖未就绪，请运行 npm run setup 后重启后端。\n{e}"
             ) from e
 
         arch      = _MODEL_ARCH.get(self.model_name, "RRDBNet")
@@ -344,16 +345,6 @@ class Upscaler:
                 scale=self.scale
             )
 
-        # 解析 device 为 PyTorch 格式
-        half = False
-        if self.device == 'cuda':
-            gpu_id = 0
-            half = True   # cuda 上使用半精度加速
-        elif self.device == 'mps':
-            gpu_id = 0    # mps 映射为 gpu_id=0（basicsr 内部特殊处理）
-        else:
-            gpu_id = None  # cpu
-
         tile_pad = Upscaler.DEFAULT_TILE_PAD if tile > 0 else 10
 
         upsampler = RealESRGANer(
@@ -363,8 +354,8 @@ class Upscaler:
             tile=tile,      # 0 = 不分块；>0 = 分块大小
             tile_pad=tile_pad,
             pre_pad=0,
-            half=half,
-            gpu_id=gpu_id,
+            half=self.device == 'cuda',
+            device=torch.device(self.device),
         )
         outscale_info = f", outscale={self.outscale}x" if self.outscale != self.scale else ""
         tile_info = f", tile={tile}" if tile > 0 else ""
