@@ -6,7 +6,7 @@ import {
 } from '../services/immich'
 import { useBackendStore } from '../stores/useBackendStore'
 import Button from './ui/Button'
-import ImmichDialog from './ImmichDialog'
+import ImmichDialog from './ModalDialog'
 import ImmichPicker, { type ImmichImport } from './ImmichPicker'
 
 type Preview = { confirmation: string; albums: ImmichAlbum[]; taken: string; favorite: boolean }

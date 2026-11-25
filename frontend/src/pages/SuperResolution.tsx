@@ -6,6 +6,7 @@ import { Upload, Download, Images, List, CheckCircle2 } from 'lucide-react'
 import { Button, Select, Progress, showToast } from '../components/ui'
 import ImageCanvas from '../components/ImageCanvas'
 import ImageCompare from '../components/ImageCompare'
+import ImageHistory from '../components/ImageHistory'
 import PageHeader from '../components/layout/PageHeader'
 import SendToEditor from '../components/SendToEditor'
 import ModelSelect from '../components/ModelSelect/ModelSelect'
@@ -22,6 +23,7 @@ import { useDownloadManager } from '../hooks/useDownloadManager'
 import { DownloadStatus, modelFileIssue, modelNeedsDownload } from '../constants'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
 import { downloadBlob, dataUrlToBlob } from '../services/fileService'
+import { recordImageResult } from '../services/imageHistory'
 import JSZip from 'jszip'
 import { resolveOutscale } from '../services/upscale'
 import {
@@ -145,6 +147,7 @@ export default function SuperResolution() {
       }))
       setBatchItems(prev => [...prev, ...newItems])
       if (newItems.length > 0) showToast('success', `已添加 ${newItems.length} 张图片到队列`)
+      return newItems.length > 0
     } else {
       // 单图模式：只处理第一个文件
       const file = files[0]
@@ -295,6 +298,7 @@ export default function SuperResolution() {
           resultDataUrl,
           retainedResultBytes,
         ).item
+        recordImageResult(taskId, 'upscale-batch', result.image, items[index].fileName)
       } else {
         throw new Error('处理失败：无返回结果')
       }
@@ -410,6 +414,7 @@ export default function SuperResolution() {
 
       if (!isCurrentTask(taskId)) return
       setResultImage(`data:image/png;base64,${result.image}`, result.width, result.height)
+      recordImageResult(taskId, 'upscale', result.image)
       finishProcess(taskId, '超分辨率处理完成')
       showToast('success', `超分辨率完成: ${result.width}x${result.height}`)
     } catch (err: any) {
@@ -513,6 +518,17 @@ export default function SuperResolution() {
         }
         right={
           <div className="flex items-center gap-1">
+            <ImageHistory disabled={isProcessing || isBatchProcessing} useLabel={mode === 'batch' ? '加入批量队列' : undefined}
+              onUse={async file => {
+                if (mode === 'batch') {
+                  if (!importFiles([file])) throw new Error('图片未能加入队列，请检查图片大小和批量容量。')
+                  return
+                }
+                const image = await fileToDataUrl(file)
+                if (useUpscaleImageStore.getState().sourceRevision !== sourceRevision
+                  || useUpscaleBatchStore.getState().mode !== mode) throw new Error('编辑器状态已改变，请重新选择')
+                loadSource(image)
+              }} />
             {mode === 'single' && <SendToEditor image={resultImage} current="upscale" />}
             <button
               onClick={() => setMode('single')}

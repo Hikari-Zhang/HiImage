@@ -6,6 +6,7 @@ const pages = [
   { path: 'watermark', load: () => import('./pages/WatermarkRemoval') },
   { path: 'cutout', load: () => import('./pages/CutoutPage') },
   { path: 'upscale', load: () => import('./pages/SuperResolution') },
+  { path: 'prompt-edit', load: () => import('./pages/PromptEditPage') },
   { path: 'logs', load: () => import('./pages/Logs') },
   { path: 'settings', load: () => import('./pages/Settings') },
 ]

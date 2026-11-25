@@ -6,6 +6,7 @@ import { clsx } from 'clsx'
 import MaskCanvas from '../components/MaskCanvas'
 import MaskToolbar from '../components/MaskToolbar'
 import ImageCompare from '../components/ImageCompare'
+import ImageHistory from '../components/ImageHistory'
 import PageHeader from '../components/layout/PageHeader'
 import SendToEditor from '../components/SendToEditor'
 import { Button, Select, Slider, Progress, showToast } from '../components/ui'
@@ -24,6 +25,7 @@ import { PostprocessMethod, DownloadStatus, modelFileIssue, modelNeedsDownload }
 import type { MaskTool } from '../types/mask'
 import type { ROI } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
+import { recordImageResult } from '../services/imageHistory'
 import { createTaskId } from '../services/taskId'
 import { createTaskProgressSession } from '../services/taskProgress'
 import type { RedrawOptions, WatermarkCandidate } from '../services/api/processing'
@@ -258,6 +260,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
 
       if (!isCurrentTask(taskId)) return
       setResultImage(`data:image/png;base64,${resultBase64}`)
+      recordImageResult(taskId, 'watermark', resultBase64)
       setShowResult(true)
       finishProcess(taskId, '处理完成')
       showToast('success', usePipeline ? 'Pipeline 处理完成' : '水印去除完成')
@@ -387,7 +390,17 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
       <PageHeader
         title="去水印"
         subtitle={imageWidth > 0 ? `${imageWidth} x ${imageHeight}` : undefined}
-        right={<div className="flex items-center gap-2"><SendToEditor image={resultImage} current="watermark" /><span className="text-xs text-fg-secondary">{inpaintModel} | 实际设备 {effectiveDevice}{effectiveDevice !== device ? `（请求 ${device}）` : ''}</span></div>}
+        right={
+          <div className="flex items-center gap-2">
+            <ImageHistory disabled={isProcessing} onUse={async file => {
+              const image = await fileToDataUrl(file)
+              if (useImageStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
+              setSourceImage(image)
+            }} />
+            <SendToEditor image={resultImage} current="watermark" />
+            <span className="text-xs text-fg-secondary">{inpaintModel} | 实际设备 {effectiveDevice}{effectiveDevice !== device ? `（请求 ${device}）` : ''}</span>
+          </div>
+        }
       />
 
       {/* Content area */}

@@ -1,6 +1,6 @@
 # HiImage
 
-HiImage 是面向浏览器的 AI 图像处理 Web 应用，提供去水印、超分辨率、抠图、模型管理和实时日志。React/Vite 前端通过 HTTP、WebSocket 与 SSE 访问 FastAPI；生产环境由 Nginx 提供静态资源并把 `/api/` 同源代理到后端。
+HiImage 是面向浏览器的 AI 图像处理 Web 应用，提供去水印、超分辨率、抠图、提示词编辑、模型管理和实时日志。React/Vite 前端通过 HTTP、WebSocket 与 SSE 访问 FastAPI；生产环境由 Nginx 提供静态资源并把 `/api/` 同源代理到后端。
 
 ## 运行边界
 
@@ -8,6 +8,7 @@ HiImage 是面向浏览器的 AI 图像处理 Web 应用，提供去水印、超
 - Web API 已移除服务器路径读写模式；浏览器仅上传内容，并通过浏览器下载保存结果。
 - `GET /api/settings` 不返回 HF token 明文，只返回 `hf_token_configured`；`PUT` 中省略或传空 token 会保留原值，非空值会替换，`clear_hf_token=true` 才显式清除。
 - 各工具的原图、结果、遮罩和编辑参数独立；跨工具使用结果通过“发送结果到…”显式传递。页面换图只使本会话旧任务失效，不会清掉其他工具或超分批量任务。浏览器刷新后可查询最近任务并下载仍在服务端暂存的成功结果；原图、编辑内容与剩余批量队列不恢复，服务重启后不能取回旧任务结果。
+- 去水印、抠图、超分辨率和提示词编辑的出图结果自动保存到当前浏览器的历史记录。可将任意历史图片设为当前工作台的原图，或在批量超分模式下加入队列。历史记录支持单条删除与清空，刷新页面后仍可查看。
 - 每个推理请求都必须携带 `task_id`，进度 WebSocket 使用同一 ID 订阅独立任务频道；所有 WebSocket 在握手前校验 Origin。
 - 推理调度按单个后端进程生效：每个进程固定执行 1 个推理任务，默认最多等待 4 个。当前不支持多进程间共享队列；部署多个 worker 会各自创建独立 GPU 队列，可能导致并发占用同一 GPU。
 - 本地开发与 Docker 默认只监听 `127.0.0.1`。
@@ -42,6 +43,44 @@ npm run frontend:dev    # 只启动 Vite
 npm run typecheck
 npm test
 ```
+
+## 提示词编辑
+
+在 Apple Silicon Mac 上直接运行后端时，可使用本地模型编辑单张图片。页面支持模型切换、本机和 Immich 导入、前后对比及结果下载。出图后可点击「将结果设为原图」，以当前结果继续编辑。
+
+- **整图**默认使用 FLUX.2 Klein 4B。输出长边最多 1024 像素，模型可能改变指令未提及的细节。
+- **局部选区**使用 FIBO 2.0 Edit Turbo。在原图上涂抹要修改的位置，提交提示词后可下载与原图同尺寸的 8 位 PNG。模型推理长边最多 1024 像素，合成时保留选区外的原图像素。
+
+在仓库根目录用 [uv](https://docs.astral.sh/uv/) 安装独立运行环境，并预下载约 4.6 GB 的量化权重。运行时在本机处理原图和提示词。
+
+```bash
+edit_cache="${HIIMAGE_CACHE:-$HOME/.cache}/hiimage"
+uv venv --python 3.12 "$edit_cache/prompt-edit"
+uv pip install --python "$edit_cache/prompt-edit/bin/python" -r backend/requirements-prompt-edit.txt
+"$edit_cache/prompt-edit/bin/hf" download mflux-community/flux2-klein-4b-mflux-q4 \
+  --revision 794cd159538149ad9830848508c31f0ea7088e58 \
+  --local-dir "$edit_cache/prompt-edit-model" \
+  --include 'text_encoder/*' --include 'tokenizer/*' --include 'transformer/*' --include 'vae/*'
+```
+
+如需使用可选模型，在同一个 MFlux 环境中下载相应权重。
+
+```bash
+# FLUX 3 Image Klein · 约 5.3 GB
+"$edit_cache/prompt-edit/bin/hf" download mflux-community/flux-3-image-klein-mflux-q4 \
+  --revision 79c0034de040c460e9685bf0127f40af042a2abe \
+  --local-dir "$edit_cache/prompt-edit-models/flux3-image-klein" \
+  --include manifest.json --include 'text_encoder/*' --include 'transformer/*' --include 'vae/*'
+
+# FIBO 2.0 Edit Turbo · 约 7.2 GB
+"$edit_cache/prompt-edit/bin/hf" download mflux-community/fibo-2-0-edit-turbo-mflux-q4 \
+  --revision b7c949d7e2a9e3e6b86859a3a97a40f7318293c4 \
+  --local-dir "$edit_cache/prompt-edit-models/fibo2-edit-turbo" \
+  --include mflux_model.json --include 'fonts/*' --include 'processor/*' \
+  --include 'text_encoder/*' --include 'transformer/*' --include 'vae/*'
+```
+
+完成后打开「提示词编辑」，在「编辑模型」里选择。若页面仍显示未就绪，点击「重新检查」。部署或商用前请查看对应模型许可。[FLUX.2 Klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) · [FLUX 3 Image Klein](https://bfl.ai/blog/flux-3-image-klein) · [FIBO 2.0 Edit Turbo](https://huggingface.co/briaai/Fibo-2.0-edit-turbo)
 
 ## 构建与预览
 

@@ -122,6 +122,7 @@ const sessionActions = {
   upscale: actions('upscale'),
   'upscale-batch': actions('upscale-batch'),
   cutout: actions('cutout'),
+  'prompt-edit': actions('prompt-edit'),
 }
 
 export function useSessionProcess(sessionId: EditorSessionId) {

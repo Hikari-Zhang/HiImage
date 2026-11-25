@@ -36,6 +36,7 @@ describe('useBackendAPI task_id propagation', () => {
     await api.cutout({ image: 'i', model: 'm', device: 'cpu', task_id: 'task-cutout' })
     await api.cutoutRefine({ mask: 'm', original_image: 'i', feather: 0, dilate: 0, task_id: 'task-refine' })
     await api.cutoutComposite({ image: 'i', background_color: '#fff', task_id: 'task-composite' })
+    await api.editWithPrompt({ image: 'i', prompt: 'change the background', task_id: 'task-prompt-edit' })
 
     expect(bodies.map((body) => body.task_id)).toEqual([
       'task-detect',
@@ -46,6 +47,7 @@ describe('useBackendAPI task_id propagation', () => {
       'task-cutout',
       'task-refine',
       'task-composite',
+      'task-prompt-edit',
     ])
   })
 })

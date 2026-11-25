@@ -12,6 +12,7 @@ import { Stage, Layer, Image as KonvaImage, Line } from 'react-konva'
 import Konva from 'konva'
 import { Button, Slider, Progress, Select, showToast } from '../components/ui'
 import ModelSelect from '../components/ModelSelect/ModelSelect'
+import ImageHistory from '../components/ImageHistory'
 import PageHeader from '../components/layout/PageHeader'
 import SendToEditor from '../components/SendToEditor'
 import { useCutoutStore } from '../stores/useCutoutStore'
@@ -29,6 +30,7 @@ import type { ModelGroup } from '../components/ModelSelect/ModelSelect'
 import type { MaskStroke } from '../types/mask'
 import { POINT_SAMPLE_RATIO } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
+import { recordImageResult } from '../services/imageHistory'
 import { createTaskId } from '../services/taskId'
 import { createTaskProgressSession } from '../services/taskProgress'
 
@@ -406,6 +408,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       }))
       if (!isCurrentTask(taskId)) return
       setResult(result.image, result.mask)
+      recordImageResult(taskId, 'cutout', result.image, sourceFile?.name)
       finishProcess(taskId, '抠图完成')
       showToast('success', '抠图完成！')
     } catch (err: any) {
@@ -413,7 +416,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       setError(taskId, err.message || '抠图失败')
       showToast('error', err.message || '抠图失败')
     }
-  }, [sourceImage, cutoutModel, device, modelReady, startDownload, cutout, setResult, startProcess, finishProcess, setError, clearBrushStrokes])
+  }, [sourceImage, sourceFile, cutoutModel, device, modelReady, startDownload, cutout, setResult, startProcess, finishProcess, setError, clearBrushStrokes, setCompositeResult])
 
   // ── 遮罩精修 ──
   const handleRefine = useCallback(async () => {
@@ -444,6 +447,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       })
       if (!isCurrentTask(taskId)) return
       setResult(result.image, result.mask)
+      recordImageResult(taskId, 'refine', result.image, sourceFile?.name)
       finishProcess(taskId, '精修完成')
       showToast('success', '边缘精修完成！')
     } catch (err: any) {
@@ -451,7 +455,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       setError(taskId, err.message || '精修失败')
       showToast('error', err.message || '精修失败')
     }
-  }, [resultMask, sourceImage, feather, dilate, brushStrokes, imageWidth, imageHeight, cutoutRefine, setResult, startProcess, finishProcess, setError])
+  }, [resultMask, sourceImage, sourceFile, feather, dilate, brushStrokes, imageWidth, imageHeight, cutoutRefine, setResult, startProcess, finishProcess, setError])
 
   // ── 合成到背景色 ──
   const handleComposite = useCallback(async () => {
@@ -467,6 +471,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       }))
       if (!isCurrentTask(taskId)) return
       setCompositeResult(result.image)
+      recordImageResult(taskId, 'composite', result.image, sourceFile?.name)
       finishProcess(taskId, '合成完成')
       showToast('success', '合成完成！')
     } catch (err: any) {
@@ -474,7 +479,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       setError(taskId, err.message || '合成失败')
       showToast('error', err.message || '合成失败')
     }
-  }, [resultImage, bgColor, cutoutComposite, startProcess, finishProcess, setError])
+  }, [resultImage, sourceFile, bgColor, cutoutComposite, setCompositeResult, startProcess, finishProcess, setError])
 
   // ── 保存图片 ──
   const handleSave = useCallback(async () => {
@@ -526,7 +531,16 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
 
   return (
     <div className="flex flex-col h-full">
-      <PageHeader title="抠图" right={<SendToEditor image={compositeResult || resultImage} current="cutout" />} />
+      <PageHeader title="抠图" right={
+        <div className="flex items-center gap-2">
+          <ImageHistory disabled={isProcessing} onUse={async file => {
+            const image = await fileToDataUrl(file)
+            if (useCutoutStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
+            setSourceImage(image, undefined, file)
+          }} />
+          <SendToEditor image={compositeResult || resultImage} current="cutout" />
+        </div>
+      } />
 
       <div className="flex-none px-3 py-1 border-b border-border-subtle">
         <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="cutout" revision={sourceRevision} original={sourcePreviewUrl} result={compositeResult || resultImage}

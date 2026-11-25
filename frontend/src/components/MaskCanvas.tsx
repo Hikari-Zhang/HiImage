@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback, useMemo } from 'react'
+import { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
 import { Stage, Layer, Image as KonvaImage, Line, Rect } from 'react-konva'
 import Konva from 'konva'
 import type { MaskStroke, BrushSettings, MaskTool } from '../types/mask'
@@ -30,7 +30,10 @@ interface MaskCanvasProps {
   onStrokeComplete: (stroke: MaskStroke) => void
   onUndo: () => void
   showMaskPreview?: boolean
+  maskPreviewMaxEdge?: number
 }
+
+const EMPTY_ROIS: ROI[] = []
 
 /**
  * 低 CPU 占用的遮罩绘制画布组件
@@ -45,13 +48,14 @@ export default function MaskCanvas({
   brushSettings,
   canvasTool,
   panMode = false,
-  rois = [],
+  rois = EMPTY_ROIS,
   selectedROIs = [],
   onROISelect,
   onROIDrawn,
   onStrokeComplete,
   onUndo,
   showMaskPreview = true,
+  maskPreviewMaxEdge = Infinity,
 }: MaskCanvasProps) {
   const stageRef = useRef<Konva.Stage>(null)
   const imageLayerRef = useRef<Konva.Layer>(null)
@@ -66,7 +70,9 @@ export default function MaskCanvas({
     setMaskPreview(null)
     if (!isActive || !showMaskPreview || !imageObj || (!strokes.length && !rois.length)) return
     const timer = setTimeout(() => {
-      exportCombinedMask(strokes, rois, imageObj.naturalWidth, imageObj.naturalHeight).then(url => {
+      const { naturalWidth, naturalHeight } = imageObj
+      const scale = Math.min(1, maskPreviewMaxEdge / Math.max(naturalWidth, naturalHeight))
+      exportCombinedMask(strokes, rois, naturalWidth, naturalHeight, scale).then(url => {
         if (!active) return
         const mask = new window.Image()
         mask.onload = () => {
@@ -91,7 +97,7 @@ export default function MaskCanvas({
       }).catch(() => { if (active) setMaskPreview(null) })
     }, 150)
     return () => { active = false; clearTimeout(timer) }
-  }, [imageObj, strokes, rois, isActive, showMaskPreview])
+  }, [imageObj, strokes, rois, isActive, showMaskPreview, maskPreviewMaxEdge])
 
   // 视图状态
   const [scale, setScale] = useState(1)
@@ -171,7 +177,7 @@ export default function MaskCanvas({
   }, [])
 
   // 容器大小变化时重新适配
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (imageObjRef.current && containerSize.w > 0) {
       fitToView(imageObjRef.current)
     }

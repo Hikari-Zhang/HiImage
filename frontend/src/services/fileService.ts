@@ -21,11 +21,13 @@ export async function dataUrlToBlob(value: string): Promise<Blob> {
   return new Blob([bytes], { type: mime })
 }
 
-export async function base64ToBlob(value: string, mime = 'application/octet-stream'): Promise<Blob> {
+export function base64ToBytes(value: string): Uint8Array<ArrayBuffer> {
   const { encoded } = normalizeBase64(value)
-  const binary = atob(encoded)
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
-  return new Blob([bytes], { type: mime })
+  return Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))
+}
+
+export async function base64ToBlob(value: string, mime = 'application/octet-stream'): Promise<Blob> {
+  return new Blob([base64ToBytes(value)], { type: mime })
 }
 
 export async function downloadBlob(blob: Blob, filename: string): Promise<void> {

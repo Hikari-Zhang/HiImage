@@ -2,7 +2,7 @@ import { MAX_FILE_BYTES, MAX_TOTAL_INPUT_BYTES } from '../services/batchLimits'
 import { useEffect, useState } from 'react'
 import { immichApi, type ImmichAlbum, type ImmichAsset } from '../services/immich'
 import Button from './ui/Button'
-import ImmichDialog from './ImmichDialog'
+import ImmichDialog from './ModalDialog'
 
 export type ImmichImport = { file: File; id: string; token: string; taken?: string; backend: string }
 const fieldClass = 'bg-bg-tertiary rounded p-2 text-sm'

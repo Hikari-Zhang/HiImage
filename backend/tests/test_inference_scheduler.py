@@ -439,7 +439,7 @@ def test_invalid_pending_configuration_falls_back_safely():
 
 
 def test_all_inference_posts_use_the_shared_admission_dependency():
-    from app.routers import cutout, inpaint, postprocess, upscale
+    from app.routers import cutout, inpaint, postprocess, prompt_edit, upscale
     from app.shared_executor import inference_admission
 
     expected = {
@@ -453,6 +453,7 @@ def test_all_inference_posts_use_the_shared_admission_dependency():
         "/cutout/composite": False,
         "/postprocess/fix": True,
         "/pipeline/run": True,
+        "/prompt-edit": True,
     }
     routes = {
         route.path: route
@@ -461,6 +462,7 @@ def test_all_inference_posts_use_the_shared_admission_dependency():
             upscale.router,
             cutout.router,
             postprocess.router,
+            prompt_edit.router,
         )
         for route in router.routes
         if isinstance(route, APIRoute) and "POST" in route.methods
@@ -522,6 +524,7 @@ def test_routers_do_not_call_run_in_executor_directly():
         "upscale.py",
         "cutout.py",
         "postprocess.py",
+        "prompt_edit.py",
     ]
     for filename in inference_routers:
         assert "run_in_executor" not in (router_dir / filename).read_text(

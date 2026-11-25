@@ -25,6 +25,13 @@ export interface WatermarkDetection {
 }
 
 export function createProcessingAPI(client: ApiClient) {
+  const editWithPrompt = (params: { image: string; prompt: string; task_id: string; model?: string; mask?: string }) =>
+    client.json<ImageResult>('/api/prompt-edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    }, '图片编辑失败')
+
   const detectWatermark = (imageBase64: string, sensitivity: number, taskId: string) => client.json<WatermarkDetection>('/api/detect', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -128,5 +135,5 @@ export function createProcessingAPI(client: ApiClient) {
     body: JSON.stringify(params),
   }, '合成失败')
 
-  return { detectWatermark, inpaint, inpaintWithMask, upscale, runPipeline, cutout, cutoutRefine, cutoutComposite }
+  return { editWithPrompt, detectWatermark, inpaint, inpaintWithMask, upscale, runPipeline, cutout, cutoutRefine, cutoutComposite }
 }

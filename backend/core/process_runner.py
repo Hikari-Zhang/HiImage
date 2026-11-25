@@ -21,11 +21,16 @@ class ProcessCancelled(RuntimeError):
 
 def _stop_cli_process(proc: subprocess.Popen, *, confirm_group=False) -> None:
     """回收超时/异常的 CLI，优先终止其进程树，再等待直接子进程退出。"""
+    group_signal = 0
     if os.name != "nt":
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            if sys.platform != "darwin" or not confirm_group:
+                raise
+            group_signal = signal.SIGKILL
     if proc.poll() is None:
         proc.kill()
     deadline = time.monotonic() + 5
@@ -33,9 +38,15 @@ def _stop_cli_process(proc: subprocess.Popen, *, confirm_group=False) -> None:
     if confirm_group and os.name != "nt":
         while True:
             try:
-                os.killpg(proc.pid, 0)
+                os.killpg(proc.pid, group_signal)
+                group_signal = 0
             except ProcessLookupError:
                 return
+            except PermissionError:
+                # Darwin can report EPERM during teardown while the group still exists.
+                # Require ESRCH before trusting that the group is gone.
+                if sys.platform != "darwin":
+                    raise
             if time.monotonic() >= deadline:
                 raise ProcessCleanupError("无法确认推理进程组退出")
             time.sleep(0.01)
@@ -201,6 +212,10 @@ def _stream_cli_output(cmd, env, timeout, consume, *, cwd=None, cancelled=None,
                     try:
                         _stop_cli_process(proc, confirm_group=confirm_group)
                     except (OSError, subprocess.TimeoutExpired) as exc:
+                        logging.getLogger(__name__).error(
+                            "无法回收推理子进程 %d (%s, errno=%s)",
+                            proc.pid, type(exc).__name__, getattr(exc, "errno", None),
+                        )
                         raise ProcessCleanupError("无法确认推理子进程退出") from exc
 
 

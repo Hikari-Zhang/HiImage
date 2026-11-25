@@ -1,0 +1,3 @@
+# Optional Apple Silicon editing runtime. Install in a separate environment.
+mflux==0.24.0
+hf-xet

@@ -6,7 +6,7 @@ export type ImmichConnection = { configured: boolean; url: string; generation: s
 export type ImmichAsset = { id: string; name: string; taken?: string }
 export type ImmichAlbum = { id: string; name: string }
 export type ImmichSource = { token: string; name: string; taken?: string; backend: string; revision: number }
-export type ImmichEditor = 'watermark' | 'upscale' | 'cutout'
+export type ImmichEditor = 'watermark' | 'upscale' | 'cutout' | 'prompt-edit'
 
 const ACCESS_SESSION_KEY = 'hiimage:immich-access'
 

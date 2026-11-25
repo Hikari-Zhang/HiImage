@@ -333,6 +333,7 @@ HiImage/
 | `/#/watermark` | `WatermarkRemoval.tsx` | 检测候选、编辑遮罩、修复与增强 |
 | `/#/cutout` | `CutoutPage.tsx` | 透明抠图、画笔精修与纯色合成 |
 | `/#/upscale` | `SuperResolution.tsx` | 单图和浏览器批量超分 |
+| `/#/prompt-edit` | `PromptEditPage.tsx` | 单图提示词编辑、原图与结果对比 |
 | `/#/logs` | `Logs.tsx` | 历史及实时日志 |
 | `/#/settings` | `Settings.tsx` | 应用设置，模型管理为内部页签 |
 
@@ -511,10 +512,12 @@ FLUX Fill 通过 DiffusersExecutor 执行去水印重绘。运行时在加载权
 | `POST /api/cutout` | `image`、模型/设备；返回 RGBA `image` 和 `mask` |
 | `POST /api/cutout/refine` | 原图、mask、增加/去除笔画、羽化与膨胀；返回图像和 mask |
 | `POST /api/cutout/composite` | RGBA `image` 与 `background_color`；返回合成图 |
+| `GET /api/prompt-edit/status` | 默认模型，以及各模型的名称、就绪状态与 `supports_mask` |
+| `POST /api/prompt-edit` | `image`、`prompt`、`task_id`，可选 `model`、`seed`、`mask`，返回 PNG、宽、高 |
 | `POST /api/postprocess/fix` | 原图、修复图、mask、后处理方法/设备；返回图像 |
 | `POST /api/pipeline/run` | 图像、mask 或 ROI、修复/后处理/超分开关及参数；返回图像、宽、高 |
 
-所有上述图像 POST 都要求 `task_id`。普通修复参数 `dilation` 限制为 0–100，检测 `sensitivity` 限制为 0–1。各接口额外字段、尺寸校验与异常响应并非完全一致，调用时仍以 Pydantic 请求模型和 OpenAPI 为准。
+所有上述图像 POST 都要求 `task_id`。普通修复参数 `dilation` 限制为 0–100，检测 `sensitivity` 限制为 0–1。提示词编辑通过共享推理队列运行独立的 MFlux 进程，读取本地量化权重，推理长边最多 1024 像素。局部编辑需要选择支持遮罩的模型，当前为 FIBO 2.0 Edit Turbo。遮罩与应用 EXIF 方向后的原图尺寸一致，白色表示要编辑的区域。后端将推理结果缩放回原图尺寸，再使用原始遮罩合成并输出 8 位 PNG。各接口的详细字段、尺寸校验与异常响应以 Pydantic 请求模型和 OpenAPI 为准。
 
 ### 16.3 模型能力、状态与下载
 

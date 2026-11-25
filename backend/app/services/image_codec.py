@@ -46,7 +46,7 @@ def validate_matching_dimensions(image: np.ndarray, other: np.ndarray, label: st
         raise HTTPException(422, f"{label}尺寸必须与原图一致")
 
 
-def _decode(value: str, flags: int) -> np.ndarray:
+def _decode(value: str, flags: int, *, orient_unchanged: bool = False) -> np.ndarray:
     error = check_image_size(value)
     if error is not None:
         raise HTTPException(413, "图像文件超出大小限制")
@@ -57,6 +57,7 @@ def _decode(value: str, flags: int) -> np.ndarray:
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(payload)) as header:
                 width, height = header.size
+                orientation = header.getexif().get(274) if orient_unchanged else None
                 enforce_rgba_budget(
                     width, height,
                     max_mb=int(get("image.max_input_rgba_mb", 256)), label="输入",
@@ -69,6 +70,13 @@ def _decode(value: str, flags: int) -> np.ndarray:
             image.shape[1], image.shape[0],
             max_mb=int(get("image.max_input_rgba_mb", 256)), label="输入",
         )
+        # IMREAD_UNCHANGED preserves alpha but skips EXIF orientation.
+        if orientation in (5, 6, 7, 8):
+            image = image.swapaxes(0, 1)
+        if orientation in (2, 3, 6, 7):
+            image = image[:, ::-1]
+        if orientation in (3, 4, 7, 8):
+            image = image[::-1]
         return image
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise HTTPException(413, "图像像素量超出安全解码限制") from exc
@@ -84,9 +92,9 @@ def decode_mask(value: str) -> np.ndarray:
     return _decode(value, cv2.IMREAD_GRAYSCALE)
 
 
-def decode_rgba_image(value: str) -> np.ndarray:
+def decode_rgba_image(value: str, *, orient: bool = False) -> np.ndarray:
     # 固定 uint8、四通道，统一灰度、RGB、RGBA 和 16 位输入的输出契约。
-    image = _decode(value, cv2.IMREAD_UNCHANGED)
+    image = _decode(value, cv2.IMREAD_UNCHANGED, orient_unchanged=orient)
     if image.dtype == np.uint16:
         image = (image / 257).astype(np.uint8)
     if image.ndim == 2:

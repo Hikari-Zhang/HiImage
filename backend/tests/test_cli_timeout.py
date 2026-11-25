@@ -1,11 +1,14 @@
 """真实短时子进程验证硬截止时间与回收，无需模型或网络。"""
 import asyncio
 import os
+import signal
 import subprocess
 import sys
 import time
+from unittest.mock import Mock
+
 import pytest
-from core.process_runner import _stream_cli_output
+from core.process_runner import ProcessCleanupError, _stop_cli_process, _stream_cli_output
 
 
 def run(script, timeout=0.2, callback=None):
@@ -38,6 +41,27 @@ def test_callback_error_keeps_original_exception():
 def test_missing_executable():
     with pytest.raises(RuntimeError, match="启动失败"):
         _stream_cli_output(["missing-hiimage-test-command"], os.environ.copy(), 1, lambda _:None)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 进程组回收")
+@pytest.mark.parametrize("eventually_gone", [True, False])
+def test_darwin_waits_for_group_to_disappear_after_permission_error(monkeypatch, eventually_gone):
+    proc = Mock(pid=123)
+    errors = [PermissionError(), PermissionError(), ProcessLookupError()]
+    killpg = Mock(side_effect=errors if eventually_gone else PermissionError)
+    monotonic = Mock(side_effect=[0, 0, 0 if eventually_gone else 6])
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "platform", "darwin")
+        patch.setattr(os, "killpg", killpg)
+        patch.setattr(time, "monotonic", monotonic)
+        patch.setattr(time, "sleep", Mock())
+        if eventually_gone:
+            _stop_cli_process(proc, confirm_group=True)
+        else:
+            with pytest.raises(ProcessCleanupError, match="无法确认推理进程组退出"):
+                _stop_cli_process(proc, confirm_group=True)
+    assert killpg.call_args.args == (proc.pid, signal.SIGKILL)
+    proc.wait.assert_called_once()
 
 
 def test_timeout_releases_scheduler_slot():

@@ -211,7 +211,7 @@ def test_all_image_posts_have_tracking_and_main_exposes_query():
     paths = {route.path for route in app.routes if isinstance(route, APIRoute) and isinstance(route, TaskRoute) and "POST" in route.methods}
     assert paths == {"/api/detect", "/api/inpaint", "/api/inpaint/with-mask", "/api/pipeline/run",
                      "/api/upscale", "/api/upscale/batch", "/api/cutout", "/api/cutout/refine",
-                     "/api/cutout/composite", "/api/postprocess/fix"}
+                     "/api/cutout/composite", "/api/postprocess/fix", "/api/prompt-edit"}
     assert any(route.path == "/api/tasks/{task_id}" for route in app.routes)
     assert not any(route.path.startswith("/api/synthesis/") for route in app.routes)
 

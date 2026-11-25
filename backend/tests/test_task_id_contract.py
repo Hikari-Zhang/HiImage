@@ -12,9 +12,10 @@ from pydantic import ValidationError
 from app.routers.cutout import CompositeRequest, CutoutRequest, RefineRequest
 from app.routers.inpaint import DetectRequest, InpaintRequest, InpaintWithMaskRequest
 from app.routers.postprocess import PipelineRequest, PostprocessRequest
+from app.routers.prompt_edit import PromptEditRequest
 from app.routers.upscale import BatchUpscaleRequest, UpscaleRequest
 from app.websocket.progress import ProgressManager
-from app.routers import cutout, inpaint, postprocess, upscale
+from app.routers import cutout, inpaint, postprocess, prompt_edit, upscale
 
 
 REQUEST_MODELS = (
@@ -28,9 +29,10 @@ REQUEST_MODELS = (
     RefineRequest,
     CompositeRequest,
     PostprocessRequest,
+    PromptEditRequest,
 )
 
-INFERENCE_ROUTERS = (inpaint.router, postprocess.router, upscale.router, cutout.router)
+INFERENCE_ROUTERS = (inpaint.router, postprocess.router, upscale.router, cutout.router, prompt_edit.router)
 EXPECTED_ROUTE_MODELS = {
     "/detect": DetectRequest,
     "/inpaint": InpaintRequest,
@@ -42,11 +44,12 @@ EXPECTED_ROUTE_MODELS = {
     "/cutout/refine": RefineRequest,
     "/cutout/composite": CompositeRequest,
     "/postprocess/fix": PostprocessRequest,
+    "/prompt-edit": PromptEditRequest,
 }
 
 
 def _declared_request_models() -> set[type[BaseModel]]:
-    modules = (inpaint, postprocess, upscale, cutout)
+    modules = (inpaint, postprocess, upscale, cutout, prompt_edit)
     return {
         candidate
         for module in modules
@@ -137,6 +140,7 @@ def test_progress_manager_isolates_tasks_and_rejects_empty_ids():
         ("/api/cutout", {"image": "x"}),
         ("/api/cutout/refine", {"mask": "x", "original_image": "x"}),
         ("/api/cutout/composite", {"image": "x"}),
+        ("/api/prompt-edit", {"image": "x", "prompt": "change the background"}),
         (
             "/api/postprocess/fix",
             {"original_image": "x", "inpainted_image": "x", "mask": "x"},
