@@ -1,9 +1,10 @@
+import hashlib
 import json
 from io import BytesIO
 
 import numpy as np
 
-from scripts.watermark_quality_samples import SIZE, samples
+from scripts.watermark_quality_samples import PHOTO_DIRECTORY, PHOTOS, SIZE, samples
 
 
 def test_fixed_quality_samples_pair_each_input_with_ground_truth():
@@ -24,6 +25,66 @@ def test_fixed_quality_samples_pair_each_input_with_ground_truth():
         changed = np.any(np.asarray(sample.original) != np.asarray(sample.input), axis=-1)
         assert not changed[mask == 0].any()
         assert bool(changed.any()) == bool(mask.any()) == (not sample.id.endswith("-clean"))
+
+
+def test_photo_corpus_has_pinned_sources_and_one_target_per_overlay():
+    corpus = list(samples("photo"))
+    assert len({sample.id for sample in corpus}) == len(corpus) == 18
+    assert len(list(samples("all"))) == 48
+    for photo in PHOTOS:
+        assert hashlib.sha256((PHOTO_DIRECTORY / photo.filename).read_bytes()).hexdigest() == photo.sha256
+    for sample in corpus:
+        assert sample.photo in PHOTOS
+        assert sample.original.size == sample.input.size == sample.mask.size == SIZE
+        mask = np.asarray(sample.mask) != 0
+        changed = np.any(np.asarray(sample.original) != np.asarray(sample.input), axis=-1)
+        assert not changed[~mask].any()
+        covered = np.zeros_like(mask)
+        for x1, y1, x2, y2 in sample.regions:
+            assert mask[y1:y2, x1:x2].any()
+            covered[y1:y2, x1:x2] = True
+        assert not (mask & ~covered).any()
+        repeats = 3 if sample.id.endswith("-repeated") else 1
+        assert len(sample.regions) == (0 if sample.id.endswith("-clean") else repeats)
+
+
+def test_detection_matching_reassigns_overlapping_boxes_without_double_counting():
+    from scripts import benchmark_watermark_quality as benchmark
+
+    targets = [(0, 0, 10, 10), (8, 0, 18, 10)]
+    predictions = [(0, 0, 18, 10), (0, 0, 10, 10), (22, 0, 30, 10)]
+    matches = benchmark.match_regions(targets, predictions)
+    assert [(match["target"], match["prediction"]) for match in matches] == [(0, 1), (1, 0)]
+
+
+def test_detection_benchmark_records_false_positives_and_false_negatives(tmp_path, monkeypatch):
+    from scripts import benchmark_watermark_quality as benchmark
+
+    samples_by_id = {sample.id: sample for sample in samples("photo")}
+    repeated = samples_by_id["photo-clock-repeated"]
+    clean = samples_by_id["photo-clock-clean"]
+    requests = []
+    bad_region = [2, 3, 8, 12]
+    responses = iter([[repeated.regions[0], bad_region], [bad_region]])
+
+    def respond(request, timeout):
+        assert request.full_url == "http://localhost/api/detect"
+        requests.append(json.loads(request.data))
+        return BytesIO(json.dumps({"engine": "test", "regions": next(responses)}).encode())
+
+    monkeypatch.setattr(benchmark, "urlopen", respond)
+    output = tmp_path / "detect-only"
+    assert benchmark.run([repeated, clean], [], output, "http://localhost", benchmark.REDRAW, sensitivity=.4) == 0
+    assert [request["sensitivity"] for request in requests] == [.4, .4]
+    assert [request["image"] for request in requests] == [benchmark.encode(repeated.input), benchmark.encode(clean.input)]
+    report = json.loads((output / "report.json").read_text())
+    assert report["samples"][0]["source"]["sha256"] == repeated.photo.sha256
+    assert report["samples"][1]["results"] == {}
+    assert report["detection"]["summary"] == {
+        "true_positive": 1, "false_positive": 2, "false_negative": 2,
+        "precision": 1 / 3, "recall": 1 / 3, "clean_images": 1, "clean_images_with_candidates": 1,
+        "request_errors": 0,
+    }
 
 
 def test_benchmark_sends_same_mask_and_scores_both_models(tmp_path, monkeypatch):

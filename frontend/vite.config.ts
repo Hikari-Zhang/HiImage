@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 
 const apiProxy = {
   '/api': {
-    target: 'http://127.0.0.1:8787',
+    target: process.env.HIIMAGE_BACKEND_PROXY_TARGET || 'http://127.0.0.1:8787',
     changeOrigin: true,
     ws: true,
   },

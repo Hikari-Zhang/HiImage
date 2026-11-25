@@ -9,8 +9,10 @@
  */
 
 import { create } from 'zustand'
-import { DownloadStatus } from '../constants'
+import { DownloadStatus, ModelStatus } from '../constants'
 import type { DownloadStatusValue, ModelStatusValue } from '../constants'
+import { createApiClient } from '../services/apiClient'
+import { useBackendStore } from './useBackendStore'
 
 // ── 类型定义 ──────────────────────────────────────────────────────────────────
 
@@ -75,36 +77,31 @@ interface DownloadStoreState {
 
   /** 获取指定模型的任务状态（如不存在返回 undefined） */
   getTask: (modelId: string) => DownloadTask | undefined
+  syncFiles: (models: ReadonlyArray<{ id: string; name: string; status: ModelStatusValue; message: string }>) => void
 }
 
 // ── Store 实现 ────────────────────────────────────────────────────────────────
 
+function updateTask(modelId: string, existing: DownloadTask | undefined, patch: Partial<DownloadTask>): DownloadTask {
+  return {
+    modelName: modelId, position: 0, status: DownloadStatus.QUEUED,
+    message: '', speed: '', downloaded: '', totalSize: '',
+    ...existing, ...patch, modelId, updatedAt: Date.now(),
+  }
+}
+
+const emptyBulkSession = (): BulkSession => ({ active: false, modelIds: [] })
+
 export const useDownloadStore = create<DownloadStoreState>((set, get) => ({
   tasks: {},
-  bulkSession: { active: false, modelIds: [] },
+  bulkSession: emptyBulkSession(),
 
   setTask: (modelId, patch) =>
     set((state) => {
-      const existing = state.tasks[modelId]
-      const base: DownloadTask = existing ?? {
-        modelId,
-        modelName: modelId,
-        status: DownloadStatus.QUEUED as TaskStatus,
-        position: 0,
-        message: '',
-        speed: '',
-        downloaded: '',
-        totalSize: '',
-        updatedAt: Date.now(),
-      }
       return {
         tasks: {
           ...state.tasks,
-          [modelId]: {
-            ...base,
-            ...patch,
-            updatedAt: Date.now(),
-          },
+          [modelId]: updateTask(modelId, state.tasks[modelId], patch),
         },
       }
     }),
@@ -136,4 +133,45 @@ export const useDownloadStore = create<DownloadStoreState>((set, get) => ({
     set({ bulkSession: { active: false, modelIds: [] } }),
 
   getTask: (modelId) => get().tasks[modelId],
+
+  syncFiles: (models) => set((state) => {
+    const tasks = { ...state.tasks }
+    let changed = false
+    for (const { id, name, status, message } of models) {
+      const task = tasks[id]
+      if (task?.statusSyncFailed || task?.status === DownloadStatus.QUEUED
+        || task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.DONE
+        || (task?.status === DownloadStatus.ERROR || task?.status === DownloadStatus.CANCELLED) && status !== ModelStatus.OK) continue
+      if (task?.status === status && task.modelName === name && task.message === message) continue
+      tasks[id] = updateTask(id, task, { modelName: name, status, message, speed: '', downloaded: '', totalSize: '' })
+      changed = true
+    }
+    return changed ? { tasks } : state
+  }),
 }))
+
+type Downloads = Pick<DownloadStoreState, 'tasks' | 'bulkSession'>
+const downloadsByBackend = new Map<string, Downloads>()
+let currentBackend = createApiClient(useBackendStore.getState().backendURL).baseUrl
+
+useBackendStore.subscribe(({ backendURL }) => {
+  const next = createApiClient(backendURL).baseUrl
+  if (next === currentBackend) return
+  const { tasks, bulkSession } = useDownloadStore.getState()
+  downloadsByBackend.set(currentBackend, { tasks, bulkSession })
+  currentBackend = next
+  useDownloadStore.setState(downloadsByBackend.get(next) ?? { tasks: {}, bulkSession: emptyBulkSession() })
+})
+
+export function clearDeletedModelTasks(backend: string, modelIds: string[]) {
+  const current = backend === currentBackend
+  const downloads = current ? useDownloadStore.getState() : downloadsByBackend.get(backend)
+  if (!downloads) return
+  const tasks = { ...downloads.tasks }
+  for (const id of modelIds) {
+    const status = tasks[id]?.status
+    if (status !== DownloadStatus.QUEUED && status !== DownloadStatus.DOWNLOADING) delete tasks[id]
+  }
+  if (current) useDownloadStore.setState({ tasks })
+  else downloadsByBackend.set(backend, { tasks, bulkSession: downloads.bulkSession })
+}

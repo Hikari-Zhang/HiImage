@@ -90,6 +90,19 @@ def test_unknown_parameter_cannot_be_advertised(document):
         validate_registry(document)
 
 
+@pytest.mark.parametrize("model_id,preset", [
+    ("wm_lama", {"dilation": -1}),
+    ("wm_lama", {"dilation": True}),
+    ("wm_lama", {"dilation": 2, "redraw": {"num_inference_steps": 12}}),
+    ("flux_fill", {"dilation": 2, "redraw": {"num_inference_steps": 51}}),
+    ("flux_fill_prompt", {"dilation": 2}),
+])
+def test_invalid_watermark_defaults_are_rejected(document, model_id, preset):
+    model(document, model_id)["watermark_defaults"] = preset
+    with pytest.raises(ModelConfigError, match="watermark_defaults"):
+        validate_registry(document)
+
+
 def test_parameter_cannot_change_to_an_incompatible_but_self_consistent_type(document):
     model(document, "flux_fill")["supported_params"]["num_inference_steps"] = {"type": "str", "default": "50"}
     with pytest.raises(ModelConfigError, match="参数类型与管线契约不匹配"):

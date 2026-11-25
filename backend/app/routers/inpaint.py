@@ -21,7 +21,7 @@ from app.task_id import TaskId
 from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.services.capabilities import redraw_response, unavailable_response
-from app.redraw_options import RedrawOptions
+from app.redraw_options import RedrawOptions, resolve_watermark_options
 from core.utils import resolve_default_device
 from core.model_registry import get_default_model
 
@@ -44,7 +44,7 @@ class InpaintRequest(BaseModel):
     rois: List[List[int]]  # [[x1, y1, x2, y2], ...]
     model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
-    dilation: int = Field(default=10, ge=0, le=100)
+    dilation: int | None = Field(default=None, ge=0, le=100)
     disable_nsfw: bool = False
     redraw: RedrawOptions | None = None
     task_id: TaskId
@@ -55,7 +55,7 @@ class InpaintWithMaskRequest(BaseModel):
     mask: str  # Base64 encoded mask
     model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
-    dilation: int = Field(default=10, ge=0, le=100)
+    dilation: int | None = Field(default=None, ge=0, le=100)
     disable_nsfw: bool = False
     redraw: RedrawOptions | None = None
     task_id: TaskId
@@ -110,9 +110,10 @@ async def inpaint_with_rois(req: InpaintRequest, request: Request = None):
         return err
 
     image = decode_image(req.image)
+    repair_options = resolve_watermark_options(req.model, req.dilation, req.redraw)
     log_manager.info(
         f"开始水印去除: model={req.model}, device={req.device}, "
-        f"rois={len(req.rois)}, dilation={req.dilation}",
+        f"rois={len(req.rois)}, dilation={repair_options['dilation']}",
         source="inpaint",
     )
 
@@ -136,8 +137,7 @@ async def inpaint_with_rois(req: InpaintRequest, request: Request = None):
         result = await run_repair(
             inference_scheduler, "inpaint", image, request=request,
             rois=req.rois, options={"model_id": req.model, "device": req.device,
-                                      "dilation": req.dilation, "disable_nsfw": req.disable_nsfw,
-                                      "redraw": req.redraw.model_dump(exclude_none=True) if req.redraw else None},
+                                   "disable_nsfw": req.disable_nsfw, **repair_options},
             progress_callback=make_progress_callback(req.task_id, loop),
         )
         await progress_manager.send_complete(task_id=req.task_id)
@@ -166,6 +166,7 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest, request: Request = None
     image = decode_image(req.image)
     mask = decode_mask(req.mask)
     validate_matching_dimensions(image, mask)
+    repair_options = resolve_watermark_options(req.model, req.dilation, req.redraw)
     log_manager.info(
         f"开始掩码修复: model={req.model}, device={req.device}",
         source="inpaint",
@@ -191,8 +192,7 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest, request: Request = None
         result = await run_repair(
             inference_scheduler, "inpaint", image, request=request,
             mask=mask, options={"model_id": req.model, "device": req.device,
-                                      "dilation": req.dilation, "disable_nsfw": req.disable_nsfw,
-                                      "redraw": req.redraw.model_dump(exclude_none=True) if req.redraw else None},
+                                "disable_nsfw": req.disable_nsfw, **repair_options},
             progress_callback=make_progress_callback(req.task_id, loop),
         )
         await progress_manager.send_complete(task_id=req.task_id)

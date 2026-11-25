@@ -26,7 +26,7 @@ from app.websocket.progress import progress_manager
 from app.logging_manager import log_manager
 from app.config import get
 from app.services.capabilities import redraw_response, unavailable_response
-from app.redraw_options import RedrawOptions
+from app.redraw_options import RedrawOptions, resolve_watermark_options
 from core.utils import resolve_default_device
 from core.model_registry import get_default_model
 
@@ -58,7 +58,7 @@ class PipelineRequest(BaseModel):
     # Inpaint 参数
     inpaint_model: str = Field(default_factory=lambda: get_default_model("watermark_removal"))
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
-    dilation: int = 10
+    dilation: int | None = Field(default=None, ge=0, le=100)
     disable_nsfw: bool = False
     redraw: RedrawOptions | None = None
 
@@ -165,10 +165,12 @@ async def run_pipeline(req: PipelineRequest, request: Request = None):
     )
     await progress_manager.send_progress(5, "正在初始化处理流程...", task_id=req.task_id)
 
+    repair_options = req.model_dump(exclude={"image", "mask", "rois", "task_id", "dilation", "redraw"})
+    repair_options.update(resolve_watermark_options(req.inpaint_model, req.dilation, req.redraw))
     try:
         result = await run_repair(
             inference_scheduler, "pipeline", original, mask=mask_arr, rois=req.rois, request=request,
-            options=req.model_dump(exclude={"image", "mask", "rois", "task_id"}),
+            options=repair_options,
             progress_callback=make_progress_callback(req.task_id, asyncio.get_running_loop(), source="pipeline"),
         )
         h, w = result.shape[:2]

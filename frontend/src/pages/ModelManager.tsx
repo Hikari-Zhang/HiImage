@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import {
   CheckCircle2, XCircle, AlertCircle, Loader2, Trash2, RefreshCw,
   Package, Download, ChevronDown, ChevronUp, Clock, FolderOpen,
@@ -6,35 +6,15 @@ import {
 import { clsx } from 'clsx'
 import { showToast } from '../components/ui'
 import { useBackendStore } from '../stores/useBackendStore'
-import { useDownloadStore } from '../stores/useDownloadStore'
+import { clearDeletedModelTasks, useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
 import { ModelStatus, DownloadStatus, ApiPath } from '../constants'
 import type { DownloadTask } from '../stores/useDownloadStore'
 import type { ModelStatusValue } from '../constants'
-import { createApiClient, readApiResponse } from '../services/apiClient'
+import { createApiClient } from '../services/apiClient'
+import { refreshModelList, useModelList, type ModelEntry } from '../hooks/useModelList'
 
 // ── 类型 ──────────────────────────────────────────────────────────────────────
-
-interface ModelEntry {
-  id: string
-  name: string
-  provider: string
-  tags: string[]
-  description?: string
-  badge?: string
-  size_mb?: number
-  hf_model_id?: string
-  download_url?: string
-  display_group?: string
-  status: ModelStatusValue
-  message: string
-  has_local_path?: boolean
-}
-
-interface ModeGroup {
-  id: string
-  name: string
-}
 
 interface WeightResource {
   id: string
@@ -84,8 +64,12 @@ function parseMB(s: string): number {
 // ── 主组件 ────────────────────────────────────────────────────────────────────
 
 export default function ModelManager() {
-  const backendURL = useBackendStore((s) => s.backendURL)
-  const client = createApiClient(backendURL)
+  const backend = useBackendStore((state) => createApiClient(state.backendURL).baseUrl)
+  return <BackendModelManager key={backend} backend={backend} />
+}
+
+function BackendModelManager({ backend }: { backend: string }) {
+  const client = createApiClient(backend || '/')
   let showOpenFolder = false
   try {
     const backendAddress = new URL(client.url(ApiPath.MODELS_LIST), window.location.href)
@@ -94,9 +78,9 @@ export default function ModelManager() {
     // 无效的后端地址无法打开本地目录。
   }
 
-  const [models, setModels] = useState<ModelEntry[]>([])
-  const [modeGroups, setModeGroups] = useState<ModeGroup[]>([])
-  const [loading, setLoading] = useState(false)
+  const { data, error: listError, loading } = useModelList(backend)
+  const models = data?.models ?? []
+  const modeGroups = data?.mode_groups ?? []
   const [selectedGroup, setSelectedGroup] = useState<string>('__all__')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [weightRemoval, setWeightRemoval] = useState<WeightRemoval | null>(null)
@@ -109,64 +93,16 @@ export default function ModelManager() {
   const { startDownload, cancelDownload, startBulkDownload, cancelBulkDownload } = useDownloadManager()
 
   const downloadListRef = useRef<HTMLDivElement>(null)
-  const loadModelsRef = useRef<() => Promise<void>>(async () => {})
-  const controllerRef = useRef<AbortController | null>(null)
-  const mountedRef = useRef(true)
-
-  // ── 加载模型列表 ────────────────────────────────────────────────────────────
-
-  const loadModels = useCallback(async () => {
-    if (!mountedRef.current || controllerRef.current) return
-    setLoading(true)
-    const controller = new AbortController()
-    controllerRef.current = controller
-    const timer = setTimeout(() => controller.abort(), 15000)  // 15s 超时
-    try {
-      const res = await client.fetch(ApiPath.MODELS_LIST, { signal: controller.signal })
-      const data = await readApiResponse<{ models?: ModelEntry[]; mode_groups?: ModeGroup[] }>(res, '读取模型列表失败')
-      if (controller.signal.aborted) return
-      setModels(data.models ?? [])
-      setModeGroups(data.mode_groups ?? [])
-    } catch (e: unknown) {
-      if (controller.signal.aborted || (e instanceof Error && e.name === 'AbortError')) {
-        // 超时静默处理，不弹 Toast，loading 会在 finally 里清掉
-      } else {
-        const msg = e instanceof Error ? e.message : String(e)
-        showToast('error', `加载模型列表失败: ${msg}`)
-      }
-    } finally {
-      clearTimeout(timer)
-      if (controllerRef.current === controller) {
-        controllerRef.current = null
-        setLoading(false)
-      }
-    }
-  }, [backendURL])
-
-  // 始终保持 ref 指向最新的 loadModels 闭包
-  useEffect(() => { loadModelsRef.current = loadModels }, [loadModels])
+  const mountedRef = useRef(false)
 
   useEffect(() => {
     mountedRef.current = true
-    loadModels()
-    return () => {
-      mountedRef.current = false
-      controllerRef.current?.abort()
-      controllerRef.current = null
-    }
-  }, [loadModels])
-
-  // 监听下载完成（done → ok 转换），触发模型列表刷新
-  useEffect(() => {
-    return useDownloadStore.subscribe(
-      (state) => {
-        const hasDone = Object.values(state.tasks).some(
-          (task) => task.status === ModelStatus.OK || task.status === DownloadStatus.DONE
-        )
-        if (hasDone) loadModelsRef.current()
-      }
-    )
+    return () => { mountedRef.current = false }
   }, [])
+  useEffect(() => {
+    if (listError) showToast('error', `加载模型列表失败: ${listError}`)
+  }, [listError])
+  const loadModels = () => refreshModelList(backend)
 
   // ── 批次面板自动展开 ────────────────────────────────────────────────────────
 
@@ -228,12 +164,13 @@ export default function ModelManager() {
       const data = await client.json<{ resources: WeightResource[] }>(
         `/api/models/${encodeURIComponent(model.id)}/file-resources`, undefined, '读取本地权重失败',
       )
+      if (!mountedRef.current) return
       if (data.resources.length) setWeightRemoval({ model, resources: data.resources })
       else showToast('info', '未找到可删除的本地权重')
     } catch (error) {
-      showToast('error', error instanceof Error ? error.message : String(error))
+      if (mountedRef.current) showToast('error', error instanceof Error ? error.message : String(error))
     } finally {
-      setDeletingId(null)
+      if (mountedRef.current) setDeletingId(null)
     }
   }
 
@@ -254,24 +191,20 @@ export default function ModelManager() {
         '删除模型权重失败',
       )
       if (data.ok) {
-        showToast('success', data.message)
-        const store = useDownloadStore.getState()
-        for (const id of data.affected_model_ids) {
-          const status = store.getTask(id)?.status
-          if (status !== DownloadStatus.QUEUED && status !== DownloadStatus.DOWNLOADING) store.removeTask(id)
+        clearDeletedModelTasks(backend, data.affected_model_ids)
+        void refreshModelList(backend)
+        if (mountedRef.current) {
+          showToast('success', data.message)
+          setWeightRemoval(null)
         }
-        setWeightRemoval(null)
-        controllerRef.current?.abort()
-        controllerRef.current = null
-        await loadModels()
       } else {
-        setDeleteError(data.message)
+        if (mountedRef.current) setDeleteError(data.message)
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
-      setDeleteError(msg)
+      if (mountedRef.current) setDeleteError(msg)
     } finally {
-      setDeletingId(null)
+      if (mountedRef.current) setDeletingId(null)
     }
   }
 

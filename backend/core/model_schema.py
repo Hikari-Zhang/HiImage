@@ -111,6 +111,25 @@ def _hf_required_files(config: dict, location: str) -> None:
         _require(type(size) is int and size > 0, where + "." + name, "字节数必须为正整数")
 
 
+def _watermark_defaults(model: dict, location: str) -> None:
+    if "watermark_defaults" not in model:
+        return
+    where = location + ".watermark_defaults"
+    defaults = model["watermark_defaults"]
+    _require("watermark_removal" in model["tags"], where, "只适用于去水印模型")
+    _require(isinstance(defaults, dict) and set(defaults) <= {"dilation", "redraw"},
+             where, "只支持遮罩扩张和局部重绘参数")
+    dilation = defaults.get("dilation")
+    _require(type(dilation) is int and 0 <= dilation <= 30,
+             where + ".dilation", "需要 0 至 30 的整数")
+    if "redraw" in defaults:
+        redraw = defaults["redraw"]
+        specs = model["supported_params"]
+        _require(model["pipeline"] == "flux_fill" and isinstance(redraw, dict) and set(redraw) <= specs.keys(),
+                 where + ".redraw", "包含模型不支持的局部重绘参数")
+        _parameters({name: {**specs[name], "default": value} for name, value in redraw.items()}, where + ".redraw")
+
+
 def validate_registry(document: Any) -> tuple[list[dict], list[dict]]:
     """校验完整文档并返回独立副本，展开模式关联；失败不产生半成品。"""
     _require(isinstance(document, dict), "registry", "顶层需要映射")
@@ -160,6 +179,7 @@ def validate_registry(document: Any) -> tuple[list[dict], list[dict]]:
         for name, parameter in model["supported_params"].items():
             _require(parameter["type"] == PARAMETER_TYPES[name],
                      where + ".supported_params." + name + ".type", "参数类型与管线契约不匹配")
+        _watermark_defaults(model, where)
         _require(not ("hf_model_id" in model and "hf_models" in model),
                  where, "hf_model_id 与 hf_models 不能同时声明")
         if "dependencies" in model:

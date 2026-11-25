@@ -19,7 +19,7 @@ import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
-import { DownloadStatus, ModelStatus } from '../constants'
+import { DownloadStatus, modelFileIssue, modelNeedsDownload } from '../constants'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
 import { downloadBlob, dataUrlToBlob } from '../services/fileService'
 import JSZip from 'jszip'
@@ -323,8 +323,8 @@ export default function SuperResolution() {
       showToast('info', '模型下载中，请稍候...')
       return
     }
-    if (task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR) {
-      showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
+    if (modelNeedsDownload(task?.status) || task?.status === DownloadStatus.ERROR) {
+      showToast('info', `${modelFileIssue(task?.status) ?? '模型未下载'}，已自动加入下载队列，完成后可继续操作`)
       startDownload(upscaleModel)
       return
     }
@@ -380,8 +380,8 @@ export default function SuperResolution() {
       showToast('info', '模型下载中，请稍候...')
       return
     }
-    if (task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR) {
-      showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
+    if (modelNeedsDownload(task?.status) || task?.status === DownloadStatus.ERROR) {
+      showToast('info', `${modelFileIssue(task?.status) ?? '模型未下载'}，已自动加入下载队列，完成后可继续操作`)
       startDownload(upscaleModel)
       return
     }
@@ -799,7 +799,7 @@ export default function SuperResolution() {
                             const t = downloadTasks[upscaleModel]
                             if (t?.status === DownloadStatus.DOWNLOADING) return '等待下载...'
                             if (t?.status === DownloadStatus.QUEUED) return `排队中 #${t.position}`
-                            if (t?.status === ModelStatus.MISSING || t?.status === DownloadStatus.ERROR) return '点击下载并处理'
+                            if (modelNeedsDownload(t?.status) || t?.status === DownloadStatus.ERROR) return '点击下载并处理'
                             return '开始超分'
                           })()}
                     </Button>

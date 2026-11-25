@@ -3,7 +3,6 @@ import { bindImmichSource } from '../services/immich'
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Upload, Wand2, Trash2, Download, Move, Square, PenTool, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
-import ImageCanvas from '../components/ImageCanvas'
 import MaskCanvas from '../components/MaskCanvas'
 import MaskToolbar from '../components/MaskToolbar'
 import ImageCompare from '../components/ImageCompare'
@@ -20,15 +19,13 @@ import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
 import { useMaskExport } from '../hooks/useMaskExport'
-import { PostprocessMethod, DownloadStatus, ModelStatus } from '../constants'
+import { PostprocessMethod, DownloadStatus, modelFileIssue, modelNeedsDownload } from '../constants'
 import type { MaskTool } from '../types/mask'
 import type { ROI } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
 import { createTaskId } from '../services/taskId'
 import { createTaskProgressSession } from '../services/taskProgress'
 import type { RedrawOptions, WatermarkCandidate } from '../services/api/processing'
-
-type CanvasTool = 'draw' | 'pan'
 
 const REDRAW_FIELDS = [
   { key: 'seed', label: '随机种子', min: 0, max: 2147483647, step: 1, placeholder: '42' },
@@ -55,15 +52,18 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError } = useSessionProcess('watermark')
   const { detectWatermark, inpaintWithMask, runPipeline } = useBackendAPI()
   const {
-    device, inpaintModel: preferredInpaintModel, defaultDilation, sensitivity, disableNsfw,
+    device, inpaintModel: preferredInpaintModel, defaultDilation, inpaintDilationOverrides, sensitivity, disableNsfw,
     postprocessMethod, postprocessEnabled,
     upscaleModel, upscaleEnabled,
-    setDevice, setInpaintModel, setDilation, setSensitivity,
+    setDevice, setInpaintModel, setInpaintDilation, setSensitivity,
     setPostprocessMethod, setPostprocessEnabled, setUpscaleEnabled, setUpscaleModel,
   } = useEditorSettings('watermark')
-  const { inpaintGroups, upscaleGroups, inpaintDeviceOverrides, inpaintPipelines, defaultInpaintModel } = useModelStore()
+  const { inpaintGroups, upscaleGroups, inpaintDeviceOverrides, inpaintPipelines, watermarkDefaults, defaultInpaintModel } = useModelStore()
   const hasModel = (id: string) => inpaintGroups.some(group => group.options.some(model => model.value === id))
   const inpaintModel = hasModel(preferredInpaintModel) ? preferredInpaintModel : defaultInpaintModel
+  const modelDefaults = watermarkDefaults[inpaintModel]
+  const dilationOverride = inpaintDilationOverrides[inpaintModel]
+  const dilation = dilationOverride ?? modelDefaults?.dilation ?? defaultDilation
   const repairAvailable = hasModel(inpaintModel)
   const effectiveDevice = inpaintDeviceOverrides?.[inpaintModel] || device
   const { options: deviceOptions, loading: detectingDevices, cudaAvailable } = useDeviceOptions({ device, setDevice })
@@ -94,7 +94,11 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
   const { startDownload } = useDownloadManager()
   const { exportMask, exportCombinedMask } = useMaskExport()
 
-  const [tool, setTool] = useState<CanvasTool>('draw')
+  const [panMode, setPanMode] = useState(false)
+  const changeCanvasTool = useCallback((nextTool: MaskTool) => {
+    setPanMode(false)
+    setCanvasTool(nextTool)
+  }, [setCanvasTool])
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [showMaskPreview, setShowMaskPreview] = useState(true)
   const [candidates, setCandidates] = useState<WatermarkCandidate[]>([])
@@ -196,8 +200,8 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
       showToast('info', `模型${task.status === DownloadStatus.QUEUED ? '排队中，' : ''}下载中，请稍候...`)
       return
     }
-    if (task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR) {
-      showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
+    if (modelNeedsDownload(task?.status) || task?.status === DownloadStatus.ERROR) {
+      showToast('info', `${modelFileIssue(task?.status) ?? '模型未下载'}，已自动加入下载队列，完成后可继续操作`)
       startDownload(inpaintModel)
       return
     }
@@ -219,7 +223,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             mask: maskDataURL,
             inpaint_model: inpaintModel,
             device,
-            dilation: defaultDilation,
+            dilation,
             disable_nsfw: disableNsfw,
             postprocess_method: postprocessMethod,
             postprocess_enabled: postprocessEnabled,
@@ -236,7 +240,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             mask: maskDataURL,
             model: inpaintModel,
             device,
-            dilation: defaultDilation,
+            dilation,
             disable_nsfw: disableNsfw,
             ...(redraw && { redraw }),
             task_id: requestTaskId,
@@ -331,21 +335,19 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
       }
 
       switch (e.code) {
+        case 'KeyR':
+          if (!e.ctrlKey && !e.metaKey) changeCanvasTool('rectangle')
+          break
         case 'KeyB':
           if (!e.ctrlKey && !e.metaKey) {
-            setCanvasTool('brush')
+            changeCanvasTool('brush')
             setBrushSettings({ tool: 'brush' })
           }
           break
         case 'KeyE':
           if (!e.ctrlKey && !e.metaKey) {
-            setCanvasTool('brush')
+            changeCanvasTool('brush')
             setBrushSettings({ tool: 'eraser' })
-          }
-          break
-        case 'KeyW':
-          if (!e.ctrlKey && !e.metaKey) {
-            setBrushSettings({ tool: 'magicWand' })
           }
           break
         case 'BracketLeft': // [
@@ -371,7 +373,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isVisible, canvasTool, brushSettings.size, setCanvasTool, setBrushSettings, undoMaskStroke, handleDeleteSelected])
+  }, [isVisible, canvasTool, brushSettings.size, changeCanvasTool, setBrushSettings, undoMaskStroke, handleDeleteSelected])
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -423,6 +425,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
                 strokes={maskStrokes}
                 brushSettings={brushSettings}
                 canvasTool={canvasTool}
+                panMode={panMode}
                 rois={rois}
                 selectedROIs={selectedROIs}
                 onROISelect={handleROISelect}
@@ -437,21 +440,23 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
                 {canvasTool === 'rectangle' ? (
                   <div className="flex gap-1 bg-bg-secondary rounded-lg p-1 border border-border-subtle shadow-lg">
                     <button
-                      onClick={() => setTool('draw')}
-                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'draw' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
+                      onClick={() => changeCanvasTool('rectangle')}
+                      aria-pressed={!panMode}
+                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', !panMode ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
                       title="绘制 ROI (R)"
                     >
                       <Square size={16} />
                     </button>
                     <button
-                      onClick={() => setTool('pan')}
-                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', tool === 'pan' ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
+                      onClick={() => setPanMode(true)}
+                      aria-pressed={panMode}
+                      className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', panMode ? 'bg-bg-active text-fg-accent' : 'hover:bg-bg-hover text-fg-secondary')}
                       title="平移 (Space)"
                     >
                       <Move size={16} />
                     </button>
                     <button
-                      onClick={() => setCanvasTool('brush')}
+                      onClick={() => changeCanvasTool('brush')}
                       className={clsx('w-8 h-8 rounded flex items-center justify-center transition-colors', 'hover:bg-bg-hover text-fg-secondary')}
                       title="画笔模式 (B)"
                     >
@@ -481,7 +486,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
                     canvasTool={canvasTool}
                     canUndo={maskStrokes.length > 0}
                     onBrushSettingsChange={setBrushSettings}
-                    onCanvasToolChange={setCanvasTool}
+                    onCanvasToolChange={changeCanvasTool}
                     onUndo={undoMaskStroke}
                   />
                 )}
@@ -603,24 +608,26 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
           {isRedraw && (
             <fieldset disabled={isProcessing} className="space-y-2">
               <legend className="text-sm font-medium">局部重绘参数</legend>
+              <p className="text-xs text-fg-secondary">FLUX Fill 可能在文字水印区域生成新字形。去除文字水印时优先选 LaMa。</p>
               <label className="block text-xs">
                 重绘提示词
                 <textarea
                   className="mt-1 block w-full rounded border border-border bg-transparent p-2"
                   maxLength={1000}
                   rows={3}
-                  placeholder="留空时根据周围背景和纹理自然补绘"
+                  placeholder={modelDefaults?.redraw?.prompt ?? '留空使用模型默认提示词'}
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
                 />
               </label>
-              {REDRAW_FIELDS.map(({ key, label, ...attributes }) => (
+              {REDRAW_FIELDS.map(({ key, label, placeholder, ...attributes }) => (
                 <label key={key} className="flex items-center justify-between gap-2 text-xs">
                   {label}
                   <input
                     type="number"
                     className="w-24 rounded border border-border bg-transparent p-1"
                     {...attributes}
+                    placeholder={String(modelDefaults?.redraw?.[key] ?? placeholder)}
                     value={redrawFields[key]}
                     onChange={(event) => setRedrawFields({ ...redrawFields, [key]: event.target.value })}
                   />
@@ -637,10 +644,15 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             label="遮罩扩张"
             min={0}
             max={30}
-            value={defaultDilation}
-            onChange={(e) => setDilation(Number(e.target.value))}
+            value={dilation}
+            onChange={(e) => setInpaintDilation(inpaintModel, Number(e.target.value))}
             unit="px"
           />
+          {dilationOverride !== undefined && (
+            <button type="button" className="text-xs text-fg-accent" onClick={() => setInpaintDilation(inpaintModel, undefined)}>
+              恢复默认遮罩扩张
+            </button>
+          )}
 
           {/* Advanced: Postprocess & Upscale */}
           <section>
@@ -708,7 +720,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             {(() => {
               const task = downloadTasks[inpaintModel]
               const isModelBusy = task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED
-              const isModelMissing = task?.status === ModelStatus.MISSING || task?.status === DownloadStatus.ERROR
+              const isModelMissing = modelNeedsDownload(task?.status) || task?.status === DownloadStatus.ERROR
               const canProcess = repairReady && sourceImage && (maskStrokes.length > 0 || rois.length > 0) && !isModelBusy
               return (
                 <Button

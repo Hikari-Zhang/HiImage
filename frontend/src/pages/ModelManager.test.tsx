@@ -3,12 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import ModelManager from './ModelManager'
 import { useDownloadStore } from '../stores/useDownloadStore'
+import { resetModelListCache } from '../hooks/useModelList'
 
 vi.mock('../hooks/useDownloadManager', () => ({ useDownloadManager: () => ({
   startDownload: vi.fn(), cancelDownload: vi.fn(), startBulkDownload: vi.fn(), cancelBulkDownload: vi.fn(),
 }) }))
 afterEach(() => {
-  cleanup(); vi.unstubAllGlobals()
+  cleanup(); resetModelListCache(); vi.unstubAllGlobals()
   useDownloadStore.setState({ tasks: {}, bulkSession: { active: false, modelIds: [] } })
 })
 

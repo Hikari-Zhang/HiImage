@@ -9,13 +9,14 @@
  *   以及在挂载时触发 syncModelStatus 同步后端文件状态。
  */
 
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback } from 'react'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { showToast } from '../components/ui'
-import { DownloadStatus, ModelStatus, ApiPath } from '../constants'
+import { DownloadStatus, ApiPath } from '../constants'
 import type { DownloadTask } from '../stores/useDownloadStore'
 import { createApiClient, readApiResponse, ensureApiSuccess } from '../services/apiClient'
+import { modelFileStatus, refreshModelList, useModelList } from './useModelList'
 
 // ── 模块级单例（跨组件共享，整个应用生命周期只有一份） ─────────────────────────
 
@@ -28,6 +29,15 @@ const _requestTails = new Map<string, Promise<void>>()
 const _serverIds = new Map<string, string>()
 const _connectionKeys = new WeakMap<EventSource, string>()
 const operationKey = (modelId: string, client: ReturnType<typeof createApiClient>) => `${client.baseUrl}|${modelId}`
+const currentBackend = () => createApiClient(useBackendStore.getState().backendURL).baseUrl
+
+useBackendStore.subscribe((state, previous) => {
+  if (createApiClient(state.backendURL).baseUrl === createApiClient(previous.backendURL).baseUrl) return
+  for (const connection of _sseMap.values()) connection.close()
+  _sseMap.clear()
+  _sseRetryCount.clear()
+})
+
 function advance(key: string) {
   const generation = (_generations.get(key) ?? 0) + 1
   _generations.set(key, generation)
@@ -83,6 +93,7 @@ function applySnapshot(modelId: string, patch: Partial<DownloadTask>, client: Re
     _terminalNotices.add(noticeKey)
     if (_terminalNotices.size > 500) _terminalNotices.delete(_terminalNotices.values().next().value!)
     if (patch.status === DownloadStatus.DONE) showToast('success', `${patch.modelName || modelId} 下载完成`)
+    void refreshModelList(client.baseUrl)
     if (patch.status === DownloadStatus.ERROR) showToast('error', `${patch.modelName || modelId} 下载失败: ${patch.message}`)
   }
   if (patch.status === DownloadStatus.DONE) void _syncOne(modelId, client, isCurrent)
@@ -96,7 +107,7 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
   let downloadId = useDownloadStore.getState().getTask(modelId)?.downloadId
   const connectionKey = `${key}|${generation}|${downloadId ?? ''}`
   const sameAttempt = () => (_generations.get(key) ?? 0) === generation
-    && createApiClient(useBackendStore.getState().backendURL).baseUrl === client.baseUrl
+    && currentBackend() === client.baseUrl
     && useDownloadStore.getState().getTask(modelId)?.downloadId === downloadId
   const existing = _sseMap.get(modelId)
   if (existing && existing.readyState !== EventSource.CLOSED && _connectionKeys.get(existing) === connectionKey) {
@@ -180,11 +191,11 @@ async function _syncOne(modelId: string, client: ReturnType<typeof createApiClie
   const completedTask = store.getTask(modelId)
   try {
     const res = await client.fetch(`${ApiPath.MODELS_HEALTH}/${encodeURIComponent(modelId)}`)
-    const data = await readApiResponse<{ status: string; name?: string }>(res, '读取模型状态失败')
+    const data = await readApiResponse<{ status: string; message?: string }>(res, '读取模型状态失败')
     if (!isCurrent() || store.getTask(modelId) !== completedTask) return
     store.setTask(modelId, {
-      status: data.status === ModelStatus.OK ? ModelStatus.OK : ModelStatus.MISSING,
-      speed: '', downloaded: '', totalSize: '', message: '',
+      status: modelFileStatus(data.status),
+      speed: '', downloaded: '', totalSize: '', message: data.message ?? '',
     })
   } catch {
     // 忽略网络错误
@@ -194,49 +205,17 @@ async function _syncOne(modelId: string, client: ReturnType<typeof createApiClie
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useDownloadManager() {
-  const { backendURL } = useBackendStore()
-
-  const getClient = useCallback(() => createApiClient(backendURL), [backendURL])
-
-  // ── 同步所有模型文件状态（从后端拉取 ok/missing，写入 store） ──────────────
-
-  const syncModelStatus = useCallback(async () => {
-    const client = getClient()
-    try {
-      const res = await client.fetch(ApiPath.MODELS_LIST)
-      const data = await readApiResponse<{
-        models?: Array<{ id: string; name: string; status: string }>
-      }>(res, '读取模型状态失败')
-      // 用 getState() 避免订阅 store 导致 re-render
-      const { getTask, setTask } = useDownloadStore.getState()
-      for (const m of data.models ?? []) {
-        const current = getTask(m.id)
-        if (
-          current?.statusSyncFailed ||
-          current?.status === DownloadStatus.QUEUED ||
-          current?.status === DownloadStatus.DOWNLOADING ||
-          current?.status === DownloadStatus.DONE
-        ) continue
-        setTask(m.id, {
-          modelId:    m.id,
-          modelName:  m.name,
-          status:     m.status === ModelStatus.OK ? ModelStatus.OK : ModelStatus.MISSING,
-          message:    '',
-          speed:      '',
-          downloaded: '',
-          totalSize:  '',
-        })
-      }
-    } catch {
-      // 网络不通时忽略
-    }
-  }, [getClient])
+  const backend = useBackendStore((state) => createApiClient(state.backendURL).baseUrl)
+  useModelList(backend)
+  const getClient = useCallback(() => createApiClient(backend || '/'), [backend])
+  const syncModelStatus = useCallback(() => refreshModelList(backend), [backend])
 
   // ── 单模型下载 ──────────────────────────────────────────────────────────────
 
   const startDownload = useCallback(async (modelId: string) => {
     const { getTask, setTask } = useDownloadStore.getState()
     const client = getClient()
+    if (currentBackend() !== client.baseUrl) return
     const key = operationKey(modelId, client)
     const current = getTask(modelId)
     if (current?.status === DownloadStatus.ERROR && current.statusSyncFailed && current.downloadId) {
@@ -253,7 +232,7 @@ export function useDownloadManager() {
     const generation = advance(key)
     _sseRetryCount.delete(key)
     const isCurrent = () => _generations.get(key) === generation
-      && createApiClient(useBackendStore.getState().backendURL).baseUrl === client.baseUrl
+      && currentBackend() === client.baseUrl
     _sseMap.get(modelId)?.close()
     _sseMap.delete(modelId)
     const queuedCount = Object.values(useDownloadStore.getState().tasks).filter(
@@ -280,8 +259,9 @@ export function useDownloadManager() {
 
   const cancelDownload = useCallback(async (modelId: string) => {
     const client = getClient()
+    if (currentBackend() !== client.baseUrl) return
     const key = operationKey(modelId, client)
-    advance(key)
+    const generation = advance(key)
     const currentId = useDownloadStore.getState().getTask(modelId)?.downloadId
     _sseMap.get(modelId)?.close()
     _sseMap.delete(modelId)
@@ -295,6 +275,7 @@ export function useDownloadManager() {
         await ensureApiSuccess(await client.fetch(
           `${ApiPath.MODELS_DOWNLOAD}/${encodeURIComponent(modelId)}${query}`, { method: 'DELETE' }
         ), '取消下载失败')
+        if (_generations.get(key) === generation) void refreshModelList(client.baseUrl)
       })
     } catch {
       // 网络失败时保留用户取消意图；后续重试由后端任务去重和资源占用保护。
@@ -305,11 +286,12 @@ export function useDownloadManager() {
 
   const startBulkDownload = useCallback(async () => {
     const client = getClient()
+    if (currentBackend() !== client.baseUrl) return
     const generations = new Map(_generations)
     try {
       const res = await client.fetch(`${ApiPath.MODELS_DOWNLOAD}/bulk`, { method: 'POST' })
       const data = await readApiResponse<{ submitted: number; tasks: Record<string, unknown>[] }>(res, '一键下载提交失败')
-      if (createApiClient(useBackendStore.getState().backendURL).baseUrl !== client.baseUrl) return
+      if (currentBackend() !== client.baseUrl) return
 
       if (data.submitted === 0) {
         showToast('success', '所有模型均已下载，无需重复下载')
@@ -327,7 +309,7 @@ export function useDownloadManager() {
           if (useDownloadStore.getState().getTask(task.modelId)?.downloadId !== task.downloadId) advance(key)
           const generation = _generations.get(key) ?? 0
           const isCurrent = () => (_generations.get(key) ?? 0) === generation
-            && createApiClient(useBackendStore.getState().backendURL).baseUrl === client.baseUrl
+            && currentBackend() === client.baseUrl
           modelIds.push(task.modelId)
           if (!applySnapshot(task.modelId, task, client, isCurrent)) ensureSubscribed(task.modelId, client)
         }
@@ -337,6 +319,7 @@ export function useDownloadManager() {
       showToast('info', `已添加 ${data.submitted} 个模型到下载队列`)
 
     } catch (err: unknown) {
+      if (currentBackend() !== client.baseUrl) return
       const msg = err instanceof Error ? err.message : String(err)
       showToast('error', `一键下载失败: ${msg}`)
     }
@@ -345,46 +328,42 @@ export function useDownloadManager() {
   // ── 取消一键下载 ────────────────────────────────────────────────────────────
 
   const cancelBulkDownload = useCallback(async () => {
+    if (currentBackend() !== backend) return
     const { bulkSession } = useDownloadStore.getState()
     for (const modelId of bulkSession.modelIds) {
+      if (currentBackend() !== backend) return
       const task = useDownloadStore.getState().getTask(modelId)
       if (task?.statusSyncFailed || task?.status === DownloadStatus.QUEUED || task?.status === DownloadStatus.DOWNLOADING) {
         await cancelDownload(modelId)
       }
     }
-    useDownloadStore.getState().clearBulkSession()
-  }, [cancelDownload])
+    if (currentBackend() === backend) useDownloadStore.getState().clearBulkSession()
+  }, [backend, cancelDownload])
 
   // ── 恢复进行中的 SSE 连接 ──────────────────────────────────────────────────
 
   const resume = useCallback(async () => {
     const client = getClient()
+    if (currentBackend() !== client.baseUrl) return
     const { tasks } = useDownloadStore.getState()
     for (const [modelId, task] of Object.entries(tasks)) {
+      if (currentBackend() !== client.baseUrl) return
       if (task.statusSyncFailed) {
         await startDownload(modelId)
         continue
       }
       if (task.status === DownloadStatus.QUEUED || task.status === DownloadStatus.DOWNLOADING) {
-        ensureSubscribed(modelId, client)
+        const key = operationKey(modelId, client)
+        if (task.downloadId || !_requestTails.has(key)) ensureSubscribed(modelId, client)
       }
     }
   }, [getClient, startDownload])
 
   // ── 挂载时：同步状态 + 恢复连接 ────────────────────────────────────────────
 
-  const syncDoneRef = useRef(false)
-
   useEffect(() => {
-    if (!syncDoneRef.current) {
-      syncDoneRef.current = true
-      syncModelStatus()
-    }
-    resume()
-
-    // 监听后端重启事件，重新同步状态（后端重启后 _syncDone 重置，避免状态停留在旧快照）
-    return () => {}
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    void resume()
+  }, [resume])
 
   return {
     startDownload,

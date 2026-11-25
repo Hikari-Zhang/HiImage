@@ -25,7 +25,7 @@ import { useFirstVisible } from '../hooks/useFirstVisible'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
 import { useMaskExport } from '../hooks/useMaskExport'
-import { DownloadStatus, ModelStatus } from '../constants'
+import { DownloadStatus, ModelStatus, modelFileIssue, modelNeedsDownload } from '../constants'
 import type { SynthesisTagValue } from '../constants'
 import type { ROI } from '../types/mask'
 import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
@@ -269,8 +269,8 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
       showToast('info', `模型${dlTask.status === DownloadStatus.QUEUED ? '排队中，' : ''}下载中，请稍候...`)
       return
     }
-    if (dlTask?.status === ModelStatus.MISSING || dlTask?.status === DownloadStatus.ERROR) {
-      showToast('info', '模型未下载，已自动加入下载队列，完成后可继续操作')
+    if (modelNeedsDownload(dlTask?.status) || dlTask?.status === DownloadStatus.ERROR) {
+      showToast('info', `${modelFileIssue(dlTask?.status) ?? '模型未下载'}，已自动加入下载队列，完成后可继续操作`)
       startDownload(selectedModel)
       return
     }
@@ -671,6 +671,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
                 const isSelected = selectedModel === model.id
                 const isOk = dlTask?.status === ModelStatus.OK || dlTask?.status === DownloadStatus.DONE
                 const isMissing = dlTask?.status === ModelStatus.MISSING
+                const fileIssue = modelFileIssue(dlTask?.status)
                 const isDownloading = dlTask?.status === DownloadStatus.DOWNLOADING
                 const isQueued = dlTask?.status === DownloadStatus.QUEUED
                 const isError = dlTask?.status === DownloadStatus.ERROR
@@ -698,6 +699,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
                       {isError      && <XCircle size={10} className="text-red-400" />}
                       {isOk         && <CheckCircle2 size={10} className="text-green-400" />}
                       {isMissing    && <Download size={10} className="text-fg-secondary/60" />}
+                      {fileIssue && <span className="text-[10px] text-orange-400" title={dlTask?.message || undefined}>{fileIssue}</span>}
                       {model.badge && (
                         <span className={clsx(
                           'text-[9px] px-1.5 py-0.5 rounded-full font-medium',
@@ -798,7 +800,7 @@ export default function SmartSynthesis({ isVisible = false }: { isVisible?: bool
                       ? '等待下载...'
                       : dlTask?.status === DownloadStatus.QUEUED
                         ? `排队中 #${dlTask.position}`
-                        : (dlTask?.status === ModelStatus.MISSING || dlTask?.status === DownloadStatus.ERROR)
+                        : (modelNeedsDownload(dlTask?.status) || dlTask?.status === DownloadStatus.ERROR)
                           ? '点击下载并处理'
                           : `执行${activeModeConfig?.name ?? ''}`}
                 </Button>

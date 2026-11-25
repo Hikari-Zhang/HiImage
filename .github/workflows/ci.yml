@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+      - name: Install CPU backend and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1
+          python -m venv venv
+          venv/bin/python -m pip install --upgrade pip setuptools wheel
+          venv/bin/python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchvision==0.20.1
+          venv/bin/python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+          venv/bin/python scripts/post_install.py
+          venv/bin/python -m pip check
+      - name: Run scripts, frontend, and backend tests
+        run: npm test
+      - name: Check frontend types and production build
+        run: |
+          npm run typecheck
+          npm run build
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Run browser regression tests
+        working-directory: frontend
+        env:
+          HIIMAGE_TEST_MODEL_MANAGER: '1'
+        run: npm run test:e2e

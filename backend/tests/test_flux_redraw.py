@@ -7,7 +7,7 @@ import sys
 import numpy as np
 import pytest
 
-from app.routers import inpaint
+from app.routers import inpaint, postprocess
 from app.redraw_options import RedrawOptions
 from core.model_checker import ModelChecker
 from core.model_registry import get_model
@@ -23,6 +23,8 @@ def test_watermark_catalog_exposes_default_and_repair_pipelines():
     assert catalog["unavailable_reason"] == ""
     assert models["wm_lama"]["device_override"] == "cpu"
     assert models["flux_fill"]["pipeline"] == "flux_fill"
+    for model_id in models:
+        assert models[model_id]["watermark_defaults"] == get_model(model_id)["watermark_defaults"]
 
 
 def test_redraw_cpu_rejected_before_decoding_or_downloading(monkeypatch):
@@ -38,30 +40,39 @@ def test_redraw_cpu_rejected_before_decoding_or_downloading(monkeypatch):
     assert b"REDRAW_CUDA_REQUIRED" in response.body
 
 
-def test_redraw_options_are_forwarded_to_worker(monkeypatch):
+@pytest.mark.parametrize("route", ["mask", "roi", "pipeline"])
+def test_watermark_preset_and_explicit_options_are_forwarded_to_worker(monkeypatch, route):
     image = np.zeros((4, 6, 3), np.uint8)
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
         cuda=SimpleNamespace(is_available=lambda: True)))
-    monkeypatch.setattr(inpaint, "decode_image", lambda _: image)
-    monkeypatch.setattr(inpaint, "decode_mask", lambda _: image[:, :, 0])
+    module = postprocess if route == "pipeline" else inpaint
+    monkeypatch.setattr(module, "decode_image", lambda _: image)
+    monkeypatch.setattr(module, "decode_mask", lambda _: image[:, :, 0])
+    defaults = get_model("flux_fill")["watermark_defaults"]
 
     async def ready(*_):
         return True, ""
 
-    async def run(_scheduler, operation, pixels, *, mask, options, **kwargs):
-        assert operation == "inpaint"
+    async def run(_scheduler, operation, pixels, *, options, mask=None, **kwargs):
+        assert operation == ("pipeline" if route == "pipeline" else "inpaint")
         assert pixels is image
-        assert mask.shape == image.shape[:2]
-        assert options["model_id"] == "flux_fill"
-        assert options["redraw"] == {"prompt": "brick wall", "seed": 7}
+        if route != "roi":
+            assert mask.shape == image.shape[:2]
+        assert options.get("model_id", options.get("inpaint_model")) == "flux_fill"
+        assert options["dilation"] == (0 if route == "roi" else defaults["dilation"])
+        assert options["redraw"] == {**defaults["redraw"], "prompt": "brick wall", "seed": 7}
         return image
 
-    monkeypatch.setattr(inpaint, "ensure_model_ready_with_progress", ready)
-    monkeypatch.setattr(inpaint, "run_repair", run)
-    response = asyncio.run(inpaint.inpaint_with_mask(inpaint.InpaintWithMaskRequest(
-        image="test", mask="test", model="flux_fill", device="cuda", task_id="redraw-options",
-        redraw=RedrawOptions(prompt="brick wall", seed=7),
-    )))
+    monkeypatch.setattr(module, "ensure_model_ready_with_progress", ready)
+    monkeypatch.setattr(module, "run_repair", run)
+    options = dict(image="test", device="cuda", task_id="redraw-options", redraw=RedrawOptions(prompt="brick wall", seed=7))
+    if route == "pipeline":
+        result = postprocess.run_pipeline(postprocess.PipelineRequest(mask="test", inpaint_model="flux_fill", **options))
+    elif route == "roi":
+        result = inpaint.inpaint_with_rois(inpaint.InpaintRequest(rois=[], model="flux_fill", dilation=0, **options))
+    else:
+        result = inpaint.inpaint_with_mask(inpaint.InpaintWithMaskRequest(mask="test", model="flux_fill", **options))
+    response = asyncio.run(result)
     assert response["image"]
 
 
