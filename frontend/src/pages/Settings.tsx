@@ -5,8 +5,9 @@ import { getSettingsDraftStore, useSettingsDraft } from '../stores/useSettingsDr
 import { Save, RotateCcw, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import PageHeader from '../components/layout/PageHeader'
-import { showToast } from '../components/ui'
+import { Slider, showToast } from '../components/ui'
 import { useSettingsStore } from '../stores/useSettingsStore'
+import { useModelStore } from '../stores/useModelStore'
 import { useBackendStore } from '../stores/useBackendStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useFirstVisible } from '../hooks/useFirstVisible'
@@ -21,6 +22,7 @@ const DEFAULTS = {
   hfToken: '',
   githubMirror: '',
   defaultDilation: 10,
+  defaultDetectionSensitivity: 50,
   disableNsfw: true,
   downloadMaxConcurrent: 3,
   upscaleTile: 0,  // 0 = 自动计算
@@ -31,13 +33,15 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
   const isConnected = useBackendStore((s) => s.isConnected)
   const checkHealth = useBackendStore((s) => s.checkHealth)
   const store = useSettingsStore()
+  const recommendedLamaDilation = useModelStore(s => s.watermarkDefaults.wm_lama?.dilation)
   const { getDevices } = useBackendAPI()
   const ready = useFirstVisible(isVisible)
 
   const {
     activeTab, setActiveTab, device, setDevice,
     hfEndpoint, setHfEndpoint, hfToken, setHfToken,
-    githubMirror, setGithubMirror, dilation, setDilation, disableNsfw, setDisableNsfw,
+    githubMirror, setGithubMirror, dilation, setDilation, lamaDilation, setLamaDilation,
+    defaultDetectionSensitivity, setDefaultDetectionSensitivity, disableNsfw, setDisableNsfw,
     downloadMaxConcurrent, setDownloadMaxConcurrent, upscaleTile, setUpscaleTile,
     isSaving, setIsSaving, settingsLoadError, setSettingsLoadError,
   } = useSettingsDraft(backendURL)
@@ -86,22 +90,26 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
 
   const handleSave = async () => {
     if (getSettingsDraftStore(backendURL).getState().isSaving) return
+    const lamaDilationValue = lamaDilation.trim() === '' ? null : Number(lamaDilation)
+    if (lamaDilationValue !== null && (!Number.isInteger(lamaDilationValue) || lamaDilationValue < 0 || lamaDilationValue > 30)) {
+      showToast('error', 'LaMa 遮罩扩张应为 0–30 的整数，或留空使用推荐值。')
+      return
+    }
     const revision = getSettingsDraftStore(backendURL).getState().revision
     setIsSaving(true)
     try {
-      // 先把 draft 写入 store
-      store.setSettings({
+      await store.saveSettings(backendURL, {
         device,
         hfEndpoint,
         hfToken,
         githubMirror,
         defaultDilation: Number(dilation) || DEFAULTS.defaultDilation,
+        lamaDilation: lamaDilationValue,
+        defaultDetectionSensitivity,
         disableNsfw,
         downloadMaxConcurrent: Math.max(1, Math.min(10, Number(downloadMaxConcurrent) || 3)),
         upscaleTile: Number(upscaleTile) || 0,
       })
-      // 再持久化到后端
-      await useSettingsStore.getState().saveSettings(backendURL)
       getSettingsDraftStore(backendURL).getState().markSaved(revision)
       showToast('success', '设置已保存')
     } catch (err: any) {
@@ -128,6 +136,8 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
     setHfToken(DEFAULTS.hfToken)
     setGithubMirror(DEFAULTS.githubMirror)
     setDilation(String(DEFAULTS.defaultDilation))
+    setLamaDilation('')
+    setDefaultDetectionSensitivity(DEFAULTS.defaultDetectionSensitivity)
     setDisableNsfw(DEFAULTS.disableNsfw)
     setDownloadMaxConcurrent(String(DEFAULTS.downloadMaxConcurrent))
     setUpscaleTile(String(DEFAULTS.upscaleTile))
@@ -309,8 +319,40 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
 
         {/* Inpaint Settings */}
         <section className="bg-bg-tertiary rounded-lg p-4">
-          <h3 className="text-sm font-medium mb-3">修复参数</h3>
+          <h3 className="text-sm font-medium mb-3">去水印与修复</h3>
           <div className="space-y-3">
+            <div>
+              <label htmlFor="lama-dilation" className="text-xs text-fg-secondary mb-1 block">LaMa 默认遮罩扩张 (px)</label>
+              <input
+                id="lama-dilation"
+                type="number"
+                min={0}
+                max={30}
+                step={1}
+                value={lamaDilation}
+                placeholder={String(recommendedLamaDilation ?? '')}
+                aria-describedby="lama-dilation-help"
+                onChange={(e) => setLamaDilation(e.target.value)}
+                className="w-full bg-bg-primary border border-border-subtle text-fg-primary text-xs px-2 py-1.5 rounded focus:border-border-focus focus:outline-none"
+              />
+              <p id="lama-dilation-help" className="text-[11px] text-fg-secondary mt-1">
+                扩张能覆盖水印边缘，也会扩大修复范围。留空使用模型推荐值。
+              </p>
+            </div>
+            <div>
+              <Slider
+                label="默认 OCR 检测敏感度"
+                min={10}
+                max={90}
+                value={defaultDetectionSensitivity}
+                onChange={(e) => setDefaultDetectionSensitivity(Number(e.target.value))}
+                unit="%"
+                aria-describedby="ocr-sensitivity-help"
+              />
+              <p id="ocr-sensitivity-help" className="text-[11px] text-fg-secondary mt-1">
+                调整文字候选的检测。较高的值可能增加误报，修复前仍需勾选候选。
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-fg-secondary mb-1 block">备用遮罩扩张 (px)</label>

@@ -13,6 +13,7 @@ import ModelSelect from '../components/ModelSelect/ModelSelect'
 import { useImageStore } from '../stores/useImageStore'
 import { useEditorSettings } from '../stores/useEditorSettings'
 import { useModelStore } from '../stores/useModelStore'
+import { useSettingsStore } from '../stores/useSettingsStore'
 import { isCurrentTask, useSessionProcess } from '../stores/useProcessStore'
 import { useBackendAPI } from '../hooks/useBackendAPI'
 import { useDeviceOptions } from '../hooks/useDeviceOptions'
@@ -52,18 +53,23 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError } = useSessionProcess('watermark')
   const { detectWatermark, inpaintWithMask, runPipeline } = useBackendAPI()
   const {
-    device, inpaintModel: preferredInpaintModel, defaultDilation, inpaintDilationOverrides, sensitivity, disableNsfw,
+    device, inpaintModel: preferredInpaintModel, inpaintDilationOverrides, sensitivityOverride, disableNsfw,
     postprocessMethod, postprocessEnabled,
     upscaleModel, upscaleEnabled,
     setDevice, setInpaintModel, setInpaintDilation, setSensitivity,
     setPostprocessMethod, setPostprocessEnabled, setUpscaleEnabled, setUpscaleModel,
   } = useEditorSettings('watermark')
+  const defaultDilation = useSettingsStore(s => s.defaultDilation)
+  const lamaDilation = useSettingsStore(s => s.lamaDilation)
+  const defaultDetectionSensitivity = useSettingsStore(s => s.defaultDetectionSensitivity)
+  const sensitivity = sensitivityOverride ?? defaultDetectionSensitivity
   const { inpaintGroups, upscaleGroups, inpaintDeviceOverrides, inpaintPipelines, watermarkDefaults, defaultInpaintModel } = useModelStore()
   const hasModel = (id: string) => inpaintGroups.some(group => group.options.some(model => model.value === id))
   const inpaintModel = hasModel(preferredInpaintModel) ? preferredInpaintModel : defaultInpaintModel
   const modelDefaults = watermarkDefaults[inpaintModel]
   const dilationOverride = inpaintDilationOverrides[inpaintModel]
-  const dilation = dilationOverride ?? modelDefaults?.dilation ?? defaultDilation
+  const savedDilation = inpaintModel === 'wm_lama' ? lamaDilation : null
+  const dilation = dilationOverride ?? savedDilation ?? modelDefaults?.dilation ?? defaultDilation
   const repairAvailable = hasModel(inpaintModel)
   const effectiveDevice = inpaintDeviceOverrides?.[inpaintModel] || device
   const { options: deviceOptions, loading: detectingDevices, cudaAvailable } = useDeviceOptions({ device, setDevice })
@@ -586,6 +592,11 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             onChange={(e) => setSensitivity(Number(e.target.value))}
             unit="%"
           />
+          {sensitivityOverride !== undefined && (
+            <button type="button" className="text-xs text-fg-accent" onClick={() => setSensitivity(undefined)}>
+              恢复默认检测敏感度
+            </button>
+          )}
 
           {/* Model selector */}
           <ModelSelect

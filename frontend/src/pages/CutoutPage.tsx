@@ -48,7 +48,7 @@ const CHECKERBOARD_STYLE = {
 export default function CutoutPage({ isVisible = false }: { isVisible?: boolean }) {
   // ── Store 状态 ──
   const {
-    sourceRevision, sourceImage, resultImage, resultMask,
+    sourceRevision, sourceImage, sourceFile, resultImage, resultMask,
     compositeResult, setCompositeResult, bgColor, setBgColor,
     imageWidth, imageHeight,
     brushStrokes, brushMode, brushSize,
@@ -111,17 +111,23 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
     return () => { active = false; controller.abort() }
   }, [ready])
 
-  // 所有原图入口（包括工具间传图）都在会话内加载尺寸。
+  // 文件用 Blob URL 预览，避免将大文件的 Base64 字符串用作浏览器图片地址。
+  const [sourcePreview, setSourcePreview] = useState<{ url: string; revision: number } | null>(null)
+  const sourcePreviewUrl = sourcePreview?.revision === sourceRevision ? sourcePreview.url : null
   useEffect(() => {
     if (!sourceImage) return
-    let active = true
+    const url = sourceFile ? URL.createObjectURL(sourceFile) : sourceImage
+    setSourcePreview({ url, revision: sourceRevision })
     const img = new Image()
-    img.onload = () => {
-      if (active) setImageDimensions(img.naturalWidth, img.naturalHeight, sourceRevision)
+    img.onload = () => setImageDimensions(img.naturalWidth, img.naturalHeight, sourceRevision)
+    img.onerror = () => showToast('error', '无法预览原图，请重新导入图片')
+    img.src = url
+    return () => {
+      img.onload = null
+      img.onerror = null
+      if (sourceFile) URL.revokeObjectURL(url)
     }
-    img.src = sourceImage
-    return () => { active = false; img.onload = null }
-  }, [sourceImage, sourceRevision, setImageDimensions])
+  }, [sourceImage, sourceFile, sourceRevision, setImageDimensions])
 
   // ── 加载结果图到 Konva ──
   const displayImage = compositeResult || resultImage
@@ -338,15 +344,15 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
   const immichActionsRef = useRef<ImmichActionsHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const loadSource = useCallback((dataUrl: string) => {
-    setSourceImage(dataUrl)
+  const loadSource = useCallback((file: File) => {
+    fileToDataUrl(file).then((dataUrl) => setSourceImage(dataUrl, undefined, file))
+      .catch((err) => showToast('error', `读取图片失败: ${err.message}`))
   }, [setSourceImage])
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    fileToDataUrl(file).then((dataUrl) => loadSource(dataUrl))
-      .catch((err) => showToast('error', `读取图片失败: ${err.message}`))
+    loadSource(file)
     e.target.value = ''
   }, [loadSource])
 
@@ -354,14 +360,12 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
     e.preventDefault()
     const file = e.dataTransfer.files[0]
     if (!file || !file.type.startsWith('image/')) return
-    const reader = new FileReader()
-    reader.onload = () => loadSource(reader.result as string)
-    reader.readAsDataURL(file)
+    loadSource(file)
   }, [loadSource])
 
-  const handleOpenFile = useCallback(async () => {
+  const handleOpenFile = useCallback(() => {
     fileInputRef.current?.click()
-  }, [loadSource])
+  }, [])
 
   // ── 模型下载状态感知 ──
   const currentTask = downloadTasks[cutoutModel]
@@ -525,12 +529,12 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
       <PageHeader title="抠图" right={<SendToEditor image={compositeResult || resultImage} current="cutout" />} />
 
       <div className="flex-none px-3 py-1 border-b border-border-subtle">
-        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="cutout" revision={sourceRevision} original={sourceImage} result={compositeResult || resultImage}
+        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="cutout" revision={sourceRevision} original={sourcePreviewUrl} result={compositeResult || resultImage}
           onImport={async items => {
             const item = items[0]
             const image = await fileToDataUrl(item.file)
             if (useCutoutStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
-            setSourceImage(image)
+            setSourceImage(image, undefined, item.file)
             bindImmichSource('cutout', {
               token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
               revision: useCutoutStore.getState().sourceRevision,
@@ -562,7 +566,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
             /* 原图预览 */
             <div className="absolute inset-0 flex items-center justify-center p-4">
               <img
-                src={sourceImage}
+                src={sourcePreviewUrl ?? undefined}
                 alt="原图"
                 className="max-w-full max-h-full object-contain rounded"
                 style={{ imageRendering: 'auto' }}

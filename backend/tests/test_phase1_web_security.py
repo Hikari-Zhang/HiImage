@@ -76,6 +76,8 @@ def test_get_settings_response_uses_an_explicit_non_sensitive_allowlist(monkeypa
         "hf_token_configured",
         "github_mirror",
         "default_dilation",
+        "lama_dilation",
+        "default_detection_sensitivity",
         "disable_nsfw",
 
         "download_max_concurrent",

@@ -9,6 +9,7 @@ import { useCutoutStore } from '../stores/useCutoutStore'
 import { useImageStore, useUpscaleImageStore } from '../stores/useImageStore'
 import { useProcessStore } from '../stores/useProcessStore'
 import { getEditorSettingsStore } from '../stores/useEditorSettings'
+import { useSettingsStore } from '../stores/useSettingsStore'
 import { useUpscaleBatchStore } from '../stores/useUpscaleBatchStore'
 
 const api = vi.hoisted(() => ({ upscale: vi.fn(), inpaintWithMask: vi.fn(), runPipeline: vi.fn(), detectWatermark: vi.fn() }))
@@ -87,7 +88,10 @@ describe('real editor interaction with deferred inference responses', () => {
     // A fake future repair backend keeps generic editor isolation regressions meaningful.
     useModelStore.setState({ defaultInpaintModel: '', inpaintPipelines: {}, watermarkDefaults: {},
       inpaintGroups: [{ label: 'test', options: [{ value: 'test-repair', label: 'test' }] }] })
-    getEditorSettingsStore('watermark').setState({ inpaintModel: 'test-repair', device: 'cpu', inpaintDilationOverrides: {} })
+    getEditorSettingsStore('watermark').setState({
+      inpaintModel: 'test-repair', device: 'cpu', inpaintDilationOverrides: {}, sensitivityOverride: undefined,
+    })
+    useSettingsStore.setState({ lamaDilation: null, defaultDetectionSensitivity: 50 })
     vi.stubGlobal('IntersectionObserver', class {
       observe() {}
       unobserve() {}
@@ -206,6 +210,34 @@ describe('real editor interaction with deferred inference responses', () => {
     expect(screen.getByRole('button', { name: '去除水印' })).toBeEnabled()
   })
 
+  it('uses saved watermark defaults until the editor overrides them', async () => {
+    getEditorSettingsStore('watermark').setState({ inpaintModel: 'wm_lama' })
+    useModelStore.setState({
+      inpaintGroups: [{ label: '快速修复', options: [{ value: 'wm_lama', label: 'LaMa' }] }],
+      watermarkDefaults: { wm_lama: { dilation: 1 } },
+    })
+    api.detectWatermark.mockResolvedValueOnce({ regions: [] })
+    api.inpaintWithMask.mockResolvedValueOnce({ image: 'cleaned' })
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    const dilation = screen.getByRole('slider', { name: '遮罩扩张' })
+    const sensitivity = screen.getByRole('slider', { name: '检测敏感度' })
+    expect(dilation).toHaveValue('1')
+    expect(sensitivity).toHaveValue('50')
+    act(() => useSettingsStore.setState({ lamaDilation: 0, defaultDetectionSensitivity: 75 }))
+    expect(dilation).toHaveValue('0')
+    expect(sensitivity).toHaveValue('75')
+
+    fireEvent.change(sensitivity, { target: { value: '60' } })
+    fireEvent.click(screen.getByRole('button', { name: '自动检测' }))
+    await waitFor(() => expect(api.detectWatermark).toHaveBeenCalledWith('watermark-original', .6, expect.any(String)))
+    fireEvent.click(screen.getByRole('button', { name: '恢复默认检测敏感度' }))
+    expect(sensitivity).toHaveValue('75')
+    fireEvent.change(dilation, { target: { value: '4' } })
+    fireEvent.click(screen.getByRole('button', { name: '恢复默认遮罩扩张' }))
+    fireEvent.click(screen.getByRole('button', { name: '去除水印' }))
+    await waitFor(() => expect(api.inpaintWithMask).toHaveBeenCalledWith(expect.objectContaining({ dilation: 0 })))
+  })
+
   it('finishes an upscale after another editor uploads a different source', async () => {
     const result = deferredResult()
     api.upscale.mockReturnValueOnce(result.promise)
@@ -304,7 +336,7 @@ describe('real editor interaction with deferred inference responses', () => {
   it('preserves watermark selections after failure and retries with the same options', async () => {
     api.inpaintWithMask.mockRejectedValueOnce(new Error('修复失败'))
       .mockResolvedValueOnce({ image: 'retry-cleaned' })
-    getEditorSettingsStore('watermark').setState({ defaultDilation: 3 })
+    getEditorSettingsStore('watermark').getState().setInpaintDilation('test-repair', 3)
     render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
     const originalROIs = useImageStore.getState().rois
     fireEvent.click(screen.getByRole('button', { name: '去除水印' }))
@@ -425,5 +457,27 @@ describe('real editor interaction with deferred inference responses', () => {
     render(<MemoryRouter><CutoutPage /></MemoryRouter>)
     act(() => pending[0].onload!())
     expect(useCutoutStore.getState()).toMatchObject({ imageWidth: 32, imageHeight: 16 })
+  })
+
+  it('previews a cutout file with a Blob URL and releases it when the source changes', () => {
+    const createObjectURL = vi.fn(() => 'blob:original')
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', class extends URL {
+      static createObjectURL = createObjectURL
+      static revokeObjectURL = revokeObjectURL
+    })
+    vi.stubGlobal('ResizeObserver', class { observe() {}; disconnect() {} })
+    const file = new File(['original'], 'original.png', { type: 'image/png' })
+    const original = 'data:image/png;base64,b3JpZ2luYWw='
+    useCutoutStore.getState().setSourceImage(original, undefined, file)
+
+    render(<MemoryRouter><CutoutPage /></MemoryRouter>)
+    expect(createObjectURL).toHaveBeenCalledWith(file)
+    expect(screen.getByRole('img', { name: '原图' })).toHaveAttribute('src', 'blob:original')
+    expect(useCutoutStore.getState().sourceImage).toBe(original)
+
+    act(() => useCutoutStore.getState().setSourceImage('data:image/png;base64,replacement'))
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:original')
+    expect(screen.getByRole('img', { name: '原图' })).toHaveAttribute('src', 'data:image/png;base64,replacement')
   })
 })

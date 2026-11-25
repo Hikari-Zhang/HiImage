@@ -780,7 +780,7 @@ models:
     device_override: cpu
     display_group: 快速本地模型
     watermark_defaults:
-      dilation: 2
+      dilation: 1
     supported_params: {}
 
 mode_groups:

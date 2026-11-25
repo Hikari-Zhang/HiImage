@@ -9,6 +9,8 @@ function savedFields() {
     hfToken: '',
     githubMirror: saved.githubMirror,
     dilation: String(saved.defaultDilation),
+    lamaDilation: saved.lamaDilation === null ? '' : String(saved.lamaDilation),
+    defaultDetectionSensitivity: saved.defaultDetectionSensitivity,
     disableNsfw: saved.disableNsfw,
     downloadMaxConcurrent: String(saved.downloadMaxConcurrent),
     upscaleTile: String(saved.upscaleTile),

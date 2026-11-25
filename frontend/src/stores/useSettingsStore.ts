@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { createApiClient } from '../services/apiClient'
 import { clearHfTokenRequest, saveSettingsRequest } from '../services/settingsService'
+import { useBackendStore } from './useBackendStore'
 
 interface SettingsResponse {
   device?: string
@@ -8,6 +9,8 @@ interface SettingsResponse {
   hf_token_configured?: boolean
   github_mirror?: string
   default_dilation?: number
+  lama_dilation?: number | null
+  default_detection_sensitivity?: number
   disable_nsfw?: boolean
   download_max_concurrent?: number
   upscale_tile?: number
@@ -21,7 +24,8 @@ interface SettingsState {
   // Inpaint
   inpaintModel: string
   defaultDilation: number
-  sensitivity: number
+  lamaDilation: number | null
+  defaultDetectionSensitivity: number
 
   // Postprocess
   postprocessMethod: string   // none / poisson / gfpgan
@@ -54,24 +58,28 @@ interface SettingsState {
   setUpscaleTile: (tile: number) => void
   setCutoutModel: (model: string) => void
   setDilation: (dilation: number) => void
-  setSensitivity: (sensitivity: number) => void
   setDisableNsfw: (v: boolean) => void
   setPostprocessMethod: (method: string) => void
   setPostprocessEnabled: (enabled: boolean) => void
   setUpscaleEnabled: (enabled: boolean) => void
-  setSettings: (settings: Partial<SettingsState>) => void
   loadSettings: (backendURL: string, signal?: AbortSignal) => Promise<void>
-  saveSettings: (backendURL: string) => Promise<void>
+  saveSettings: (backendURL: string, changes?: SettingsChanges) => Promise<void>
   clearHfToken: (backendURL: string) => Promise<void>
   loadDefaults: (backendURL: string) => Promise<void>  // 从后端加载默认模型配置
 }
+
+type SettingsChanges = Partial<Pick<SettingsState,
+  'device' | 'hfEndpoint' | 'hfToken' | 'githubMirror' | 'defaultDilation' |
+  'lamaDilation' | 'defaultDetectionSensitivity' | 'disableNsfw' | 'downloadMaxConcurrent' | 'upscaleTile'
+>>
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   device: 'cpu',
   disableNsfw: true,
   inpaintModel: '',  // 无可用修复模型时保持为空
   defaultDilation: 10,
-  sensitivity: 50,
+  lamaDilation: null,
+  defaultDetectionSensitivity: 50,
   postprocessMethod: 'none',
   postprocessEnabled: false,
   upscaleModel: 'RealESRGAN_x4plus',
@@ -92,13 +100,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setUpscaleTile: (tile) => set({ upscaleTile: tile }),
   setCutoutModel: (model) => set({ cutoutModel: model }),
   setDilation: (dilation) => set({ defaultDilation: dilation }),
-  setSensitivity: (sensitivity) => set({ sensitivity }),
   setDisableNsfw: (v) => set({ disableNsfw: v }),
   setPostprocessMethod: (method) => set({ postprocessMethod: method }),
   setPostprocessEnabled: (enabled) => set({ postprocessEnabled: enabled }),
   setUpscaleEnabled: (enabled) => set({ upscaleEnabled: enabled }),
-
-  setSettings: (settings) => set(settings),
 
   loadSettings: async (backendURL, signal) => {
     set({ isLoading: true })
@@ -112,6 +117,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         hfTokenConfigured: data.hf_token_configured ?? false,
         githubMirror: data.github_mirror ?? '',
         defaultDilation: data.default_dilation ?? 10,
+        lamaDilation: data.lama_dilation ?? null,
+        defaultDetectionSensitivity: data.default_detection_sensitivity ?? 50,
         disableNsfw: data.disable_nsfw ?? true,
         downloadMaxConcurrent: data.download_max_concurrent ?? 3,
         upscaleTile: data.upscale_tile ?? 0,  // 0 = 自动计算
@@ -124,8 +131,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
-  saveSettings: async (backendURL) => {
-    const state = get()
+  saveSettings: async (backendURL, changes) => {
+    const current = get()
+    const state = { ...current, ...changes }
     try {
       const payload: Record<string, unknown> = {
           device: state.device,
@@ -136,10 +144,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           download_max_concurrent: state.downloadMaxConcurrent,
           upscale_tile: state.upscaleTile,
       }
+      if (state.lamaDilation !== current.lamaDilation) payload.lama_dilation = state.lamaDilation
+      if (state.defaultDetectionSensitivity !== current.defaultDetectionSensitivity) {
+        payload.default_detection_sensitivity = state.defaultDetectionSensitivity
+      }
       if (state.hfToken.trim()) payload.hf_token = state.hfToken.trim()
       await saveSettingsRequest(createApiClient(backendURL), payload)
-      if (state.hfToken.trim()) {
-        set({ hfToken: '', hfTokenConfigured: true })
+      if (useBackendStore.getState().backendURL === backendURL) {
+        set({ ...changes, ...(state.hfToken.trim() ? { hfToken: '', hfTokenConfigured: true } : {}) })
       }
     } catch (err) {
       console.error('Failed to save settings:', err)

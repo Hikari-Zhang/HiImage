@@ -26,6 +26,7 @@ def configured_default_device(
 # 默认值
 DEFAULTS = {
     "inpaint.default_dilation": 10,
+    "inpaint.default_detection_sensitivity": 50,
     "inpaint.default_device": configured_default_device(),
     "image.max_output_mb": 256,
     "image.max_decode_mb": 30,

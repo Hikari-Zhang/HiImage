@@ -8,6 +8,7 @@ export type CutoutBrushMode = 'add_fg' | 'remove_fg'
 interface CutoutState {
   // ── 图像 ──
   sourceImage: string | null       // Base64 原图
+  sourceFile: File | null
   sourceFilePath: string | null
   resultImage: string | null       // RGBA 结果 (base64)
   resultMask: string | null        // Alpha mask (base64)
@@ -33,7 +34,7 @@ interface CutoutState {
   showCheckerboard: boolean        // 棋盘格透明背景
 
   // ── 操作 ──
-  setSourceImage: (image: string | null, filePath?: string | null) => void
+  setSourceImage: (image: string | null, filePath?: string | null, file?: File) => void
   setImageDimensions: (width: number, height: number, revision?: number) => void
   setResult: (image: string | null, mask: string | null) => void
   setResultImage: (image: string | null) => void
@@ -61,6 +62,7 @@ export const useCutoutStore = create<CutoutState>((set) => ({
   setCompositeResult: (compositeResult) => set({ compositeResult }),
   setBgColor: (bgColor) => set({ bgColor }),
   sourceImage: null,
+  sourceFile: null,
   sourceFilePath: null,
   resultImage: null,
   resultMask: null,
@@ -81,7 +83,7 @@ export const useCutoutStore = create<CutoutState>((set) => ({
   showCheckerboard: true,
 
   // ── 操作实现 ──
-  setSourceImage: (image, filePath) => {
+  setSourceImage: (image, filePath, file) => {
     useProcessStore.getState().reset('cutout')
     set((state) => ({
       sourceRevision: state.sourceRevision + 1,
@@ -89,6 +91,7 @@ export const useCutoutStore = create<CutoutState>((set) => ({
       imageHeight: 0,
       compositeResult: null,
       sourceImage: image,
+      sourceFile: image ? file ?? null : null,
       sourceFilePath: filePath || null,
       resultImage: null,
       resultMask: null,
@@ -143,6 +146,7 @@ export const useCutoutStore = create<CutoutState>((set) => ({
       compositeResult: null,
       bgColor: '#FFFFFF',
       sourceImage: null,
+      sourceFile: null,
       sourceFilePath: null,
       resultImage: null,
       resultMask: null,

@@ -17,6 +17,8 @@ class RedrawOptions(BaseModel):
 def resolve_watermark_options(model_id: str, dilation: int | None, redraw: RedrawOptions | None) -> dict:
     """合并去水印模型默认值与本次请求的显式参数。"""
     defaults = get_model(model_id).get("watermark_defaults", {})
+    if dilation is None and model_id == "wm_lama":
+        dilation = get("inpaint.lama_dilation")
     if dilation is None:
         dilation = defaults["dilation"] if "dilation" in defaults else get("inpaint.default_dilation", 10)
     parameters = defaults.get("redraw", {}).copy()

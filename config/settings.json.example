@@ -1,6 +1,8 @@
 {
   "inpaint": {
     "default_dilation": 10,
+    "lama_dilation": null,
+    "default_detection_sensitivity": 50,
     "default_device": "mps",
     "disable_nsfw": true
   },

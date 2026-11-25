@@ -6,7 +6,7 @@ from collections.abc import MutableMapping
 from typing import Optional
 
 from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import get_all, save
 from core.utils import default_device_for_platform
@@ -23,6 +23,8 @@ class SettingsUpdate(BaseModel):
     clear_hf_token: bool = False
     github_mirror: Optional[str] = None
     default_dilation: Optional[int] = None
+    lama_dilation: int | None = Field(default=None, strict=True, ge=0, le=30)
+    default_detection_sensitivity: int | None = Field(default=None, strict=True, ge=10, le=90)
     disable_nsfw: Optional[bool] = None
     # 内存优化选项（扩散模型）
     # 下载配置
@@ -55,6 +57,8 @@ async def get_settings():
         "hf_token_configured": bool(all_settings.get("network.hf_token", "")),
         "github_mirror": all_settings.get("network.github_mirror", ""),
         "default_dilation": all_settings.get("inpaint.default_dilation", 10),
+        "lama_dilation": all_settings.get("inpaint.lama_dilation"),
+        "default_detection_sensitivity": all_settings.get("inpaint.default_detection_sensitivity", 50),
         "disable_nsfw": all_settings.get("inpaint.disable_nsfw", True),
         "download_max_concurrent": all_settings.get("download.max_concurrent", 3),
         # 超分辨率 tile 设置（0 = 自动计算）
@@ -79,6 +83,13 @@ async def update_settings(data: SettingsUpdate):
         current["network.github_mirror"] = data.github_mirror
     if data.default_dilation is not None:
         current["inpaint.default_dilation"] = data.default_dilation
+    if "lama_dilation" in data.model_fields_set:
+        if data.lama_dilation is None:
+            current.pop("inpaint.lama_dilation", None)
+        else:
+            current["inpaint.lama_dilation"] = data.lama_dilation
+    if data.default_detection_sensitivity is not None:
+        current["inpaint.default_detection_sensitivity"] = data.default_detection_sensitivity
     if data.disable_nsfw is not None:
         current["inpaint.disable_nsfw"] = data.disable_nsfw
     if data.download_max_concurrent is not None:

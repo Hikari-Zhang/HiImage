@@ -1,6 +1,6 @@
 import { getSettingsDraftStore } from '../stores/useSettingsDraft'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ToastContainer from '../components/ui/Toast'
 import { useBackendStore } from '../stores/useBackendStore'
@@ -19,7 +19,9 @@ describe('Settings', () => {
   beforeEach(() => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     useBackendStore.setState({ backendURL: '', isConnected: false, wsConnected: false })
-    useSettingsStore.setState({ device: 'cpu', defaultDilation: 10, isLoading: false })
+    useSettingsStore.setState({
+      device: 'cpu', defaultDilation: 10, lamaDilation: null, defaultDetectionSensitivity: 50, isLoading: false,
+    })
     getSettingsDraftStore('').getState().reset()
   })
 
@@ -131,6 +133,39 @@ describe('Settings', () => {
     await waitFor(() => expect(savedBodies).toContainEqual({ clear_hf_token: true }))
     expect(window.confirm).toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByText('Token 已配置')).not.toBeInTheDocument())
+  })
+
+  it('保存 LaMa 零扩张和 OCR 默认值，并可恢复模型推荐值', async () => {
+    const savedBodies: unknown[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/settings') && init?.method === 'PUT') {
+        savedBodies.push(JSON.parse(String(init.body)))
+        return jsonResponse({ status: 'ok' })
+      }
+      if (url.endsWith('/api/settings')) return jsonResponse({ lama_dilation: 3, default_detection_sensitivity: 60 })
+      if (url.endsWith('/api/health')) return jsonResponse({ status: 'ok' })
+      if (url.endsWith('/api/devices')) return jsonResponse({ devices: [] })
+      throw new Error(`unexpected request: ${url}`)
+    }))
+    render(<Settings isVisible />)
+    const dilation = screen.getByRole('spinbutton', { name: /LaMa 默认遮罩扩张/ })
+    const sensitivity = screen.getByRole('slider', { name: '默认 OCR 检测敏感度' })
+    await waitFor(() => expect(dilation).toHaveValue(3))
+    expect(sensitivity).toHaveValue('60')
+    fireEvent.change(dilation, { target: { value: '0' } })
+    fireEvent.change(sensitivity, { target: { value: '75' } })
+    expect(useSettingsStore.getState().lamaDilation).toBe(3)
+    await userEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(useSettingsStore.getState().lamaDilation).toBe(0))
+    expect(savedBodies[0]).toMatchObject({ lama_dilation: 0, default_detection_sensitivity: 75 })
+
+    await userEvent.click(screen.getByRole('button', { name: '恢复默认' }))
+    expect(dilation).toHaveValue(null)
+    expect(sensitivity).toHaveValue('50')
+    await userEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(useSettingsStore.getState().lamaDilation).toBeNull())
+    expect(savedBodies[1]).toMatchObject({ lama_dilation: null, default_detection_sensitivity: 50 })
   })
 
   it('卸载再进入后保留未保存的输入，并延迟加载模型管理', async () => {

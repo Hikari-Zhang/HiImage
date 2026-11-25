@@ -35,7 +35,10 @@ router = APIRouter(route_class=TaskRoute)
 
 class DetectRequest(BaseModel):
     image: str  # Base64 encoded PNG/JPG
-    sensitivity: float = Field(default=.5, ge=0, le=1)
+    sensitivity: float = Field(
+        default_factory=lambda: get("inpaint.default_detection_sensitivity", 50) / 100,
+        ge=0, le=1,
+    )
     task_id: TaskId
 
 

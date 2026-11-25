@@ -585,6 +585,8 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | 配置项 | 默认或语义 |
 |---|---|
 | `inpaint.default_dilation` | 10 像素；最终请求可覆盖 |
+| `inpaint.lama_dilation` | LaMa 的可选默认扩张，0–30 像素。未设置时使用模型推荐的 1 像素 |
+| `inpaint.default_detection_sensitivity` | OCR 默认检测敏感度，默认 50%，可设为 10–90% |
 | `inpaint.default_device` | 环境默认值或平台默认值；已保存值优先 |
 | `download.max_concurrent` | 默认 3；设置接口约束为 1–10 |
 | `upscale.tile` | 默认调用方使用 0，表示自动配置 |

@@ -71,7 +71,7 @@ function SaveDialog({ result, original, source, connection, close }: {
 
   const pending = outcome?.album_pending || outcome?.migration_pending
   const attachDuplicate = outcome?.state === 'duplicate' && album && !outcome.album_added
-  const src = (value: string) => value.startsWith('data:') ? value : 'data:image/png;base64,' + value
+  const src = (value: string) => /^(data|blob):/.test(value) ? value : 'data:image/png;base64,' + value
   return (
     <ImmichDialog title={preview ? '确认替换来源图片' : '保存到 Immich'} busy={busy} close={close}>
       <div className="space-y-3 text-sm">

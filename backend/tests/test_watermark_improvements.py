@@ -7,6 +7,50 @@ import numpy as np
 import pytest
 
 from app.services import image_processing
+
+
+def test_saved_watermark_defaults_and_explicit_overrides(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app import config
+    from app.redraw_options import resolve_watermark_options
+    from app.routers.inpaint import DetectRequest
+    from app.routers.settings import router
+
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(config, "_loaded", False)
+    monkeypatch.setattr(config, "_cache", {})
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    detection = {"image": "placeholder", "task_id": "watermark-default-test"}
+
+    with TestClient(app) as client:
+        path = "/api/settings"
+        initial = client.get(path).json()
+        assert initial["lama_dilation"] is None and initial["default_detection_sensitivity"] == 50
+        assert DetectRequest(**detection).sensitivity == .5
+        assert resolve_watermark_options("wm_lama", None, None)["dilation"] == 1
+
+        for invalid in ({"lama_dilation": 31}, {"lama_dilation": 2.5}, {"default_detection_sensitivity": 9}):
+            assert client.put(path, json=invalid).status_code == 422
+        assert client.put(path, json={"lama_dilation": 0, "default_detection_sensitivity": 75}).status_code == 200
+        config.reload()
+        saved = client.get(path).json()
+        assert saved["lama_dilation"] == 0 and saved["default_detection_sensitivity"] == 75
+        assert DetectRequest(**detection).sensitivity == .75
+        assert DetectRequest(**detection, sensitivity=0).sensitivity == 0
+        assert resolve_watermark_options("wm_lama", None, None)["dilation"] == 0
+        assert resolve_watermark_options("wm_lama", 8, None)["dilation"] == 8
+        assert resolve_watermark_options("flux_fill", None, None)["dilation"] == 2
+
+        assert client.put(path, json={"lama_dilation": None}).status_code == 200
+        assert client.get(path).json()["lama_dilation"] is None
+        assert resolve_watermark_options("wm_lama", None, None)["dilation"] == 1
+        assert DetectRequest(**detection).sensitivity == .75
+
+
 @pytest.mark.parametrize('position', [(0, 0), (1200, 800), (2930, 1930)])
 def test_high_resolution_repairs_are_local_and_preserve_every_unmasked_pixel(position):
     from core.inpaint_regions import prepare_mask, repair_regions
