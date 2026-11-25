@@ -59,15 +59,8 @@ def check_snapshot(directory: Path, cfg: dict) -> int:
         return sum(check_file(directory / name, size) for name, size in required.items())
 
     if cfg.get("provider") != "diffusers" and cfg.get("executor") != "diffusers":
-        config = read_config(directory / "config.json")
+        read_config(directory / "config.json")
         read_config(directory / "preprocessor_config.json")
-        if config.get("model_type") == "grounding-dino":
-            # GroundingDinoProcessor 同时加载图像预处理器和 BERT 分词器。
-            tokenizer = directory / "tokenizer.json"
-            if tokenizer.is_file():
-                read_config(tokenizer)
-            else:
-                check_file(directory / "vocab.txt")
         return check_weights(directory, diffusers=False)
 
     components = read_config(directory / "model_index.json")
@@ -81,8 +74,6 @@ def check_snapshot(directory: Path, cfg: dict) -> int:
             continue
         if not name.isidentifier() or not isinstance(class_name, str):
             raise ValueError(f"无效的模型组件: {name}")
-        if name == "safety_checker" and cfg.get("pipeline") == "instruct_pix2pix":
-            continue
         folder = directory / name
         if name == "scheduler":
             read_config(folder / "scheduler_config.json")
@@ -100,12 +91,13 @@ def check_snapshot(directory: Path, cfg: dict) -> int:
         else:
             read_config(folder / "config.json")
             total += check_weights(folder, diffusers=library != "transformers" and name != "safety_checker",
-                                   safetensors_only=cfg.get("pipeline") == "sdxl_img2img")
+                                   safetensors_only=cfg.get("pipeline") == "flux_fill")
             model_components += 1
     required_components = {"scheduler", "tokenizer", "text_encoder", "vae"}
-    required_components.add("transformer" if cfg.get("pipeline") == "flux_img2img" else "unet")
-    if cfg.get("pipeline") in {"flux_img2img", "sdxl_img2img"}:
-        required_components.update({"tokenizer_2", "text_encoder_2"})
+    if cfg.get("pipeline") == "flux_fill":
+        required_components.update({"transformer", "tokenizer_2", "text_encoder_2"})
+    else:
+        required_components.add("unet")
     for name in sorted(required_components):
         component = components.get(name)
         if not isinstance(component, list) or len(component) != 2 or not all(component):

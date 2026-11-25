@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useImageStore, useSynthesisImageStore, useUpscaleImageStore } from './useImageStore'
+import { useImageStore, useUpscaleImageStore } from './useImageStore'
 import { useCutoutStore } from './useCutoutStore'
 import { isCurrentTask, useProcessStore } from './useProcessStore'
 import { getEditorSettingsStore } from './useEditorSettings'
@@ -11,7 +11,6 @@ import { applyTaskProgressMessage } from '../services/taskProgress'
 const images = {
   watermark: useImageStore,
   upscale: useUpscaleImageStore,
-  synthesis: useSynthesisImageStore,
 }
 
 describe('editor session ownership', () => {
@@ -35,7 +34,7 @@ describe('editor session ownership', () => {
   })
 
   it.each(Object.keys(images) as (keyof typeof images)[])('%s keeps its own image, result and mask', (id) => {
-    const otherId = id === 'watermark' ? 'synthesis' : 'watermark'
+    const otherId = id === 'watermark' ? 'upscale' : 'watermark'
     const current = images[id].getState()
     current.setSourceImage('original')
     current.setResultImage('result', 40, 20)
@@ -148,7 +147,7 @@ describe('editor session ownership', () => {
     expect(useCutoutStore.getState().compositeResult).toBeNull()
   })
 
-  it.each(['watermark', 'upscale', 'synthesis', 'cutout'] as EditorDestination[])(
+  it.each(['watermark', 'upscale', 'cutout'] as EditorDestination[])(
     'explicit transfer replaces only destination %s and normalizes base64', (destination) => {
       Object.values(images).forEach((store) => store.getState().setSourceImage('unchanged'))
       useCutoutStore.getState().setSourceImage('unchanged')

@@ -81,15 +81,6 @@ def composite_cutout(image_rgba: np.ndarray, background_color: str):
     return (foreground * alpha + np.array(rgb, dtype=np.float32) * (1 - alpha)).astype(np.uint8)
 
 
-def synthesize_image(source: np.ndarray, reference, rois, *, mode: str, model_id: str,
-                     device: str, prompt: str, progress_callback: ProgressCallback | None = None):
-    from core.synthesizer import Synthesizer
-    return Synthesizer(
-        mode=mode, model_id=model_id, device=device, prompt=prompt,
-        progress_callback=progress_callback,
-    ).run(source_rgb=source, rois=rois, reference_rgb=reference)
-
-
 def postprocess_image(original: np.ndarray, inpainted: np.ndarray, mask: np.ndarray,
                       method: str, device: str):
     from core.background_fixer import fix_background

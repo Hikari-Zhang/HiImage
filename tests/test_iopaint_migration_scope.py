@@ -9,8 +9,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SCOPE = json.loads((ROOT / 'docs/iopaint_migration_scope.json').read_text(encoding='utf-8'))
 
 
+def registry_document():
+    return yaml.safe_load((ROOT / 'backend/core/models.yaml').read_text(encoding='utf-8'))
+
+
 def registry():
-    document = yaml.safe_load((ROOT / 'backend/core/models.yaml').read_text(encoding='utf-8'))
+    document = registry_document()
     return {model['id']: model for model in document['models']}
 
 
@@ -25,12 +29,14 @@ def test_scope_accounts_for_all_existing_models_without_overlap():
     assert not set(registry()) & set(SCOPE["removed_model_ids"])
 
 
-def test_target_defaults_are_retained_and_support_their_modes():
+def test_current_modes_keep_their_target_defaults():
     models = registry()
-    for mode, model_id in SCOPE['target_defaults'].items():
-        assert model_id in SCOPE['models']['keep']
-        if model_id in models:
-            assert mode in models[model_id]['tags']
+    defaults = SCOPE['target_defaults']
+    assert set(defaults.values()) <= set(SCOPE['models']['keep'])
+    for mode in registry_document()['mode_groups']:
+        model_id = mode['default_model']
+        assert model_id == defaults[mode['id']]
+        assert mode['id'] in models[model_id]['tags']
     assert SCOPE['target_defaults']['outfit_swap'] == 'sd15'
     assert SCOPE['target_defaults']['prompt_inpaint'] == 'sd15_inpaint_prompt'
 

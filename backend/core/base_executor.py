@@ -1,8 +1,7 @@
 """
 通用执行器抽象基类
 
-为不依赖 models.yaml / ModelExecutorFactory 体系的执行器（如 Inpainter、Upscaler、
-Synthesizer 等具有更丰富构造参数的类）提供统一的 run() 接口契约。
+为使用自定义构造参数的执行器提供统一的 run() 接口契约。
 
 与 BaseModelExecutor（model_executor.py）的区别：
   - BaseModelExecutor：面向 ModelExecutorFactory 分发体系，构造函数固定为

@@ -37,12 +37,8 @@ def pipelines(monkeypatch):
             return Pipe()
         return SimpleNamespace(from_pretrained=load)
 
-    names = (
-        "FluxFillPipeline", "FluxImg2ImgPipeline",
-        "StableDiffusionXLImg2ImgPipeline", "StableDiffusionInstructPix2PixPipeline",
-    )
     monkeypatch.setitem(sys.modules, "diffusers", SimpleNamespace(
-        **{name: pipeline_class(name) for name in names}))
+        FluxFillPipeline=pipeline_class("FluxFillPipeline")))
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
         float32="float32", Generator=Generator,
         cuda=SimpleNamespace(is_available=lambda: False),
@@ -52,32 +48,24 @@ def pipelines(monkeypatch):
     return events
 
 
-@pytest.mark.parametrize("model_id,expected", [
-    ("flux_fill", "FluxFillPipeline"),
-    ("flux", "FluxImg2ImgPipeline"),
-    ("sdxl_img2img", "StableDiffusionXLImg2ImgPipeline"),
-    ("instruct_pix2pix", "StableDiffusionInstructPix2PixPipeline"),
-])
-def test_explicit_pipeline_dispatch_and_result(pipelines, model_id, expected):
-    config = {**get_model(model_id), "provider": "display-only", "hf_model_id": "test/neutral"}
+def test_explicit_pipeline_dispatch_and_result(pipelines):
+    config = {**get_model("flux_fill"), "provider": "display-only", "hf_model_id": "test/neutral"}
     executor = ModelExecutorFactory.create_executor(config, "cpu")
     image = np.zeros((24, 32, 3), dtype=np.uint8)
     mask = np.zeros(image.shape[:2], dtype=np.uint8)
     mask[:, :8] = 255
     with model_session(executor):
-        result = executor.execute(image, mask=mask if model_id == "flux_fill" else None,
-                                  prompt="edit", seed=17, num_inference_steps=3)
+        result = executor.execute(image, mask=mask, prompt="edit", seed=17, num_inference_steps=3)
     assert result.shape == image.shape
     assert tuple(result[0, 0]) == (255, 0, 0)
-    assert pipelines[0] == ("load", expected, "resolved-model")
+    assert pipelines[0] == ("load", "FluxFillPipeline", "resolved-model")
     params = pipelines[-1][1]
     assert params["prompt"] == "edit"
     assert params["generator"] == 17
     assert params["num_inference_steps"] == 3
-    if model_id == "flux_fill":
-        assert params["mask_image"].size == params["image"].size
-        assert set(np.unique(params["mask_image"])) == {0, 255}
-        assert "strength" not in params
+    assert params["mask_image"].size == params["image"].size
+    assert set(np.unique(params["mask_image"])) == {0, 255}
+    assert "strength" not in params
     assert executor._pipeline is None
 
 
@@ -101,21 +89,6 @@ def test_invalid_masks_and_unavailable_device_fail_before_loading(pipelines):
     with pytest.raises(ValueError, match="CUDA"):
         executor.execute(image, mask=np.ones((2, 2), np.uint8))
     assert pipelines == []
-
-
-def test_fill_adapter_reuses_pipeline_and_cleans_up(pipelines):
-    from core.flux_filler import FluxFiller
-
-    filler = FluxFiller(device="cpu")
-    image = np.zeros((16, 16, 3), np.uint8)
-    mask = np.full((16, 16), 255, np.uint8)
-    with model_session(filler, "offload"):
-        filler.inpaint(image, mask, "fill")
-        filler.inpaint(image, mask, "fill again")
-        assert [event[0] for event in pipelines].count("load") == 1
-        assert pipelines[-1][1]["guidance_scale"] == 30.0
-        assert pipelines[-1][1]["num_inference_steps"] == 50
-    assert filler._executor._pipeline is None
 
 
 def test_pipeline_failure_releases_loaded_reference(pipelines, monkeypatch):
@@ -167,29 +140,3 @@ def test_flux_fill_crops_distant_rois_and_loads_once(pipelines):
     assert result[20, 20, 0] == 255
     assert result[20, 1410, 0] == 255
     assert result[20, 750, 0] == 0
-
-
-@pytest.mark.parametrize("model_id", ["grounded_sam_flux", "auto_segment_hsv"])
-def test_synthesis_uses_registered_composite_pipeline(pipelines, monkeypatch, model_id):
-    from core.synthesizer import Synthesizer
-
-    class Segmenter:
-        def segment(self, image, part):
-            assert part == "Upper-clothes"
-            return np.full(image.shape[:2], 255, np.uint8)
-
-    monkeypatch.setitem(sys.modules, "core.grounded_segmenter", SimpleNamespace(GroundedSegmenter=Segmenter))
-    monkeypatch.setitem(sys.modules, "core.human_parser", SimpleNamespace(HumanParser=Segmenter))
-    monkeypatch.setattr("core.intent_parser.parse_instruction", lambda _: SimpleNamespace(
-        part="Upper-clothes", action="color_change", value="red"))
-    monkeypatch.setattr("core.color_replacer.replace_color_in_mask", lambda image, mask, color: image + 1)
-    editor = Synthesizer("auto_segment_edit", model_id, "cpu", prompt="把上衣换成红色")
-    editor._source_image = np.zeros((8, 8, 3), np.uint8)
-    result = editor._run_auto_segment_edit()
-    if model_id == "grounded_sam_flux":
-        assert pipelines[0][:2] == ("load", "FluxFillPipeline")
-        assert "red colored clothing" in pipelines[-1][1]["prompt"]
-        assert result[0, 0, 0] == 255
-    else:
-        assert pipelines == []
-        assert np.all(result == 1)

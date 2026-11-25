@@ -83,7 +83,7 @@ flowchart TB
 
 `frontend/src/` 是 React 18 + TypeScript 应用，Vite 负责开发和构建：
 
-- `pages/`：去水印、超分辨率、抠图、智能合成、模型、日志和设置。
+- `pages/`：去水印、超分辨率、抠图、模型、日志和设置。
 - `components/`：画布、遮罩工具、批量队列、进度和通用 UI。
 - `stores/`：Zustand 状态；编辑会话分别保存图片、结果、遮罩和参数，任务按 `task_id` 记录并绑定所属会话，超分单图与批量任务独立。
 - `services/apiClient.ts`：统一生成同源 HTTP、WebSocket 和 SSE URL，并统一解析 API 响应与错误。
@@ -123,7 +123,7 @@ flowchart TB
 - `GET /api/tasks/{task_id}`：当前进程内的任务状态、进度和 HTTP 终态，不返回图像结果。
 - `GET /api/tasks/{task_id}/result`：取回仍在保留期内的成功响应 JSON，不重新执行推理。
 - `GET/PUT /api/settings`：持久化设置。
-- `POST /api/inpaint*`、`/api/upscale*`、`/api/cutout*`、`/api/synthesis/*`：图像任务。
+- `POST /api/inpaint*`、`/api/upscale*`与 `/api/cutout*`：图像任务。
 - `/api/models/*`：模型状态、下载和 SSE 进度。
 - `/api/ws/progress`、`/api/ws/logs`：处理进度和日志。
 
@@ -333,7 +333,6 @@ HiImage/
 | `/#/watermark` | `WatermarkRemoval.tsx` | 检测候选、编辑遮罩、修复与增强 |
 | `/#/cutout` | `CutoutPage.tsx` | 透明抠图、画笔精修与纯色合成 |
 | `/#/upscale` | `SuperResolution.tsx` | 单图和浏览器批量超分 |
-| `/#/synthesis` | `SmartSynthesis.tsx` | 合成模式、参考图、ROI 与提示词 |
 | `/#/logs` | `Logs.tsx` | 历史及实时日志 |
 | `/#/settings` | `Settings.tsx` | 应用设置，模型管理为内部页签 |
 
@@ -344,7 +343,7 @@ HiImage/
 | Store / 模块 | 所有权与持久性 |
 |---|---|
 | `useImageStore` | 去水印图片、ROI、多边形、笔画；内存保存 |
-| `useUpscaleImageStore` / `useSynthesisImageStore` | 各工具独立图片与结果；不是共享原图变量 |
+| `useUpscaleImageStore` | 超分原图与结果 |
 | `useCutoutStore` | RGBA、Alpha mask、背景色与精修笔画 |
 | `useUpscaleBatchStore` | 文件队列、结果、当前项及批处理状态 |
 | `useEditorSettings` | 各编辑器参数，由已加载全局设置初始化；超分单图与批量共享其参数 store |
@@ -416,7 +415,7 @@ sequenceDiagram
 
 `/api/cutout` 解码 RGB，检查模型，调用工厂创建 rembg 执行器，返回 RGBA 图和独立灰度 mask。`/api/cutout/refine` 在原 mask 上应用增加/去除前景笔画，再膨胀/腐蚀和羽化，返回更新后的图与 mask。`/api/cutout/composite` 按 Alpha 与指定背景色合成 RGB。
 
-精修及纯色合成使用 CPU 图像操作，不占重推理接纳槽，但仍由 `TaskRoute` 记录状态。合成模式中的换背景另外由 `Synthesizer._background_replace` 调用 rembg 并与参考背景合成，不能把它与抠图页面的纯色背景接口混为一谈。
+精修及纯色合成使用 CPU 图像操作，不占重推理接纳槽，但仍由 `TaskRoute` 记录状态。
 
 ### 14.4 超分与批量
 
@@ -424,41 +423,19 @@ sequenceDiagram
 
 存在两种批量路径：浏览器页面持有队列，逐张调用单图接口；后端另提供 `/api/upscale/batch`，一个请求预检全部输入，在同一批次复用一个 upscaler，逐项返回成功或错误及汇总。后端批量占用一个任务 ID，浏览器逐张处理则按实际提交各自创建任务 ID，不能把二者的恢复语义等同。
 
-### 14.5 智能合成
-
-`SynthesisRequest → image_processing.synthesize_image → Synthesizer.run`，根据模式分发：
-
-| 模式 | 当前实现路径与边界 |
-|---|---|
-| `background_replace` | rembg 抠前景并合成参考背景，可限制 ROI |
-| `outfit_swap` / `face_swap` | 参考图缩放贴入 ROI 后交给执行器重建；特定人脸路径再做增强 |
-| `virtual_tryon` | 复用区域贴图加修复的近似实现，不是独立完整试穿系统 |
-| `prompt_inpaint` | ROI 生成 mask，提示词驱动修复 |
-| `auto_segment_edit` | 中文规则指令解析 → 人体解析或 GroundingDINO+SAM 分割 → HSV 换色、SD、SDXL 或 FLUX 填充 |
-| `instruction_edit` | `InstructionEditor` 执行自然语言图像编辑 |
-
-区域换装、换脸、近似试穿在没有 ROI 时，当前 `_inpaint_region` 直接返回原图副本；模式元数据的 `needs_roi=false` 不保证算法能自动定位。部分复合路径按模型 ID 自行组合模块，并非全部通过同一工厂直达。`image_restoration` 留有 Restormer 实现文件，但合成分发分支处于禁用状态。
-
 ## 15. 模型注册、执行与下载框架
 
 ### 15.1 注册表与默认值
 
-唯一主要声明源为 [models.yaml](../backend/core/models.yaml)，`model_registry.py` 首次访问时懒加载并缓存，通过 tags 为模式建立模型关联。当前快照包含 **23 条模型记录、10 个模式定义**。其中 wm_lama 已通过原生执行器恢复。配置数量不代表模型均已验收。
+唯一主要声明源为 [models.yaml](../backend/core/models.yaml)，`model_registry.py` 首次访问时懒加载并缓存，通过 tags 为模式建立模型关联。当前快照包含 **17 条模型记录、3 个模式**，其中 GFPGAN 用于去水印后处理。
 
 | 模式标签 | 记录数 | 默认模型 |
 |---|---:|---|
 | `watermark_removal` | 2 | wm_lama（CPU） |
 | `cutout` | 6 | `birefnet` |
 | `upscale` | 8 | `RealESRGAN_x4plus` |
-| `background_replace` | 6 | `birefnet` |
-| `outfit_swap` | 1 | 暂停，无默认项 |
-| `face_swap` | 2 | `gfpgan` |
-| `virtual_tryon` | 1 | 暂停，无默认项 |
-| `prompt_inpaint` | 1 | 暂停，无默认项 |
-| `auto_segment_edit` | 2 | `auto_segment_hsv`（仅换色，风格修复待适配） |
-| `instruction_edit` | 3 | `instruct_pix2pix` |
 
-注册表版本为 schema_version: 1。每条模型声明 executor（执行器标识）、architecture（网络或组合结构）、pipeline（显式管线标识）和 capabilities（机器任务能力）。工厂按 executor 分发。Diffusers 和复合执行器按 pipeline 选择实现。provider 和 features 继续用于下载和目录兼容。
+注册表版本为 schema_version: 1。每条模型声明 executor（执行器标识）、architecture（网络或组合结构）、pipeline（显式管线标识）和 capabilities（机器任务能力）。工厂按 executor 分发。Diffusers 执行器负责 FLUX Fill 局部重绘。provider 和 features 继续用于下载和目录兼容。
 
 `core/model_schema.py` 在发布注册表缓存前校验完整文档：ID 唯一、管线白名单、执行器/架构/能力匹配、模式关联及默认模型、必要权重声明、参数类型/边界/默认值。暂停模式必须使用 null 默认值并提供原因。校验失败给出配置文件及字段位置，失败重载不会替换上一份有效缓存。校验仅检查声明，不读取权重、不导入推理库、不下载，也不保证设备或真实模型可运行。
 
@@ -479,7 +456,7 @@ sequenceDiagram
 
 平台默认设备仅在 Apple Silicon macOS 为 MPS，其余为 CPU；环境默认值、已保存配置、请求参数和模型自身覆盖共同影响实际设备。`device_override=cpu` 会覆盖用户请求的 CUDA/MPS（有配置时）。前端展示覆盖信息，但各第三方管道内部是否回退仍需实测。
 
-FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExecutor。Fill 管线使用独立的参数配置，默认 50 步、引导强度 30。运行时在加载权重前校验参数、图像与遮罩。现有自由编辑入口使用 InstructionEditor。FLUX Fill 局部重绘按每块长边最多 1024、像素最多 768×768 进行尺寸约束。去水印接口要求可用的 CUDA 设备，加载采用逐层卸载。API 的 redraw 对象接受 prompt、seed、num_inference_steps 和 guidance_scale。权重下载与本地状态检查使用明确的 Diffusers 文件清单。
+FLUX Fill 通过 DiffusersExecutor 执行去水印重绘。运行时在加载权重前校验参数、图像与遮罩。FLUX Fill 局部重绘按每块长边最多 1024、像素最多 768×768 进行尺寸约束。去水印接口要求可用的 CUDA 设备，加载采用逐层卸载。API 的 redraw 对象接受 prompt、seed、num_inference_steps 和 guidance_scale。权重下载与本地状态检查使用明确的 Diffusers 文件清单。
 
 
 ### 15.3 下载与完整性检查
@@ -496,7 +473,7 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 
 1. 在 `models.yaml` 添加唯一 ID、tags、下载来源、真实能力和默认参数；复合模型列出所需子模型。
 2. 若现有 provider 已满足需求，复用执行器；否则实现 `BaseModelExecutor` 并注册工厂分支，同时核对下载、检查器和路径解析。
-3. 若是新的算法流程，更新 `Synthesizer` 或对应 service，不能只添加一个模式名称。
+3. 若是新的算法流程，为对应 service 实现处理流程。
 4. 新增 API 时放到相应 router，选择是否占用推理接纳槽，保留 `task_id`、解码预算与资源清理契约。
 5. 前端从能力接口获取分组；新交互参数需贯通请求类型、后端模型、service、执行器，不能仅增加滑块。
 6. 验证模型就绪、真实小图推理、尺寸/通道、失败清理、进度归属及设备覆盖；补全浏览器用例和本文章节。
@@ -534,7 +511,6 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | `POST /api/cutout` | `image`、模型/设备；返回 RGBA `image` 和 `mask` |
 | `POST /api/cutout/refine` | 原图、mask、增加/去除笔画、羽化与膨胀；返回图像和 mask |
 | `POST /api/cutout/composite` | RGBA `image` 与 `background_color`；返回合成图 |
-| `POST /api/synthesis/run` | `source_image`、可选 `reference_image`、`rois`、模式/模型、`prompt`；返回图像、宽、高 |
 | `POST /api/postprocess/fix` | 原图、修复图、mask、后处理方法/设备；返回图像 |
 | `POST /api/pipeline/run` | 图像、mask 或 ROI、修复/后处理/超分开关及参数；返回图像、宽、高 |
 
@@ -549,8 +525,6 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | `GET /api/models/inpaint` | 修复模型分组 |
 | `GET /api/models/upscale` | 超分模型分组 |
 | `GET /api/cutout/models` | 抠图模型分组 |
-| `GET /api/synthesis/modes` | 注册模式元数据；不等同于全部 Synthesizer 分支已实现 |
-| `GET /api/synthesis/models` | 合成模型元数据 |
 | `GET /api/postprocess/methods` | 后处理方法清单 |
 | `GET /api/models/list` | 模型元数据、当前文件状态和打开本地目录的可用性 |
 | `GET /api/models/health` | 全量模型文件检查 |

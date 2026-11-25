@@ -93,22 +93,6 @@ export function createProcessingAPI(client: ApiClient) {
     body: JSON.stringify(params),
   }, 'Pipeline 失败')
 
-  const runSynthesis = (params: {
-    source_image: string
-    reference_image?: string
-    rois?: number[][]
-    mask?: string
-    mode: string
-    model_id: string
-    device: string
-    prompt?: string
-    task_id: string
-  }) => client.json<ImageResult>('/api/synthesis/run', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  }, '智能合成失败')
-
   const cutout = (params: {
     image: string
     model: string
@@ -144,5 +128,5 @@ export function createProcessingAPI(client: ApiClient) {
     body: JSON.stringify(params),
   }, '合成失败')
 
-  return { detectWatermark, inpaint, inpaintWithMask, upscale, runPipeline, runSynthesis, cutout, cutoutRefine, cutoutComposite }
+  return { detectWatermark, inpaint, inpaintWithMask, upscale, runPipeline, cutout, cutoutRefine, cutoutComposite }
 }

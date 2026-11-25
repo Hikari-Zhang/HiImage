@@ -121,7 +121,6 @@ const sessionActions = {
   watermark: actions('watermark'),
   upscale: actions('upscale'),
   'upscale-batch': actions('upscale-batch'),
-  synthesis: actions('synthesis'),
   cutout: actions('cutout'),
 }
 

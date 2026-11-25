@@ -12,7 +12,7 @@
   checker = ModelChecker()
   result  = checker.check_model("birefnet")   # 检测单个模型
   results = checker.check_all()               # 检测全部模型
-  results = checker.check_mode("outfit_swap") # 检测某个功能模式下的所有模型
+  results = checker.check_mode("cutout")      # 检测某个功能模式下的所有模型
 """
 from __future__ import annotations
 

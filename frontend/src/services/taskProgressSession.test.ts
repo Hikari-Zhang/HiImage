@@ -49,7 +49,7 @@ describe('task progress session integration matrix', () => {
     expect(post).not.toHaveBeenCalled()
     expect(harness.connections[0].dispose).toHaveBeenCalledOnce()
   })
-  it.each(['watermark', 'cutout', 'upscale-single', 'synthesis'])(
+  it.each(['watermark', 'cutout', 'upscale-single'])(
     'waits for open, sends matching task id, and finally closes for %s',
     async (kind) => {
       const harness = factoryHarness()

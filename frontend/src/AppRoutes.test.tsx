@@ -25,7 +25,6 @@ vi.mock('./pages/WatermarkRemoval', () => {
   return { default: () => <TestPage name="watermark" /> }
 })
 vi.mock('./pages/CutoutPage', () => { throw new Error('unvisited cutout was loaded') })
-vi.mock('./pages/SmartSynthesis', () => { throw new Error('unvisited synthesis was loaded') })
 vi.mock('./pages/Logs', () => { throw new Error('unvisited logs was loaded') })
 
 afterEach(cleanup)
@@ -45,8 +44,9 @@ describe('route page ownership', () => {
     expect(lifecycle.unmounted).toContain('settings')
   })
 
-  it.each(['/', '/unknown'])('redirects %s to the default editor', async (path) => {
+  it.each(['/', '/unknown', '/synthesis'])('redirects %s to the default editor', async (path) => {
     render(<MemoryRouter initialEntries={[path]}><AppRoutes /></MemoryRouter>)
     expect(await screen.findByText('watermark 页面')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '智能合成' })).not.toBeInTheDocument()
   })
 })

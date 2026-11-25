@@ -19,11 +19,6 @@ function createEditorSettings() {
     cutoutModel: string
     outscale: number | null
     tile: number | null
-    synthesisMode: string
-    synthesisModel: string
-    prompt: string
-    referenceImage: string | null
-    referenceFileName: string
     setDevice: (value: string) => void
     setInpaintModel: (value: string) => void
     setInpaintDilation: (modelId: string, value: number | undefined) => void
@@ -35,11 +30,6 @@ function createEditorSettings() {
     setCutoutModel: (value: string) => void
     setOutscale: (value: number | null) => void
     setTile: (value: number | null) => void
-    setSynthesisMode: (value: string) => void
-    setSynthesisModel: (value: string) => void
-    setPrompt: (value: string) => void
-    setReferenceImage: (value: string | null) => void
-    setReferenceFileName: (value: string) => void
   }>((set) => ({
     device: defaults.device,
     inpaintModel: defaults.inpaintModel,
@@ -54,11 +44,6 @@ function createEditorSettings() {
     cutoutModel: defaults.cutoutModel,
     outscale: null,
     tile: null,
-    synthesisMode: '',
-    synthesisModel: '',
-    prompt: '',
-    referenceImage: null,
-    referenceFileName: '',
     setDevice: (device) => set({ device }),
     setInpaintModel: (inpaintModel) => set({ inpaintModel }),
     setInpaintDilation: (modelId, dilation) => set(({ inpaintDilationOverrides }) => ({
@@ -72,11 +57,6 @@ function createEditorSettings() {
     setCutoutModel: (cutoutModel) => set({ cutoutModel }),
     setOutscale: (outscale) => set({ outscale }),
     setTile: (tile) => set({ tile }),
-    setSynthesisMode: (synthesisMode) => set({ synthesisMode }),
-    setSynthesisModel: (synthesisModel) => set({ synthesisModel }),
-    setPrompt: (prompt) => set({ prompt }),
-    setReferenceImage: (referenceImage) => set({ referenceImage }),
-    setReferenceFileName: (referenceFileName) => set({ referenceFileName }),
   }))
 }
 

@@ -451,7 +451,7 @@ async def get_defaults():
     ```json
     {
       "watermark_removal": "wm_lama",
-      "background_replace": "birefnet",
+      "cutout": "birefnet",
       ...
     }
     ```

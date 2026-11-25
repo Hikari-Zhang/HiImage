@@ -439,7 +439,7 @@ def test_invalid_pending_configuration_falls_back_safely():
 
 
 def test_all_inference_posts_use_the_shared_admission_dependency():
-    from app.routers import cutout, inpaint, postprocess, synthesis, upscale
+    from app.routers import cutout, inpaint, postprocess, upscale
     from app.shared_executor import inference_admission
 
     expected = {
@@ -451,7 +451,6 @@ def test_all_inference_posts_use_the_shared_admission_dependency():
         "/cutout": True,
         "/cutout/refine": False,
         "/cutout/composite": False,
-        "/synthesis/run": True,
         "/postprocess/fix": True,
         "/pipeline/run": True,
     }
@@ -461,7 +460,6 @@ def test_all_inference_posts_use_the_shared_admission_dependency():
             inpaint.router,
             upscale.router,
             cutout.router,
-            synthesis.router,
             postprocess.router,
         )
         for route in router.routes
@@ -523,7 +521,6 @@ def test_routers_do_not_call_run_in_executor_directly():
         "inpaint.py",
         "upscale.py",
         "cutout.py",
-        "synthesis.py",
         "postprocess.py",
     ]
     for filename in inference_routers:

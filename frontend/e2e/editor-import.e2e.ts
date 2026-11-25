@@ -13,7 +13,6 @@ async function photo(page: Page) {
 for (const editor of [
   { page: 'watermark', open: '打开图片', replaceTitle: '打开图片' },
   { page: 'upscale', open: '打开图片', replaceButton: '更换图片' },
-  { page: 'synthesis', open: '打开主图', replaceTitle: '更换主图' },
 ]) {
   test(`${editor.page} can choose a local file again after loading the first one`, async ({ page }) => {
     await page.goto(`/#/${editor.page}`)

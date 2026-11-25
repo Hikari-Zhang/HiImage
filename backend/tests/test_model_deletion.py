@@ -244,13 +244,6 @@ def test_unknown_and_missing_model_do_not_report_deleted_weights(cache):
     assert response.json()["deleted"] == []
 
 
-def test_real_registry_sharing_includes_watermark_and_synthesis_models():
-    from core.model_files import shared_model_ids
-    shared = shared_model_ids("flux_fill", model_registry.MODEL_BY_ID)
-    assert "flux_fill_prompt" in shared
-    assert "grounded_sam_flux" in shared
-
-
 def test_cancelled_download_thread_keeps_deletion_protected(cache, monkeypatch):
     from core import downloaders
 

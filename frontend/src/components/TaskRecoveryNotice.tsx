@@ -7,7 +7,7 @@ import type { EditorSessionId } from '../types/editor'
 import { downloadRecoveredResult } from '../services/recoveredResult'
 
 const labels: Record<EditorSessionId, string> = {
-  watermark: '去水印', upscale: '超分辨率', 'upscale-batch': '批量超分', synthesis: '智能合成', cutout: '抠图',
+  watermark: '去水印', upscale: '超分辨率', 'upscale-batch': '批量超分', cutout: '抠图',
 }
 type RecoveryRow = PendingTask & { text: string; resultAvailable?: boolean; downloading?: boolean }
 

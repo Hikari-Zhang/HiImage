@@ -179,4 +179,3 @@ function createImageSessionStore(sessionId: EditorSessionId) {
 
 export const useImageStore = createImageSessionStore('watermark')
 export const useUpscaleImageStore = createImageSessionStore('upscale')
-export const useSynthesisImageStore = createImageSessionStore('synthesis')

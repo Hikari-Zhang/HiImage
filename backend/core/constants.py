@@ -40,7 +40,6 @@ class Provider:
     DIFFUSERS:  ClassVar[str] = "diffusers"
     FACEXLIB:   ClassVar[str] = "facexlib"
     REALESRGAN: ClassVar[str] = "realesrgan"
-    HIIMAGE:    ClassVar[str] = "HiImage"
     # 新增：支持 Restormer 和 NAFNet
     RESTORMER:  ClassVar[str] = "restormer"
     NAFNET:     ClassVar[str] = "nafnet"

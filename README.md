@@ -1,6 +1,6 @@
 # HiImage
 
-HiImage 是面向浏览器的 AI 图像处理 Web 应用，提供去水印、超分辨率、抠图、智能合成、模型管理和实时日志。React/Vite 前端通过 HTTP、WebSocket 与 SSE 访问 FastAPI；生产环境由 Nginx 提供静态资源并把 `/api/` 同源代理到后端。
+HiImage 是面向浏览器的 AI 图像处理 Web 应用，提供去水印、超分辨率、抠图、模型管理和实时日志。React/Vite 前端通过 HTTP、WebSocket 与 SSE 访问 FastAPI；生产环境由 Nginx 提供静态资源并把 `/api/` 同源代理到后端。
 
 ## 运行边界
 

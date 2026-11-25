@@ -88,9 +88,6 @@ class ModelExecutorFactory:
         if executor == "diffusers":
             from .diffusers_executor import DiffusersExecutor
             return DiffusersExecutor(model_config, device)
-        if executor == "composite":
-            from .hiimage_executor import HiImageExecutor
-            return HiImageExecutor(model_config, device)
         if executor == "realesrgan":
             from .realesrgan_executor import RealESRGANExecutor
             return RealESRGANExecutor(model_config, device)

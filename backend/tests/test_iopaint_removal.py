@@ -6,12 +6,10 @@ from core.model_registry import MODELS, MODE_GROUPS, get_models_for_mode
 from core.model_executor import ModelExecutorFactory
 from app.routers.inpaint import InpaintRequest, inpaint_with_rois
 from app.routers.postprocess import PipelineRequest, run_pipeline
-from app.routers.synthesis import SynthesisRequest, run_synthesis
 
 
 def test_registry_has_no_legacy_provider_or_dangling_defaults():
     ids={model["id"] for model in MODELS}
-    assert len(ids)==23
     for model in MODELS:
         assert "iopaint" not in str(model).lower()
     for mode in MODE_GROUPS:
@@ -23,8 +21,6 @@ def test_registry_has_no_legacy_provider_or_dangling_defaults():
 @pytest.mark.parametrize("fn,req",[
     (inpaint_with_rois,InpaintRequest(image="invalid",rois=[],model="wm_migan",task_id="removed-inpaint")),
     (run_pipeline,PipelineRequest(image="invalid",inpaint_model="wm_migan",task_id="removed-pipeline")),
-    (run_synthesis,SynthesisRequest(source_image="invalid",mode="outfit_swap",model_id="powerpaint",task_id="removed-synthesis")),
-    (run_synthesis,SynthesisRequest(source_image="invalid",mode="auto_segment_edit",model_id="auto_segment_sd15",task_id="removed-auto")),
 ])
 def test_unavailable_before_decode_or_download(fn,req):
     response=asyncio.run(fn(req))
@@ -95,11 +91,3 @@ def test_requirements_use_one_graph_without_legacy_distribution():
     for filename in ["requirements.txt","requirements-inference.txt","requirements-locked.txt"]:
         text=(root/"backend"/filename).read_text(encoding="utf-8").lower()
         assert "iopaint" not in text and "gradio" not in text and "--no-deps" not in text
-
-
-def test_direct_synthesizer_cannot_report_success_for_removed_mode_with_empty_rois():
-    import numpy as np
-    from core.capabilities import FeatureUnavailable
-    from core.synthesizer import Synthesizer
-    with pytest.raises(FeatureUnavailable):
-        Synthesizer("outfit_swap","powerpaint","cpu").run(np.zeros((4,4,3),np.uint8),rois=[])

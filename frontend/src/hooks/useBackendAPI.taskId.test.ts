@@ -33,7 +33,6 @@ describe('useBackendAPI task_id propagation', () => {
     await api.inpaintWithMask({ image: 'i', mask: 'm', model: 'm', device: 'cpu', dilation: 1, disable_nsfw: false, task_id: 'task-mask' })
     await api.runPipeline({ image: 'i', inpaint_model: 'm', device: 'cpu', dilation: 1, disable_nsfw: false, postprocess_method: 'none', postprocess_enabled: false, upscale_enabled: false, upscale_model: 'u', task_id: 'task-pipeline' })
     await api.upscale({ image: 'i', model: 'm', device: 'cpu', task_id: 'task-upscale' })
-    await api.runSynthesis({ source_image: 'i', mode: 'mode', model_id: 'm', device: 'cpu', task_id: 'task-synthesis' })
     await api.cutout({ image: 'i', model: 'm', device: 'cpu', task_id: 'task-cutout' })
     await api.cutoutRefine({ mask: 'm', original_image: 'i', feather: 0, dilate: 0, task_id: 'task-refine' })
     await api.cutoutComposite({ image: 'i', background_color: '#fff', task_id: 'task-composite' })
@@ -44,7 +43,6 @@ describe('useBackendAPI task_id propagation', () => {
       'task-mask',
       'task-pipeline',
       'task-upscale',
-      'task-synthesis',
       'task-cutout',
       'task-refine',
       'task-composite',

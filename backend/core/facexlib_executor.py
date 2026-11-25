@@ -15,7 +15,7 @@ class FacexlibExecutor(BaseModelExecutor):
     """
     Facexlib 执行器（GFPGAN 人脸增强）
 
-    主要用于换脸后的人脸细节增强。
+    用于人脸细节增强。
     """
 
     def __init__(self, model_config: Dict[str, Any], device: str):

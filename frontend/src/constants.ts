@@ -88,20 +88,6 @@ export const PostprocessMethod = {
 
 export type PostprocessMethodValue = typeof PostprocessMethod[keyof typeof PostprocessMethod]
 
-// ── 合成模式 Tag ─────────────────────────────────────────────────────────────
-
-export const SynthesisTag = {
-  BACKGROUND_REPLACE: 'background_replace',
-  OUTFIT_SWAP:        'outfit_swap',
-  FACE_SWAP:          'face_swap',
-  VIRTUAL_TRYON:      'virtual_tryon',
-  PROMPT_INPAINT:     'prompt_inpaint',
-  AUTO_SEGMENT_EDIT:  'auto_segment_edit',
-  INSTRUCTION_EDIT:   'instruction_edit',
-} as const
-
-export type SynthesisTagValue = typeof SynthesisTag[keyof typeof SynthesisTag]
-
 // ── 连接模式 ─────────────────────────────────────────────────────────────────
 
 export const ConnectionMode = {
@@ -132,8 +118,6 @@ export const ApiPath = {
   MODELS_GROUPS:        '/api/models/groups',
   HEALTH:               '/api/health',
   WS_PROGRESS:          '/api/ws/progress',
-  SYNTHESIS_MODES:      '/api/synthesis/modes',
-  SYNTHESIS_MODELS:     '/api/synthesis/models',
   CUTOUT:               '/api/cutout',
   CUTOUT_REFINE:        '/api/cutout/refine',
   CUTOUT_COMPOSITE:     '/api/cutout/composite',

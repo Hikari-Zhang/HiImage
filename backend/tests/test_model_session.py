@@ -125,19 +125,3 @@ def test_realesrgan_executor_explicitly_closes_upscaler():
     executor.unload_model()
     assert executor._upscaler is None
     assert calls == ["close"]
-
-
-def test_synthesis_releases_executor_after_failed_inpaint(monkeypatch):
-    from core.synthesizer import Synthesizer
-    from core.model_executor import ModelExecutorFactory
-    calls = []
-    class Executor:
-        def execute(self, *args, **kwargs):
-            raise ValueError("synthesis failed")
-        def unload_model(self):
-            calls.append("unload")
-    monkeypatch.setattr(ModelExecutorFactory, "create_executor", lambda *_args: Executor())
-    synth = Synthesizer("face_swap", "gfpgan", "cpu")
-    with pytest.raises(ValueError, match="synthesis failed"):
-        synth._inpaint_region(np.zeros((4, 4, 3), np.uint8), [(0, 0, 2, 2)], None)
-    assert calls == ["unload"]

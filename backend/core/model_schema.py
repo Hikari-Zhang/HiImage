@@ -16,39 +16,26 @@ PIPELINE_SPECS = {
     "lama": ("lama", "lama", {"big_lama"}, {"inpaint"}),
     "rembg": ("rembg", "rembg", {"birefnet", "rmbg2", "isnet", "u2net"}, {"matting"}),
     "flux_fill": ("diffusers", "diffusers", {"flux_fill"}, {"inpaint"}),
-    "flux_img2img": ("diffusers", "diffusers", {"flux"}, {"image_edit"}),
-    "sdxl_img2img": ("diffusers", "diffusers", {"sdxl"}, {"image_edit"}),
-    "instruct_pix2pix": ("diffusers", "diffusers", {"instruct_pix2pix"}, {"image_edit"}),
     "gfpgan": ("gfpgan", "facexlib", {"gfpgan"}, {"face_enhance"}),
-    "grounded_sam_flux": ("composite", "HiImage", {"grounding_dino_sam_flux_fill"}, {"segmentation", "inpaint"}),
-    "segformer_hsv": ("composite", "HiImage", {"segformer"}, {"segmentation", "color_edit"}),
     "realesrgan": ("realesrgan", "realesrgan", {"RRDBNet", "SRVGGNetCompact"}, {"upscale"}),
 }
 
 MODE_CAPABILITIES = {
-    "background_replace": {"matting"}, "cutout": {"matting"},
-    "outfit_swap": {"inpaint"}, "virtual_tryon": {"inpaint"},
-    "prompt_inpaint": {"inpaint"}, "watermark_removal": {"inpaint"},
-    "face_swap": {"inpaint", "face_enhance"},
-    "auto_segment_edit": {"segmentation"},
-    "instruction_edit": {"image_edit"}, "upscale": {"upscale"},
+    "cutout": {"matting"},
+    "watermark_removal": {"inpaint"},
+    "upscale": {"upscale"},
 }
 
 _GENERATION_PARAMS = {"num_inference_steps", "guidance_scale", "seed", "prompt"}
 PIPELINE_PARAMS = {
     "lama": set(),
     "rembg": set(), "flux_fill": _GENERATION_PARAMS,
-    "flux_img2img": _GENERATION_PARAMS | {"strength"},
-    "sdxl_img2img": _GENERATION_PARAMS | {"strength", "negative_prompt"},
-    "instruct_pix2pix": _GENERATION_PARAMS | {"image_guidance_scale"},
-    "gfpgan": {"upscale"}, "grounded_sam_flux": _GENERATION_PARAMS,
-    "segformer_hsv": {"prompt", "feather_px", "saturation_boost"},
+    "gfpgan": {"upscale"},
     "realesrgan": set(),
 }
 PARAMETER_TYPES = {
     "num_inference_steps": "int", "guidance_scale": "float", "seed": "int", "prompt": "str",
-    "strength": "float", "negative_prompt": "str", "image_guidance_scale": "float",
-    "upscale": "int", "feather_px": "int", "saturation_boost": "float",
+    "upscale": "int",
 }
 
 
@@ -69,8 +56,8 @@ def _number(value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value)
 
 
-def _strings(value: Any, location: str) -> list[str]:
-    _require(isinstance(value, list) and bool(value), location, "需要非空字符串列表")
+def _strings(value: Any, location: str, *, allow_empty: bool = False) -> list[str]:
+    _require(isinstance(value, list) and (allow_empty or bool(value)), location, "需要字符串列表")
     _require(all(_text(item) for item in value), location, "条目必须为非空字符串")
     _require(len(value) == len(set(value)), location, "条目不能重复")
     return value
@@ -169,7 +156,7 @@ def validate_registry(document: Any) -> tuple[list[dict], list[dict]]:
                  where + ".architecture", "架构与管线不匹配")
         declared = set(_strings(model.get("capabilities"), where + ".capabilities"))
         _require(declared == capabilities, where + ".capabilities", "能力与管线契约不匹配")
-        for tag in _strings(model.get("tags"), where + ".tags"):
+        for tag in _strings(model.get("tags"), where + ".tags", allow_empty=True):
             _require(tag in mode_by_id, where + ".tags", f"模式不存在: {tag}")
             _require(tag in MODE_CAPABILITIES and bool(declared & MODE_CAPABILITIES[tag]),
                      where + ".capabilities", f"不支持所属模式: {tag}")
@@ -188,18 +175,8 @@ def validate_registry(document: Any) -> tuple[list[dict], list[dict]]:
         if executor == "rembg":
             for field in ("rembg_session_name", "onnx_filename", "github_download_url"):
                 _require(_text(model.get(field)), where + "." + field, "缺少抠图模型加载或下载信息")
-        elif executor in ("diffusers", "composite"):
-            if pipeline == "grounded_sam_flux":
-                repos = model.get("hf_models")
-                _require(isinstance(repos, list) and bool(repos), where + ".hf_models", "缺少组合模型仓库")
-                _require(all(isinstance(repo, dict) and _text(repo.get("id")) for repo in repos),
-                         where + ".hf_models", "每个子模型需要仓库 ID")
-                _require(len({repo["id"] for repo in repos}) == len(repos),
-                         where + ".hf_models", "组合仓库不能重复")
-                for repo in repos:
-                    _hf_required_files(repo, where + ".hf_models[" + repo["id"] + "]")
-            else:
-                _require(_text(model.get("hf_model_id")), where + ".hf_model_id", "缺少模型仓库 ID")
+        elif executor == "diffusers":
+            _require(_text(model.get("hf_model_id")), where + ".hf_model_id", "缺少模型仓库 ID")
         else:
             for field in ("local_path", "download_url"):
                 _require(_text(model.get(field)), where + "." + field, "缺少权重或下载位置")

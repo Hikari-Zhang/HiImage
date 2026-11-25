@@ -12,10 +12,9 @@ from pydantic import ValidationError
 from app.routers.cutout import CompositeRequest, CutoutRequest, RefineRequest
 from app.routers.inpaint import DetectRequest, InpaintRequest, InpaintWithMaskRequest
 from app.routers.postprocess import PipelineRequest, PostprocessRequest
-from app.routers.synthesis import SynthesisRequest
 from app.routers.upscale import BatchUpscaleRequest, UpscaleRequest
 from app.websocket.progress import ProgressManager
-from app.routers import cutout, inpaint, postprocess, synthesis, upscale
+from app.routers import cutout, inpaint, postprocess, upscale
 
 
 REQUEST_MODELS = (
@@ -28,11 +27,10 @@ REQUEST_MODELS = (
     CutoutRequest,
     RefineRequest,
     CompositeRequest,
-    SynthesisRequest,
     PostprocessRequest,
 )
 
-INFERENCE_ROUTERS = (inpaint.router, postprocess.router, upscale.router, cutout.router, synthesis.router)
+INFERENCE_ROUTERS = (inpaint.router, postprocess.router, upscale.router, cutout.router)
 EXPECTED_ROUTE_MODELS = {
     "/detect": DetectRequest,
     "/inpaint": InpaintRequest,
@@ -43,13 +41,12 @@ EXPECTED_ROUTE_MODELS = {
     "/cutout": CutoutRequest,
     "/cutout/refine": RefineRequest,
     "/cutout/composite": CompositeRequest,
-    "/synthesis/run": SynthesisRequest,
     "/postprocess/fix": PostprocessRequest,
 }
 
 
 def _declared_request_models() -> set[type[BaseModel]]:
-    modules = (inpaint, postprocess, upscale, cutout, synthesis)
+    modules = (inpaint, postprocess, upscale, cutout)
     return {
         candidate
         for module in modules
@@ -140,7 +137,6 @@ def test_progress_manager_isolates_tasks_and_rejects_empty_ids():
         ("/api/cutout", {"image": "x"}),
         ("/api/cutout/refine", {"mask": "x", "original_image": "x"}),
         ("/api/cutout/composite", {"image": "x"}),
-        ("/api/synthesis/run", {"source_image": "x"}),
         (
             "/api/postprocess/fix",
             {"original_image": "x", "inpainted_image": "x", "mask": "x"},
@@ -150,7 +146,7 @@ def test_progress_manager_isolates_tasks_and_rejects_empty_ids():
 def test_inference_http_requests_missing_task_id_return_422(path, payload):
     async def request():
         app = FastAPI()
-        for router in (inpaint.router, postprocess.router, upscale.router, cutout.router, synthesis.router):
+        for router in INFERENCE_ROUTERS:
             app.include_router(router, prefix="/api")
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

@@ -42,7 +42,7 @@ def test_retry_preserves_healthy_submodel_and_refreshes_only_broken_file(tmp_pat
 
 def test_checker_uses_current_hf_snapshot_and_checks_every_shard(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
-    cfg = get_model("auto_segment_hsv")
+    cfg = {"id": "test", "hf_model_id": "demo/sharded"}
     repo = tmp_path / ("models--" + cfg["hf_model_id"].replace("/", "--"))
     (repo / "refs").mkdir(parents=True)
     revision = "a" * 40
@@ -69,22 +69,12 @@ def test_checker_uses_current_hf_snapshot_and_checks_every_shard(tmp_path, monke
 
 def test_diffusers_missing_component_cannot_be_ready(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "find_hf_snapshot", lambda _: tmp_path)
-    (tmp_path / "model_index.json").write_text(json.dumps({"_class_name": "StableDiffusionXLImg2ImgPipeline"}))
-    result = ModelChecker().check_config(get_model("sdxl_img2img"))
+    (tmp_path / "model_index.json").write_text(json.dumps({"_class_name": "FluxFillPipeline"}))
+    cfg = get_model("flux_fill").copy()
+    cfg.pop("hf_required_files")
+    result = ModelChecker().check_config(cfg)
     assert result.status == MS.CORRUPTED
     assert "model_index.json" in result.message
-
-
-def test_grounding_dino_requires_tokenizer_assets(tmp_path, monkeypatch):
-    monkeypatch.setattr(paths, "find_hf_snapshot", lambda _: tmp_path)
-    cfg = {"id": "gdino", "hf_model_id": "IDEA-Research/grounding-dino-base"}
-    (tmp_path / "config.json").write_text('{"model_type": "grounding-dino"}')
-    (tmp_path / "preprocessor_config.json").write_text("{}")
-    (tmp_path / "pytorch_model.bin").write_bytes(b"weights")
-    checker = ModelChecker()
-    assert checker.check_config(cfg).status == MS.PARTIAL
-    (tmp_path / "vocab.txt").write_text("[UNK]")
-    assert checker.check_config(cfg).status == MS.OK
 
 
 def test_automatic_download_waits_for_original_attempt(monkeypatch):

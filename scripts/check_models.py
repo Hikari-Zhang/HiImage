@@ -4,10 +4,10 @@ HiImage 模型完整性检测 CLI
 
 用法示例：
   python scripts/check_models.py                   # 检测全部模型
-  python scripts/check_models.py --mode outfit_swap # 只检测某模式
+  python scripts/check_models.py --mode cutout      # 只检测某模式
   python scripts/check_models.py --model birefnet   # 只检测某模型
   python scripts/check_models.py --json             # JSON 格式输出
-  python scripts/check_models.py --mode background_replace --json
+  python scripts/check_models.py --mode watermark_removal --json
 
 退出码：
   0  所有被检测的模型均为 ok
@@ -182,9 +182,8 @@ def main() -> int:
         results = checker.check_mode(args.mode)
         if not results:
             print(f"[ERROR] 未知模式 ID: {args.mode!r}", file=sys.stderr)
-            print(f"  可选值：background_replace / outfit_swap / face_swap / "
-                  f"virtual_tryon / prompt_inpaint / auto_segment_edit / instruction_edit",
-                  file=sys.stderr)
+            from core.model_registry import MODE_GROUPS
+            print("  可选值：" + " / ".join(mode["id"] for mode in MODE_GROUPS), file=sys.stderr)
             return 1
     else:
         results = checker.check_all()

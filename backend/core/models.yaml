@@ -1,7 +1,7 @@
 # ==============================================================================
 # HiImage —— 统一模型与模式注册表
 #
-# 所有功能（换背景/换装/去水印/超分辨率/……）的模型配置均在此文件维护。
+# 去水印、抠图、超分辨率及后处理的模型配置均在此文件维护。
 # Python 代码通过 core/model_registry.py 读取本文件，不再硬编码任何模型信息。
 #
 # 字段说明
@@ -16,10 +16,9 @@
 # provider        模型来源，供下载和目录接口使用：
 #                   rembg       → rembg 库管理，权重在 ~/.u2net/
 #                   diffusers   → HuggingFace diffusers 管道，权重在 HF 缓存
-#                   HiImage     → 本项目自定义管道（组合多个子模型）
 #                   facexlib    → GFPGAN/facexlib，权重在 models/gfpgan/
 #                   realesrgan  → Real-ESRGAN，权重在 models/realesrgan/
-# tags            所属功能模式 ID 列表（一个模型可属于多个模式）
+# tags            所属功能模式 ID 列表，纯后处理模型可留空
 # description     面向用户的功能描述
 # recommended_for 适合的场景（用于 UI tooltip）
 # requires_reference 是否需要参考图
@@ -27,7 +26,7 @@
 # badge           UI 徽章：推荐 / 快速 / 高质量 / 动漫（空串表示无徽章）
 # hf_model_id     HuggingFace Hub model ID（单模型），可直接传给 snapshot_download()
 #                   与 hf_models 互斥，优先使用 hf_models
-# hf_models       HuggingFace Hub 多模型列表（组合模型专用，如 GDINO+SAM+FLUX）
+# hf_models       模型资源工具支持的 Hugging Face 多仓库列表
 #                   每项字段：
 #                     id       str  — HuggingFace Hub repo ID（必填）
 #                     name     str  — 子模型显示名称（必填，用于日志/进度）
@@ -53,10 +52,7 @@
 #                          说明：大多数 RealESRGAN 模型有固定倍率，仅少数模型（如清晰化增强）支持自定义
 #
 # supported_params 推理参数说明（key → type/default/range?/desc）
-# features        能力标签列表：
-#                   matting / inpaint_region / inpaint_prompt / segmentation /
-#                   pure_color / texture / style / instruction / face_enhance /
-#                   upscale
+# features        能力标签列表，如 matting / inpaint_region / face_enhance / upscale
 #
 # 新增模型只需在 models 列表末尾追加一条记录，无需修改任何 Python 代码。
 # ==============================================================================
@@ -68,95 +64,12 @@ schema_version: 1
 
 _templates:
 
-  # SD 1.5 Inpainting 参数
-  sd_inpaint: &sd_inpaint
-    num_inference_steps:
-      type: int
-      default: 50
-      range: [1, 150]
-      desc: 扩散去噪步数；步数越多越精细，但耗时增加
-    guidance_scale:
-      type: float
-      default: 7.5
-      range: [1.0, 20.0]
-      desc: 提示词引导强度；值越高越贴近 prompt，但可能过拟合
-    seed:
-      type: int
-      default: 42
-      range: [0, 2147483647]
-      desc: 随机种子；相同种子可复现结果
-    prompt:
-      type: str
-      default: ""
-      desc: 正向提示词（英文效果更佳）
-    negative_prompt:
-      type: str
-      default: "blurry, low quality, deformed"
-      desc: 负向提示词，描述不希望出现的内容
-
-  # SDXL Inpainting 参数（与 SD 1.5 相同，但推荐步数不同）
-  sdxl_inpaint: &sdxl_inpaint
-    <<: *sd_inpaint
-    num_inference_steps:
-      type: int
-      default: 40
-      range: [1, 100]
-      desc: SDXL 推荐 30-50 步，兼顾质量与速度
-
-  # FLUX.1 参数
-  flux: &flux
-    num_inference_steps:
-      type: int
-      default: 28
-      range: [1, 50]
-      desc: FLUX 推荐 20-30 步（flow-matching，步数不宜过多）
-    guidance_scale:
-      type: float
-      default: 3.5
-      range: [1.0, 10.0]
-      desc: FLUX guidance；通常 3-5 即可，过高会过饱和
-    seed:
-      type: int
-      default: 42
-      range: [0, 2147483647]
-      desc: 随机种子
-    prompt:
-      type: str
-      default: ""
-      desc: 正向提示词
-
-  # FLUX Fill 专用默认值，沿用复合编辑的既有设置
+  # FLUX Fill 参数
   flux_fill: &flux_fill
-    <<: *flux
     num_inference_steps: {type: int, default: 50, range: [1, 50], desc: 去噪步数}
     guidance_scale: {type: float, default: 30.0, range: [1.0, 30.0], desc: 填充引导强度}
-
-  # InstructPix2Pix 参数
-  ip2p: &ip2p
-    num_inference_steps:
-      type: int
-      default: 50
-      range: [1, 150]
-      desc: 去噪步数
-    image_guidance_scale:
-      type: float
-      default: 1.5
-      range: [1.0, 5.0]
-      desc: 原图保留程度；越高越接近原图，越低创意越强
-    guidance_scale:
-      type: float
-      default: 7.5
-      range: [1.0, 20.0]
-      desc: 指令引导强度
-    seed:
-      type: int
-      default: 42
-      range: [0, 2147483647]
-      desc: 随机种子
-    prompt:
-      type: str
-      default: ""
-      desc: 编辑指令（支持中英文）
+    seed: {type: int, default: 42, range: [0, 2147483647], desc: 随机种子}
+    prompt: {type: str, default: "", desc: 正向提示词}
 
   # GFPGAN 参数
   gfpgan: &gfpgan
@@ -166,34 +79,13 @@ _templates:
       range: [1, 4]
       desc: 超分倍率；1 = 不超分，仅增强细节
 
-  # HSV 换色参数
-  hsv: &hsv
-    feather_px:
-      type: int
-      default: 5
-      range: [0, 30]
-      desc: 边缘羽化像素数，避免换色边界生硬
-    saturation_boost:
-      type: float
-      default: 1.0
-      range: [0.2, 3.0]
-      desc: 目标颜色饱和度增益
-
-  # 编辑指令提示词（追加到其他模板之上）
-  edit_prompt: &edit_prompt
-    prompt:
-      type: str
-      default: ""
-      desc: 编辑指令，例：将上衣换成黑色 / 把裤子改成牛仔风格
-
-
 # ==============================================================================
 # 模型列表
 # ==============================================================================
 
 models:
 
-  # ── 换背景（matting 模型）────────────────────────────────────────────────
+  # ── 抠图（matting 模型）────────────────────────────────────────────────
 
   - id: birefnet
     executor: rembg
@@ -202,9 +94,9 @@ models:
     capabilities: [matting]
     name: BiRefNet-General
     provider: rembg
-    tags: [background_replace, cutout]
+    tags: [cutout]
     description: 双向精化网络，2024 SOTA 抠图，边缘细节极佳，复杂场景首选
-    recommended_for: 抠图 / 换背景
+    recommended_for: 通用抠图
     requires_reference: false
     size_mb: 928   # 实测：BiRefNet-general-epoch_244.onnx ≈ 928 MB
     badge: 推荐
@@ -221,9 +113,9 @@ models:
     capabilities: [matting]
     name: RMBG 2.0
     provider: rembg
-    tags: [background_replace, cutout]
+    tags: [cutout]
     description: BRIA RMBG 2.0 —— 商业级抠图精度，人像/产品均优秀
-    recommended_for: 换背景
+    recommended_for: 人像与商品抠图
     requires_reference: false
     size_mb: 977   # 实测：bria-rmbg-2.0.onnx ≈ 977 MB
     badge: ""
@@ -240,9 +132,9 @@ models:
     capabilities: [matting]
     name: IS-Net General
     provider: rembg
-    tags: [background_replace, cutout]
+    tags: [cutout]
     description: ISNet 通用目标分割，产品图/商品摄影效果极佳，细节保留好
-    recommended_for: 换背景（商品）
+    recommended_for: 商品抠图
     requires_reference: false
     size_mb: 170   # 实测：isnet-general-use.onnx ≈ 170 MB
     badge: ""
@@ -259,9 +151,9 @@ models:
     capabilities: [matting]
     name: IS-Net Anime
     provider: rembg
-    tags: [background_replace, cutout]
+    tags: [cutout]
     description: 针对动漫/插画优化的分割模型，发丝与细线条保留精准
-    recommended_for: 换背景（动漫）
+    recommended_for: 动漫抠图
     requires_reference: false
     size_mb: 168   # 实测：isnet-anime.onnx ≈ 168 MB
     badge: 动漫
@@ -278,9 +170,9 @@ models:
     capabilities: [matting]
     name: U²-Net
     provider: rembg
-    tags: [background_replace, cutout]
+    tags: [cutout]
     description: 通用显著目标检测经典模型，人像/商品/动物均兼顾
-    recommended_for: 换背景（通用）
+    recommended_for: 通用抠图
     requires_reference: false
     size_mb: 168   # 实测：u2net.onnx ≈ 168 MB
     badge: ""
@@ -297,9 +189,9 @@ models:
     capabilities: [matting]
     name: U²-Net 人像分割（快速）
     provider: rembg
-    tags: [background_replace, cutout]
+    tags: [cutout]
     description: 轻量人像抠图，速度极快，适合批量与预览（底层使用 u2net_human_seg，rembg 不内置真正的 MODNet）
-    recommended_for: 换背景（快速）
+    recommended_for: 快速人像抠图
     requires_reference: false
     size_mb: 168   # 实测：u2net_human_seg.onnx ≈ 168 MB
     badge: 快速
@@ -309,7 +201,7 @@ models:
     supported_params: {}
     features: [matting]
 
-  # ── 换装 / 换脸 / 试穿（Inpainting 模型）────────────────────────────────
+  # ── 去水印局部重绘────────────────────────────────
 
   - id: flux_fill
     executor: diffusers
@@ -318,16 +210,16 @@ models:
     capabilities: [inpaint]
     name: FLUX Fill 局部重绘
     provider: diffusers
-    tags: [outfit_swap, virtual_tryon, face_swap, watermark_removal]
+    tags: [watermark_removal]
     description: 根据遮罩和提示词补绘选区。去水印使用 CUDA，分层卸载以降低显存占用。
-    recommended_for: 换装 / 试穿 / 换脸（最高质量）
+    recommended_for: 需要按提示词补绘的水印选区
     requires_reference: false
     size_mb: 32350
     badge: 高质量
     hf_model_id: black-forest-labs/FLUX.1-Fill-dev
     download_url: https://huggingface.com/black-forest-labs/FLUX.1-Fill-dev
     display_group: AI 局部重绘
-    hf_required_files: &flux_fill_files
+    hf_required_files:
       model_index.json: 540
       scheduler/scheduler_config.json: 299
       text_encoder/config.json: 561
@@ -370,10 +262,10 @@ models:
     capabilities: [face_enhance]
     name: GFPGAN v1.4
     provider: facexlib
-    tags: [face_swap]
-    description: 人脸生成对抗网络，专精人脸修复与超分增强，换脸后处理首选
-    recommended_for: 换脸 / 人脸增强
-    requires_reference: true
+    tags: []
+    description: 人脸修复与细节增强，可用于去水印后处理
+    recommended_for: 人脸修复
+    requires_reference: false
     size_mb: 340
     badge: 推荐
     download_url: https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth
@@ -381,146 +273,6 @@ models:
     supported_params:
       <<: *gfpgan
     features: [face_enhance]
-
-  # ── 方案A：精准替换（prompt_inpaint）────────────────────────────────────
-
-  - id: flux_fill_prompt
-    executor: diffusers
-    architecture: flux_fill
-    pipeline: flux_fill
-    capabilities: [inpaint]
-    name: FLUX.1-Fill-dev（文字引导）
-    provider: diffusers
-    tags: [prompt_inpaint]
-    description: FLUX.1 Inpainting，2024 SOTA，文字理解力最强，细节还原极佳，需 16-24GB VRAM
-    recommended_for: 精准替换（最高质量）
-    requires_reference: false
-    size_mb: 32350
-    badge: 高质量
-    hf_model_id: black-forest-labs/FLUX.1-Fill-dev
-    download_url: https://huggingface.com/black-forest-labs/FLUX.1-Fill-dev
-    hf_required_files: *flux_fill_files
-    supported_params:
-      <<: *flux_fill
-    features: [inpaint_prompt]
-
-  - id: grounded_sam_flux
-    executor: composite
-    architecture: grounding_dino_sam_flux_fill
-    pipeline: grounded_sam_flux
-    capabilities: [segmentation, inpaint]
-    name: GDINO + SAM + FLUX.1-Fill
-    provider: HiImage
-    tags: [auto_segment_edit]
-    description: GroundingDINO 零样本检测 + SAM 精细分割 + FLUX.1-Fill 修复，任意目标、边缘最精准，需 16-24GB VRAM
-    recommended_for: 换色/换风格（最高质量）
-    requires_reference: false
-    size_mb: 36550   # 三个子模型总和：GDINO ~1700 + SAM ~2500 + FLUX.1-Fill ~32350
-    badge: 高质量
-    hf_models:
-      - id: IDEA-Research/grounding-dino-base
-        name: GroundingDINO
-        size_mb: 1700
-      - id: facebook/sam-vit-huge
-        name: SAM (ViT-H)
-        size_mb: 2500
-      - id: black-forest-labs/FLUX.1-Fill-dev
-        name: FLUX.1-Fill-dev
-        size_mb: 32350
-        hf_required_files: *flux_fill_files
-    download_url: https://huggingface.com/black-forest-labs/FLUX.1-Fill-dev
-    supported_params:
-      <<: *flux_fill
-      <<: *edit_prompt
-    features: [segmentation, inpaint_prompt, pure_color, style]
-
-  - id: auto_segment_hsv
-    executor: composite
-    architecture: segformer
-    pipeline: segformer_hsv
-    capabilities: [segmentation, color_edit]
-    name: SegFormer + HSV 换色
-    provider: HiImage
-    tags: [auto_segment_edit]
-    description: 自动识别服装部位，HSV 色彩空间换色，亚秒级响应，保留布料光影
-    recommended_for: 换色（纯色）
-    requires_reference: false
-    size_mb: 400
-    badge: 推荐
-    hf_model_id: mattmdjaga/segformer_b2_clothes
-    download_url: https://huggingface.com/mattmdjaga/segformer_b2_clothes
-    supported_params:
-      <<: *hsv
-      <<: *edit_prompt
-    features: [segmentation, pure_color]
-
-  - id: flux
-    executor: diffusers
-    architecture: flux
-    pipeline: flux_img2img
-    capabilities: [image_edit]
-    name: FLUX.1-dev
-    provider: diffusers
-    tags: [instruction_edit]
-    description: Black Forest Labs 2024 SOTA，文字理解力极强，细节还原最佳，需 24GB+ VRAM
-    recommended_for: 自由编辑（最高画质）
-    requires_reference: false
-    size_mb: 24000
-    badge: 高质量
-    hf_model_id: black-forest-labs/FLUX.1-dev
-    download_url: https://huggingface.com/black-forest-labs/FLUX.1-dev
-    supported_params:
-      <<: *flux
-      strength:
-        type: float
-        default: 0.75
-        range: [0.1, 1.0]
-        desc: 图生图强度；越高越忽略原图内容，越低越保留原图结构
-    features: [instruction]
-
-  - id: sdxl_img2img
-    executor: diffusers
-    architecture: sdxl
-    pipeline: sdxl_img2img
-    capabilities: [image_edit]
-    name: SDXL Img2Img
-    provider: diffusers
-    tags: [instruction_edit]
-    description: SDXL 图生图，1024px 高分辨率输出，画质明显优于 SD 1.5，需 12GB+ VRAM
-    recommended_for: 自由编辑（高分辨率）
-    requires_reference: false
-    size_mb: 7000
-    badge: ""
-    hf_model_id: stabilityai/stable-diffusion-xl-base-1.0
-    download_url: https://huggingface.com/stabilityai/stable-diffusion-xl-base-1.0
-    supported_params:
-      <<: *sdxl_inpaint
-      strength:
-        type: float
-        default: 0.75
-        range: [0.1, 1.0]
-        desc: 图生图强度
-    features: [instruction]
-
-  - id: instruct_pix2pix
-    executor: diffusers
-    architecture: instruct_pix2pix
-    pipeline: instruct_pix2pix
-    capabilities: [image_edit]
-    name: InstructPix2Pix
-    provider: diffusers
-    tags: [instruction_edit]
-    description: 原版 timbrooks/instruct-pix2pix，SD 1.5 底座，显存需求低，适合快速预览
-    recommended_for: 自由语义编辑（精准指令）
-    requires_reference: false
-    size_mb: 5000
-    badge: 推荐
-    hf_model_id: timbrooks/instruct-pix2pix
-    download_url: https://huggingface.com/timbrooks/instruct-pix2pix
-    supported_params:
-      <<: *ip2p
-    features: [instruction]
-
 
   # ── 原生超分辨率 ──
 
@@ -784,96 +536,6 @@ models:
     supported_params: {}
 
 mode_groups:
-- id: background_replace
-  name: 换背景
-  icon: image
-  icon_name: Image
-  description: 智能抠图后替换背景图
-  default_model: birefnet
-  needs_reference: true
-  reference_label: 新背景图
-  reference_hint: 拖拽或点击上传新背景图片
-  needs_roi: false
-  needs_prompt: false
-  available: true
-- id: outfit_swap
-  name: 换装模拟
-  icon: shirt
-  icon_name: Shirt
-  description: 在指定区域替换服装纹理，边缘自然融合
-  default_model: null
-  needs_reference: true
-  reference_label: 目标服装图
-  reference_hint: 上传想要替换的目标服装图片
-  needs_roi: false
-  needs_prompt: false
-  available: false
-  unavailable_reason: 修复引擎已移除，等待原生模型适配
-- id: face_swap
-  name: 换脸模拟
-  icon: user
-  icon_name: User
-  description: 替换人脸区域，搭配 GFPGAN 增强细节（仅限合法创作）
-  default_model: gfpgan
-  needs_reference: true
-  reference_label: 目标人脸图
-  reference_hint: 上传目标人物的人脸图片
-  needs_roi: false
-  needs_prompt: false
-  available: true
-- id: virtual_tryon
-  name: 虚拟试穿
-  icon: sparkles
-  icon_name: Sparkles
-  description: 将服装自然叠合到人物身上（AI 近似方案）
-  default_model: null
-  needs_reference: true
-  reference_label: 服装图
-  reference_hint: 上传想要试穿的服装图片
-  needs_roi: false
-  needs_prompt: false
-  available: false
-  unavailable_reason: 修复引擎已移除，等待原生模型适配
-- id: prompt_inpaint
-  name: 精准替换
-  icon: crosshair
-  icon_name: Crosshair
-  description: 手动框选区域，输入文字描述，SD 1.5 按描述替换选定区域
-  default_model: null
-  needs_reference: false
-  needs_roi: true
-  needs_prompt: true
-  prompt_required: true
-  prompt_label: 替换描述
-  prompt_hint: 例：a red down jacket / 一件红色羽绒服
-  available: false
-  unavailable_reason: 修复引擎已移除，等待原生模型适配
-- id: auto_segment_edit
-  name: 智能定位
-  icon: wand
-  icon_name: Wand2
-  description: 输入中文指令自动识别服装部位并换色/换风格，无需手动框选
-  default_model: auto_segment_hsv
-  needs_reference: false
-  needs_roi: false
-  needs_prompt: true
-  prompt_required: true
-  prompt_label: 编辑指令
-  prompt_hint: 例：将上衣换成黑色 / 把裤子改成牛仔风格
-  available: true
-- id: instruction_edit
-  name: 自由编辑
-  icon: message
-  icon_name: MessageSquare
-  description: 自然语言指令驱动全图语义编辑，无需参考图或框选区域
-  default_model: instruct_pix2pix
-  needs_reference: false
-  needs_roi: false
-  needs_prompt: true
-  prompt_required: true
-  prompt_label: 编辑指令
-  prompt_hint: 例：make the background a forest / 将背景换成夜晚城市
-  available: true
 - id: watermark_removal
   name: 去水印
   icon: eraser
