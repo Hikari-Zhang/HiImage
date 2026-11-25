@@ -23,6 +23,18 @@ export const ModelStatus = {
 
 export type ModelStatusValue = typeof ModelStatus[keyof typeof ModelStatus]
 
+export function modelFileIssue(status: string | undefined) {
+  switch (status) {
+    case ModelStatus.PARTIAL: return '模型文件不完整'
+    case ModelStatus.CORRUPTED: return '模型文件已损坏'
+    case ModelStatus.UNKNOWN: return '模型状态未知'
+  }
+}
+
+export function modelNeedsDownload(status: string | undefined) {
+  return status === ModelStatus.MISSING || modelFileIssue(status) !== undefined
+}
+
 // ── 下载任务状态 ─────────────────────────────────────────────────────────────
 // 与后端 DownloadStatus 和 useDownloadStore.TaskStatus 对齐
 

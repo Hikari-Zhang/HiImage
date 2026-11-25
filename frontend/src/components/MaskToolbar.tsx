@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react'
-import { Square, PenTool, Eraser, Wand2, Undo2, Circle } from 'lucide-react'
+import { Square, PenTool, Eraser, Undo2, Circle } from 'lucide-react'
 import Slider from './ui/Slider'
 import type { BrushSettings, MaskTool } from '../types/mask'
 
@@ -51,11 +51,6 @@ export default function MaskToolbar({
     })
   }, [brushSettings.shape, onBrushSettingsChange])
 
-  // 魔术棒点击
-  const handleMagicWand = useCallback(() => {
-    onBrushSettingsChange({ tool: 'magicWand' })
-  }, [onBrushSettingsChange])
-
   // 工具栏按钮样式
   const buttonClass = useMemo(
     () =>
@@ -74,7 +69,7 @@ export default function MaskToolbar({
         <button
           className={`${buttonClass} ${activeClass}`}
           onClick={() => handleToolClick('rectangle')}
-          title="矩形选择 (M)"
+          title="矩形选择"
         >
           <Square size={18} />
         </button>
@@ -95,7 +90,7 @@ export default function MaskToolbar({
       <button
         className={buttonClass}
         onClick={() => handleToolClick('rectangle')}
-        title="矩形选择 (M)"
+        title="矩形选择"
       >
         <Square size={18} />
       </button>
@@ -152,18 +147,9 @@ export default function MaskToolbar({
       <button
         className={buttonClass}
         onClick={handleShapeToggle}
-        title={`笔尖形状: ${brushSettings.shape === 'circle' ? '圆形' : '方形'} (Shift+C)`}
+        title={`笔尖形状: ${brushSettings.shape === 'circle' ? '圆形' : '方形'}`}
       >
         {brushSettings.shape === 'circle' ? <Circle size={18} /> : <Square size={18} />}
-      </button>
-
-      {/* 魔术棒 */}
-      <button
-        className={`${buttonClass} ${brushSettings.tool === 'magicWand' ? activeClass : ''}`}
-        onClick={handleMagicWand}
-        title="魔术棒 (W)"
-      >
-        <Wand2 size={18} />
       </button>
 
       <div className="w-px h-5 bg-border-subtle mx-0.5" />

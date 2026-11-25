@@ -13,8 +13,7 @@ import { CheckCircle2, Download, Loader2, Clock, XCircle, ChevronDown, AlertCirc
 import { clsx } from 'clsx'
 import { useDownloadStore } from '../../stores/useDownloadStore'
 import { useDownloadManager } from '../../hooks/useDownloadManager'
-import { DownloadStatus, ModelStatus } from '../../constants'
-import type { TaskStatus } from '../../stores/useDownloadStore'
+import { DownloadStatus, ModelStatus, modelFileIssue } from '../../constants'
 
 // ── 类型 ──────────────────────────────────────────────────────────────────────
 
@@ -44,17 +43,20 @@ interface ModelSelectProps {
 
 function StatusIcon({ modelId, size = 11 }: { modelId: string; size?: number }) {
   const task = useDownloadStore((s) => s.tasks[modelId])
-  const status = task?.status as TaskStatus | undefined
+  const status = task?.status
 
   // 未加载过状态（syncModelStatus 尚未完成）时不显示
   if (!status) return null
   if (task?.statusSyncFailed) return <AlertCircle size={size} className="text-orange-400 flex-shrink-0" />
 
-  if (status === ModelStatus.OK || status === DownloadStatus.DONE || status === DownloadStatus.CANCELLED) {
+  if (status === ModelStatus.OK || status === DownloadStatus.DONE) {
     return <CheckCircle2 size={size} className="text-green-400 flex-shrink-0" />
   }
   if (status === ModelStatus.MISSING) {
     return <Download size={size} className="text-fg-secondary flex-shrink-0" />
+  }
+  if (modelFileIssue(status)) {
+    return <AlertCircle size={size} className="text-orange-400 flex-shrink-0" />
   }
   if (status === DownloadStatus.DOWNLOADING) {
     return <Loader2 size={size} className="animate-spin text-blue-400 flex-shrink-0" />
@@ -151,6 +153,8 @@ export default function ModelSelect({
     if (selectedTask.status === ModelStatus.MISSING) {
       return { type: 'missing' as const, text: '模型未下载，点击"开始"按钮将自动下载' }
     }
+    const issue = modelFileIssue(selectedTask.status)
+    if (issue) return { type: 'file' as const, text: issue }
     if (selectedTask.status === DownloadStatus.DOWNLOADING) {
       const p = [selectedTask.speed, selectedTask.downloaded && selectedTask.totalSize
         ? `${selectedTask.downloaded} / ${selectedTask.totalSize}`
@@ -173,7 +177,8 @@ export default function ModelSelect({
     const isQueued = task?.status === DownloadStatus.QUEUED
     const isError = task?.status === DownloadStatus.ERROR
     const isMissing = task?.status === ModelStatus.MISSING
-    const needDownload = isMissing || isError
+    const issue = modelFileIssue(task?.status)
+    const needDownload = isMissing || isError || !!issue || task?.status === DownloadStatus.CANCELLED
 
     return (
       <div
@@ -188,21 +193,12 @@ export default function ModelSelect({
       >
         {/* 状态图标 */}
         <span className="flex-shrink-0 w-3.5 flex items-center justify-center">
-          {isDownloading && <Loader2 size={11} className="animate-spin text-blue-400" />}
-          {isQueued && <Clock size={11} className="text-orange-400" />}
-          {isError && (task?.statusSyncFailed
-            ? <AlertCircle size={11} className="text-orange-400" />
-            : <XCircle size={11} className="text-red-400" />)}
-          {!isDownloading && !isQueued && !isError && (task?.status === DownloadStatus.DONE || task?.status === ModelStatus.OK) && (
-            <CheckCircle2 size={11} className="text-green-400" />
-          )}
-          {!isDownloading && !isQueued && !isError && task?.status === ModelStatus.MISSING && (
-            <Download size={11} className="text-fg-secondary/60" />
-          )}
+          <StatusIcon modelId={opt.value} />
         </span>
 
         {/* 名称 */}
         <span className="flex-1 truncate">{opt.label}</span>
+        {issue && <span className="text-[10px] text-orange-400 flex-shrink-0" title={task?.message || undefined}>{issue}</span>}
 
         {/* 右侧信息 */}
         {isDownloading && (
@@ -265,15 +261,15 @@ export default function ModelSelect({
           'mt-1 px-2 py-1 rounded text-[10px] flex items-center gap-1.5',
           statusHint.type === 'missing'     && 'bg-bg-hover text-fg-secondary',
           statusHint.type === 'downloading' && 'bg-blue-500/10 text-blue-400',
-          (statusHint.type === 'queued' || statusHint.type === 'unconfirmed') && 'bg-orange-500/10 text-orange-400',
+          (statusHint.type === 'queued' || statusHint.type === 'unconfirmed' || statusHint.type === 'file') && 'bg-orange-500/10 text-orange-400',
           statusHint.type === 'error'       && 'bg-red-500/10 text-red-400',
         )}>
           {statusHint.type === 'missing'     && <Download size={10} className="flex-shrink-0" />}
           {statusHint.type === 'downloading' && <Loader2 size={10} className="animate-spin flex-shrink-0" />}
           {statusHint.type === 'queued'      && <Clock size={10} className="flex-shrink-0" />}
           {statusHint.type === 'error'       && <XCircle size={10} className="flex-shrink-0" />}
-          {statusHint.type === 'unconfirmed' && <AlertCircle size={10} className="flex-shrink-0" />}
-          <span className="truncate">{statusHint.text}</span>
+          {(statusHint.type === 'unconfirmed' || statusHint.type === 'file') && <AlertCircle size={10} className="flex-shrink-0" />}
+          <span className="truncate" title={statusHint.type === 'file' ? selectedTask?.message || undefined : undefined}>{statusHint.text}</span>
           {statusHint.type === 'unconfirmed' && (
             <button type="button" title="重新连接下载状态" onClick={(event) => handleDownloadClick(event, value)}>
               <RefreshCw size={10} />

@@ -488,7 +488,7 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 
 `ensure_model_ready` 检查模型并在需要时向 `DownloadQueue` 提交下载、轮询结果，默认等待上限 1800 秒。下载队列与推理队列独立，默认下载并发为 3，设置接口限制在 1–10。同一模型的当前排队或下载实例提交去重，每次新下载使用独立 `downloadId`；状态为 `queued → downloading → done / error / cancelled`。排队可直接移除，进行中的下载通过取消标志协作停止，不保证第三方库立即终止底层传输。取消后旧实例继续占用槽位与资源，实际线程退出才释放；同模型重试及共享 HF 仓库、组合依赖或本地同文件的下载会等待，无关资源可并发。队列快照可同时包含仍在退出的取消实例和同模型新排队实例，需用下载实例 ID 区分。
 
-`downloaders.py` 分别处理 rembg、Hugging Face、复合仓库与直接下载，不再写入兼容服务的合成缓存链接。浏览器通过每模型 SSE 的 `status` 事件订阅，服务端将连接绑定到订阅时的具体下载实例，旧任务不会关闭新实例的连接。`useDownloadManager` 以模块级 Map 复用订阅并限制重试，同一后端/模型的 POST、DELETE 与重试串行提交，并拒绝旧实例或旧操作回调覆盖当前任务；模型清单同步本身仍由各 hook 挂载触发。连接后立即发送包含终态的当前快照，终态后关闭流；下载记录不存在返回 404。前端对最近 500 个终态实例的通知去重，状态仍照常同步；单次与批量 POST 的终态也直接处理。连续无有效状态最多重试 3 次，打开连接本身不重置次数；耗尽后以 `statusSyncFailed` 标记状态未确认，模型列表、选择器和批量统计不将其视为真实下载失败。重连原任务无需重新 POST，页面重新挂载也会尝试恢复未确认实例。后端任务记录只保存在当前进程，重启后不保证恢复历史下载状态。
+`downloaders.py` 分别处理 rembg、Hugging Face、复合仓库与直接下载，不再写入兼容服务的合成缓存链接。浏览器通过每模型 SSE 的 `status` 事件订阅，服务端将连接绑定到订阅时的具体下载实例，旧任务不会关闭新实例的连接。`useDownloadManager` 以模块级 Map 复用订阅并限制重试，同一后端/模型的 POST、DELETE 与重试串行提交，并拒绝旧实例或旧操作回调覆盖当前任务；模型管理和各模型选择器按后端共用模型清单查询。首次订阅或缓存过期后重新进入时查询，下载实例首次收到终态、成功取消和删除权重时使清单失效；查询期间收到新的失效会补查。切换后端时关闭旧连接，各后端的任务状态分别保留。连接后立即发送包含终态的当前快照，终态后关闭流；下载记录不存在返回 404。前端对最近 500 个终态实例的通知去重，状态仍照常同步；单次与批量 POST 的终态也直接处理。连续无有效状态最多重试 3 次，打开连接本身不重置次数；耗尽后以 `statusSyncFailed` 标记状态未确认，模型列表、选择器和批量统计不将其视为真实下载失败。重连原任务无需重新 POST，页面重新挂载也会尝试恢复未确认实例。后端任务记录只保存在当前进程，重启后不保证恢复历史下载状态。
 
 `DownloadQueue` 将注册表声明的必需依赖和主模型下载顺序放在同一工作线程，异步层只接收进度和任务结果。依赖失败会记录仓库标识及原因，终止后续依赖和主下载，并通过统一收尾广播失败、释放槽位。取消在各阶段前后检查；当前第三方阻塞调用可能继续到返回，期间仍持有实际槽位、共享资源和删除保护。依赖阶段通过 SSE 显示当前仓库，默认心跳仍为 30 秒。旧私有服务初始化及缓存桥接已移除。
 
@@ -555,13 +555,15 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | `GET /api/models/list` | 模型元数据、当前文件状态和打开本地目录的可用性 |
 | `GET /api/models/health` | 全量模型文件检查 |
 | `GET /api/models/health/{model_id}` | 单模型检查 |
-| `POST /api/models/{model_id}/open-folder` | 从 Windows 后端的回环连接打开已存在的本地模型目录，请求需带 `X-HiImage-Action: open-folder` |
 | `POST /api/models/download/bulk` | 把需要下载的模型加入队列 |
 | `POST /api/models/download/{model_id}` | 单模型下载提交 |
 | `DELETE /api/models/download/{model_id}` | 取消下载任务；可传 `download_id` 仅取消匹配实例，旧 ID 返回 404 |
 | `GET /api/models/subscribe/{model_id}` | SSE `status` 订阅并立即补发当前快照，终态后关闭；记录不存在返回 404 |
 | `GET /api/models/queue` | 活跃及等待下载快照 |
+| `POST /api/models/{model_id}/open-folder` | 从 Windows 后端的回环连接打开已存在的本地模型目录，请求需带 `X-HiImage-Action: open-folder` |
 | `DELETE /api/models/{model_id}/files` | 删除独占闲置的受控缓存文件；共享或占用时返回 409，拒绝删除 |
+| `GET /api/models/{model_id}/file-resources` | 列出该模型已有的本地权重和每份权重影响的模型 |
+| `DELETE /api/models/{model_id}/file-resources` | 按已确认的权重和模型列表删除。权重占用或影响范围变化时返回 409 |
 
 ### 16.4 图像与错误约定
 
@@ -602,7 +604,8 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | `HIIMAGE_OUTPUT_DIR` | 项目 `output/`，受控运行产物；不等于浏览器自动保存位置 |
 | `HIIMAGE_MODELS_DIR` | 项目 `models/`，保留部分兼容模型路径 |
 | `HIIMAGE_CACHE` | 默认用户 `~/.cache`，可重定向缓存根 |
-| `HF_HOME` / `TORCH_HOME` | 默认缓存根下 `huggingface/`、`torch/` |
+| `HF_HOME` / `TORCH_HOME` | 此两项未设置时依次使用 `HIIMAGE_CACHE`、`XDG_CACHE_HOME`、`~/.cache` 下的 `huggingface/`、`torch/` |
+| `HF_HUB_CACHE` | Hub 下载目录，兼容旧变量 `HUGGINGFACE_HUB_CACHE`，默认为 `HF_HOME/hub` |
 | `U2NET_HOME` | 未设置缓存根时默认 `~/.u2net`；显式缓存根下为 `u2net/` |
 | `GFPGAN_HOME` / `REALESRGAN_HOME` / `RESTORMER_HOME` | 各模型框架缓存子目录 |
 
@@ -624,7 +627,7 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | `npm test` | Node 脚本、前端 Vitest、`tests` 与 `backend/tests` pytest；不包含 Playwright |
 | `npm run typecheck` | 前端 TypeScript 类型检查 |
 | `npm run build` | Vite 生产构建，不代表真实推理成功 |
-| `npm --prefix frontend run test:e2e` | 浏览器 Worker 像素测试；真实模型用例默认跳过 |
+| `npm --prefix frontend run test:e2e` | 浏览器画布和 Worker 像素测试。模型管理和真实推理用例分别按环境变量启用 |
 | `node scripts/python.js scripts/test_watermark_smoke.py` | 真实 LaMa 高清合成样本；需模型和推理环境 |
 | `node scripts/python.js scripts/check_docs.py` | 活跃文档的链接、命令与运行边界 |
 | `node scripts/python.js scripts/check_docker_config.py --static-only` | 容器静态契约，不启动 Docker |
@@ -642,6 +645,14 @@ Remove-Item Env:HIIMAGE_LIVE
 
 需要已运行的后端及已下载模型。Playwright 会启动或复用 5173 的前端，Windows 默认使用已安装 Edge，其他系统默认 Chromium，可用 `PLAYWRIGHT_CHANNEL` 调整。
 
+[GitHub Actions 工作流](../.github/workflows/ci.yml)在每次推送和 PR 上运行脚本测试、前后端测试、类型检查、生产构建和 Chromium 浏览器回归。后端使用 CPU 版本的 PyTorch。模型管理回归通过 `HIIMAGE_TEST_MODEL_MANAGER=1` 启用，使用项目虚拟环境启动独立的环回服务，下载临时测试权重并验证共享条目的状态与删除确认。
+
+```powershell
+$env:HIIMAGE_TEST_MODEL_MANAGER = '1'
+npm --prefix frontend run test:e2e
+Remove-Item Env:HIIMAGE_TEST_MODEL_MANAGER
+```
+
 ### 18.3 测试分层
 
 | 位置 | 验证重点 |
@@ -650,7 +661,7 @@ Remove-Item Env:HIIMAGE_LIVE
 | `frontend/src/**/*.test.*` | API、任务归属、页面切换、设置草稿、批量内存和 Worker 生命周期 |
 | `backend/tests/` | 输入验证、安全、单进程调度、取消及关闭、资源清理、任务/结果 TTL、OCR 和修复契约 |
 | `tests/` | 文档与命令、容器拓扑、Web smoke 入口 |
-| `frontend/e2e/` | 真浏览器导出像素、多边形及可选完整推理下载链 |
+| `frontend/e2e/` | 真浏览器画布工具、遮罩导出、共享模型下载和删除及可选完整推理下载链 |
 
 测试用例数会变化，不能将历史通过数量当作当前验收结果。真实效果验证须记录输入类型、模型、实际设备、耗时、遮罩外变化和输出尺寸；合成样本误差下降不能直接代表复杂照片、人脸和密集纹理的还原质量。专项记录见 [去水印优化与验收](WATERMARK_OPTIMIZATION.md)。
 
@@ -662,11 +673,11 @@ Remove-Item Env:HIIMAGE_LIVE
 2. CPU OCR、GPU 重推理等当前共享同一推理执行槽，长任务会影响其他已接纳任务；前端换图和移除提示不等于后端取消。
 3. CLI 已通过独立日志句柄和单调时钟总截止时间修复阻塞读取绕过超时的问题；Windows 挂起启动、Job 绑定及后代进程回收已测试，POSIX 进程组分支尚需在 Linux/macOS 实测。进程退出及临时日志清理有独立等待上限，超时返回可能包含额外的系统回收时间。
 4. 模型没有统一的跨请求驻留池，部分模型强制 CPU；多个分区可能重复启动进程。常驻及 CUDA 加速均需单独改造和测量。
-5. 检测主要是 OCR 加启发式候选，不是专用水印分类器；遮罩多边形仍可能包含文字间隙。前端平移按钮状态未完整接入画布，魔术棒工具有切换入口但缺少实际处理链。
+5. 检测主要是 OCR 加启发式候选；遮罩多边形仍可能包含文字间隙。去水印画布支持用平移工具或按住空格拖动，按 R 可切回矩形绘制。
 6. 页面兼顾请求、状态和展示，部分文件较大；整图遮罩预览与 Base64 会产生额外 CPU 和内存成本，尚无统一资源对象存储。
 7. 注册模型数、标签和文件检查状态不代表每条组合均可执行；近似试穿、禁用复原分支、复合 provider 需按实际路径解释。
-8. 本地与容器推理依赖尚未完全统一；仓库未看到提交触发的 CI 工作流，完整模型与效果评估仍需显式执行。
-9. 模型路径解析未完整遵循各框架的缓存优先级，尤其是 `HF_HUB_CACHE`、`XDG_CACHE_HOME`；旧 manual 缓存、软链接及占位元数据增加兼容成本。统一目录和环境初始化已列入第 19.3 节待修改清单，尚未实施。
+8. 本地与容器推理依赖尚未完全统一。CI 使用 CPU 依赖和临时测试权重，完整模型与效果评估仍需显式执行。
+9. 模型管理和推理共用 Hugging Face 快照解析及本地权重路径。各框架的附加缓存、旧 manual 缓存迁移和部署验证见第 19.3 节。
 
 这些项目是当前实现的事实或待改进事项，不是本次文档更新已完成的代码改造。
 
@@ -679,9 +690,9 @@ Remove-Item Env:HIIMAGE_LIVE
 - 改部署：核对前后端端口、同源代理、WebSocket/SSE、目录权限、模型缓存卷及依赖版本。
 - 更新文档：修改本文件及相关专项文档，运行链接/命令检查和架构接口覆盖测试，避免出现多个相互矛盾的主架构版本。
 
-### 19.3 待修改：统一模型目录解析与环境变量设置
+### 19.3 模型目录解析与环境变量设置
 
-**编号：MODEL-PATH-01。状态：待实施。** 2026-11-02 加入清单。完整排序以[待修改项判断与优先级](OPTIMIZATION_BACKLOG.md)为准；在下载取消及状态同步修复之后、统一模型运行实例管理之前实施。本项登记不表示已开始移动模型或修改加载逻辑。
+**编号：MODEL-PATH-01。状态：部分实施。** 已接通模型管理中的 Hugging Face 与本地权重路径，保留旧缓存读取。各框架附加缓存、部署验证和迁移方案仍待验证或实施。完整排序见[待修改项判断与优先级](OPTIMIZATION_BACKLOG.md)。
 
 修改范围：
 

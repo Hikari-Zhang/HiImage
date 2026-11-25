@@ -313,7 +313,8 @@ export default function Settings({ isVisible = false }: { isVisible?: boolean })
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-fg-secondary mb-1 block">默认遮罩扩张 (px)</label>
+                <label className="text-xs text-fg-secondary mb-1 block">备用遮罩扩张 (px)</label>
+                <p className="text-[11px] text-fg-secondary mb-1">用于未配置专属扩张值的模型。</p>
                 <input
                   type="text"
                   value={dilation}

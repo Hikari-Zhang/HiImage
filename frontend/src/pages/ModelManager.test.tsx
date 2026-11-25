@@ -1,18 +1,60 @@
 import { StrictMode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import ModelManager from './ModelManager'
 import { useDownloadStore } from '../stores/useDownloadStore'
+import { resetModelListCache } from '../hooks/useModelList'
 
 vi.mock('../hooks/useDownloadManager', () => ({ useDownloadManager: () => ({
   startDownload: vi.fn(), cancelDownload: vi.fn(), startBulkDownload: vi.fn(), cancelBulkDownload: vi.fn(),
 }) }))
 afterEach(() => {
-  cleanup(); vi.unstubAllGlobals()
+  cleanup(); resetModelListCache(); vi.unstubAllGlobals()
   useDownloadStore.setState({ tasks: {}, bulkSession: { active: false, modelIds: [] } })
 })
 
 describe('model list page lifecycle', () => {
+  it('shows every affected model before deleting a shared resource', async () => {
+    const originalShowModal = HTMLDialogElement.prototype.showModal
+    const originalClose = HTMLDialogElement.prototype.close
+    HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+    HTMLDialogElement.prototype.close = function () { this.removeAttribute('open') }
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ ok: true, message: '已删除', affected_model_ids: ['first', 'second'] }))
+      }
+      if (url.endsWith('/file-resources')) {
+        return new Response(JSON.stringify({ resources: [{
+          id: 'hf:owner/shared',
+          label: 'owner/shared',
+          affected_models: [{ id: 'first', name: '当前模型' }, { id: 'second', name: '共享模型' }],
+        }] }))
+      }
+      return new Response(JSON.stringify({ models: [{
+        id: 'first', name: '当前模型', provider: 'diffusers', tags: [], status: 'ok', message: '', has_local_path: true,
+      }] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    useDownloadStore.getState().setTask('second', { status: 'done' })
+    try {
+      render(<ModelManager />)
+      fireEvent.click(await screen.findByRole('button', { name: '删除 当前模型 的模型权重' }))
+      const dialog = await screen.findByRole('dialog', { name: '删除模型权重' })
+      expect(within(dialog).getByText('共享模型')).toBeInTheDocument()
+      expect(fetchMock.mock.calls.some(([, request]) => request?.method === 'DELETE')).toBe(false)
+      fireEvent.click(within(dialog).getByRole('button', { name: '确认删除' }))
+      await waitFor(() => expect(useDownloadStore.getState().getTask('second')).toBeUndefined())
+      const request = fetchMock.mock.calls.find(([, item]) => item?.method === 'DELETE')?.[1]
+      expect(JSON.parse(String(request?.body))).toEqual({
+        resource_id: 'hf:owner/shared', affected_model_ids: ['first', 'second'],
+      })
+    } finally {
+      cleanup()
+      HTMLDialogElement.prototype.showModal = originalShowModal
+      HTMLDialogElement.prototype.close = originalClose
+    }
+  })
+
   it('cancels abandoned requests under StrictMode and still loads the current request', async () => {
     const signals: AbortSignal[] = []
     vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {

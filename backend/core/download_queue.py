@@ -10,8 +10,8 @@ import time
 from typing import Any, AsyncIterator, Optional
 from uuid import uuid4
 
-from core.constants import DownloadStatus as DS, Provider, ConfigKey
-from core.model_checker import invalidate_model_cache
+from core.constants import DownloadStatus as DS, ModelStatus as MS, Provider, ConfigKey
+from core.model_checker import ModelChecker, invalidate_model_cache
 from core.model_files import model_resource_paths
 from core.model_resources import model_resources
 
@@ -184,7 +184,8 @@ class DownloadQueue:
                 # 只有该槽位的拥有者能够释放，不能移除重试实例。
                 if self._active.get(task.model_id) is task:
                     del self._active[task.model_id]
-                invalidate_model_cache(task.model_id)
+                # 别名和组合模型也可能引用本次下载的权重。
+                invalidate_model_cache()
                 if not cancelled:
                     self._dispatch_pending()
         if cancelled:
@@ -252,6 +253,10 @@ class DownloadQueue:
                 function(cfg, progress_cb=report, cancel_check=lambda: task._cancel_flag)
                 if task._cancel_flag:
                     return
+                report({"message": "正在校验本地模型文件…"})
+                result = ModelChecker().check_config(cfg)
+                if result.status != MS.OK:
+                    raise RuntimeError(f"下载后校验失败: {result.message}")
 
         future = task._future = loop.run_in_executor(None, work)
         cancelled = False

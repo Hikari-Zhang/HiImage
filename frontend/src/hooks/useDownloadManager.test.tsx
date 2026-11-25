@@ -1,9 +1,11 @@
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDownloadManager } from './useDownloadManager'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useBackendStore } from '../stores/useBackendStore'
 import { showToast } from '../components/ui'
+import { resetModelListCache } from './useModelList'
+import ModelManager from '../pages/ModelManager'
 
 vi.mock('../components/ui', () => ({ showToast: vi.fn() }))
 
@@ -37,7 +39,102 @@ beforeEach(() => {
   FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource)
 })
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals() })
+afterEach(() => {
+  cleanup()
+  resetModelListCache()
+  useBackendStore.getState().setBackendURL('')
+  useDownloadStore.setState({ tasks: {}, bulkSession: { active: false, modelIds: [] } })
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
+
+describe('shared model list', () => {
+  it('shares one lookup and preserves separate file states', async () => {
+    const pending = deferred<Response>()
+    const fetchMock = vi.fn(() => pending.promise)
+    vi.stubGlobal('fetch', fetchMock)
+    renderHook(() => useDownloadManager())
+    renderHook(() => useDownloadManager())
+    render(<ModelManager />)
+    await act(async () => {
+      pending.resolve(response({ models: [
+        { id: 'a', name: 'A', status: 'partial' },
+        { id: 'b', name: 'B', status: 'corrupted' },
+        { id: 'c', name: 'C', status: 'unknown' },
+      ] }))
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(['a', 'b', 'c'].map(id => useDownloadStore.getState().getTask(id)?.status))
+      .toEqual(['partial', 'corrupted', 'unknown'])
+    expect(screen.getByText('不完整')).toBeInTheDocument()
+  })
+
+  it('revalidates an expired snapshot when returning to the model page', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn(async () => response({ models: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const first = renderHook(() => useDownloadManager())
+    await act(async () => {})
+    first.unmount()
+    const immediate = renderHook(() => useDownloadManager())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    immediate.unmount()
+    act(() => { vi.advanceTimersByTime(15000) })
+    renderHook(() => useDownloadManager())
+    await act(async () => {})
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps an invalidation during an in-flight lookup and ignores progress and replay', async () => {
+    const first = deferred<Response>()
+    let listRequests = 0
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (String(url).includes('/health/')) return response({ status: 'ok' })
+      if (++listRequests === 1) return first.promise
+      return response({ models: [{ id: 'alias', name: 'Alias', status: 'ok' }] })
+    }))
+    const store = useDownloadStore.getState()
+    store.setTask('a', { downloadId: 'invalidate-once', status: 'downloading' })
+    store.setTask('alias', { downloadId: 'old-error', status: 'error' })
+    const hook = renderHook(() => useDownloadManager())
+    await act(async () => { FakeEventSource.latest.emit('invalidate-once', 'downloading') })
+    expect(listRequests).toBe(1)
+    await act(async () => { FakeEventSource.latest.emit('invalidate-once', 'done') })
+    expect(listRequests).toBe(1)
+    await act(async () => { first.resolve(response({ models: [{ id: 'alias', name: 'Alias', status: 'missing' }] })) })
+    expect(listRequests).toBe(2)
+    expect(store.getTask('alias')?.status).toBe('ok')
+    act(() => { store.setTask('a', { status: 'downloading' }) })
+    await act(async () => { await hook.result.current.resume(); FakeEventSource.latest.emit('invalidate-once', 'done') })
+    expect(listRequests).toBe(2)
+  })
+
+  it('closes the previous backend connection and ignores a late lookup from that backend', async () => {
+    const old = deferred<Response>()
+    const baseA = 'http://old.test'
+    const baseB = 'http://new.test'
+    useBackendStore.getState().setBackendURL(baseA)
+    useDownloadStore.getState().setTask('a', { downloadId: 'old-backend', status: 'downloading' })
+    const fetchMock = vi.fn(async (url) => String(url).startsWith(baseA) ? old.promise
+      : response({ models: [{ id: 'a', name: 'New', status: 'partial' }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderHook(() => useDownloadManager())
+    const source = FakeEventSource.latest
+    await act(async () => { useBackendStore.getState().setBackendURL(baseB) })
+    expect(source.readyState).toBe(FakeEventSource.CLOSED)
+    await waitFor(() => expect(useDownloadStore.getState().getTask('a')?.modelName).toBe('New'))
+    await act(async () => {
+      old.resolve(response({ models: [{ id: 'a', name: 'Old', status: 'ok' }] }))
+      source.emit('old-backend', 'done')
+    })
+    expect(useDownloadStore.getState().getTask('a')?.status).toBe('partial')
+    await act(async () => { useBackendStore.getState().setBackendURL(baseA) })
+    expect(useDownloadStore.getState().getTask('a')?.downloadId).toBe('old-backend')
+    expect(FakeEventSource.latest).not.toBe(source)
+    expect(FakeEventSource.latest.url).toContain(baseA)
+    act(() => { FakeEventSource.latest.emit('old-backend', 'cancelled') })
+  })
+})
 
 describe('download attempt isolation', () => {
   it('ignores late events and errors from a cancelled connection after retry', async () => {

@@ -354,6 +354,13 @@ models:
     supported_params:
       <<: *flux_fill
       prompt: {type: str, default: "Reconstruct the surrounding background and texture naturally.", desc: 补绘背景的提示词}
+    watermark_defaults:
+      dilation: 2
+      redraw:
+        num_inference_steps: 12
+        guidance_scale: 30.0
+        seed: 42
+        prompt: "Reconstruct the surrounding background and texture naturally."
     features: [inpaint_region]
 
   - id: gfpgan
@@ -772,6 +779,8 @@ models:
     sha256: 344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9
     device_override: cpu
     display_group: 快速本地模型
+    watermark_defaults:
+      dilation: 2
     supported_params: {}
 
 mode_groups:

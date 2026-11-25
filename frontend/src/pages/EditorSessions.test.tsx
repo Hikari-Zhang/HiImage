@@ -85,8 +85,9 @@ describe('real editor interaction with deferred inference responses', () => {
     hardware.cudaAvailable = true
     hardware.loading = false
     // A fake future repair backend keeps generic editor isolation regressions meaningful.
-    useModelStore.setState({ defaultInpaintModel: '', inpaintPipelines: {}, inpaintGroups: [{ label: 'test', options: [{ value: 'test-repair', label: 'test' }] }] })
-    getEditorSettingsStore('watermark').setState({ inpaintModel: 'test-repair', device: 'cpu' })
+    useModelStore.setState({ defaultInpaintModel: '', inpaintPipelines: {}, watermarkDefaults: {},
+      inpaintGroups: [{ label: 'test', options: [{ value: 'test-repair', label: 'test' }] }] })
+    getEditorSettingsStore('watermark').setState({ inpaintModel: 'test-repair', device: 'cpu', inpaintDilationOverrides: {} })
     vi.stubGlobal('IntersectionObserver', class {
       observe() {}
       unobserve() {}
@@ -168,6 +169,32 @@ describe('real editor interaction with deferred inference responses', () => {
     fireEvent.click(screen.getByRole('button', { name: '去除水印' }))
     await waitFor(() => expect(api.inpaintWithMask).toHaveBeenCalledOnce())
     expect(api.inpaintWithMask.mock.calls[0][0]).not.toHaveProperty('redraw')
+  })
+
+  it('uses each model preset and keeps manual dilation changes local to that model', async () => {
+    selectRedraw('cuda')
+    useModelStore.setState({ watermarkDefaults: {
+      flux_fill: { dilation: 7, redraw: { num_inference_steps: 20, guidance_scale: 15, prompt: 'Repair this texture' } },
+      'test-repair': { dilation: 2 },
+    } })
+    api.inpaintWithMask.mockResolvedValueOnce({ image: 'cleaned' })
+    render(<MemoryRouter><WatermarkRemoval /></MemoryRouter>)
+    const slider = screen.getByRole('slider', { name: '遮罩扩张' })
+    expect(slider).toHaveValue('7')
+    expect(screen.getByLabelText('重绘步数')).toHaveAttribute('placeholder', '20')
+    expect(screen.getByLabelText('引导强度')).toHaveAttribute('placeholder', '15')
+    expect(screen.getByLabelText('重绘提示词')).toHaveAttribute('placeholder', 'Repair this texture')
+    fireEvent.change(slider, { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: /FLUX Fill/ }))
+    fireEvent.click(screen.getByText('LaMa', { exact: true }))
+    expect(slider).toHaveValue('2')
+    fireEvent.click(screen.getByRole('button', { name: /LaMa/ }))
+    fireEvent.click(screen.getByText('FLUX Fill', { exact: true }))
+    expect(slider).toHaveValue('0')
+    fireEvent.click(screen.getByRole('button', { name: '恢复默认遮罩扩张' }))
+    expect(slider).toHaveValue('7')
+    fireEvent.click(screen.getByRole('button', { name: '开始重绘' }))
+    await waitFor(() => expect(api.inpaintWithMask).toHaveBeenCalledWith(expect.objectContaining({ dilation: 7 })))
   })
 
   it('uses the catalog default when the saved repair model is retired', () => {

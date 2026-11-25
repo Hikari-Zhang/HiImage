@@ -6,12 +6,10 @@ import shutil
 from core import paths
 
 
-def _repositories(cfg, *, dependencies=False):
+def _repositories(cfg):
     repos = {sub["id"] for sub in cfg.get("hf_models", [])}
     if cfg.get("hf_model_id") and not cfg.get("local_path"):
         repos.add(cfg["hf_model_id"])
-    if dependencies:
-        repos.update(cfg.get("dependencies", []))
     return repos
 
 
@@ -20,37 +18,46 @@ def _repo_targets(repo):
     if any(part in ("", ".", "..") for part in repo.split("/")) or "\\" in repo:
         raise ValueError(f"无效模型仓库: {repo}")
     name = repo.replace("/", "--")
-    return [(paths.HF_HOME / "manual" / name, paths.HF_HOME / "manual"),
-            (paths.get_hf_hub_dir() / f"models--{name}", paths.get_hf_hub_dir())]
+    manual = paths.get_hf_manual_dir()
+    return [(manual / name, manual),
+            *((root / f"models--{name}", root) for root in paths.get_hf_hub_dirs())]
 
 
-def deletion_targets(cfg):
-    targets = []
+def deletion_resources(cfg):
+    resources = {}
     if cfg.get("provider") == "rembg":
-        name = cfg.get("rembg_session_name", cfg.get("rembg_model_name", cfg["id"]))
-        filename = cfg.get("onnx_filename", f"{name}.onnx")
-        targets.append((paths.U2NET_HOME / filename, paths.U2NET_HOME))
+        onnx = paths.rembg_model_path(cfg)
+        resources["onnx"] = (onnx.name, [(onnx, paths.U2NET_HOME)])
     if cfg.get("local_path"):
         local = Path(paths.resolve_model_cache_path(cfg))
         roots = [paths.CACHE_ROOT, paths.MODELS_DIR]
         provider_root = paths.model_cache_root(cfg)
         if provider_root is not None:
             roots.append(provider_root)
-        root = next((r for r in roots if local.resolve().is_relative_to(r.resolve())
-                     and local.resolve() != r.resolve()), None)
+        resolved = local.resolve()
+        root = next((r for r in roots if resolved.is_relative_to(r.resolve())
+                     and resolved != r.resolve()), None)
         if root is None:
             raise ValueError(f"路径安全检查失败，拒绝删除: {local}")
-        targets.append((local, root))
+        targets = [(local, root)]
+        legacy = paths.legacy_model_cache_path(cfg)
+        if legacy and legacy[0] != local:
+            targets.append(legacy)
+        resources["local"] = (local.name, targets)
     for repo in sorted(_repositories(cfg)):
-        targets.extend(_repo_targets(repo))
-    return targets
+        resources[f"hf:{repo}"] = (repo, _repo_targets(repo))
+    return resources
+
+
+def deletion_targets(cfg):
+    return [target for _, targets in deletion_resources(cfg).values() for target in targets]
 
 
 def model_resource_paths(cfg):
     """模型可能读写的缓存路径，包括组合模型和依赖仓库。"""
     result = [p.resolve() for p, _ in deletion_targets(cfg)]
-    repos = _repositories(cfg, dependencies=True)
-    if cfg.get("hf_model_id"):
+    repos = set(cfg.get("dependencies", []))
+    if cfg.get("local_path") and cfg.get("hf_model_id"):
         repos.add(cfg["hf_model_id"])
     for repo in repos:
         result.extend(p.resolve() for p, _ in _repo_targets(repo))
@@ -58,25 +65,22 @@ def model_resource_paths(cfg):
 
 
 def shared_model_ids(model_id, registry):
-    cfg = registry[model_id]
-    deleting = [p.resolve() for p, _ in deletion_targets(cfg)]
-    repos = _repositories(cfg)
-    shared = []
-    for other_id, other in registry.items():
-        if other_id == model_id:
-            continue
-        if repos & _repositories(other, dependencies=True):
-            shared.append(other_id)
-            continue
-        # 同时覆盖两个本地条目指向同一文件、符号链接及目录内的文件引用。
-        if any(a.is_relative_to(b) or b.is_relative_to(a)
-               for a in deleting for b in model_resource_paths(other)):
-            shared.append(other_id)
-    return sorted(shared)
+    return sorted(set(affected_model_ids(deletion_targets(registry[model_id]), registry)) - {model_id})
+
+
+def affected_model_ids(targets, registry):
+    deleting = [p.resolve() for p, _ in targets]
+    return sorted(model_id for model_id, cfg in registry.items() if any(
+        a.is_relative_to(b) or b.is_relative_to(a)
+        for a in deleting for b in model_resource_paths(cfg)
+    ))
 
 
 def delete_files(cfg):
-    targets = deletion_targets(cfg)
+    return delete_targets(deletion_targets(cfg))
+
+
+def delete_targets(targets):
     # 先验证整个计划，再删除，避免后面的错误配置导致前面已部分删除。
     for target, root in targets:
         resolved = target.resolve()

@@ -20,6 +20,7 @@ interface MaskCanvasProps {
   strokes: MaskStroke[]
   brushSettings: BrushSettings
   canvasTool: MaskTool
+  panMode?: boolean
   // ROI 相关 props
   rois?: ROI[]
   selectedROIs?: string[]
@@ -43,6 +44,7 @@ export default function MaskCanvas({
   strokes,
   brushSettings,
   canvasTool,
+  panMode = false,
   rois = [],
   selectedROIs = [],
   onROISelect,
@@ -117,6 +119,7 @@ export default function MaskCanvas({
   // 获取当前工具模式
   const isBrushMode = canvasTool === 'brush'
   const isDrawingTool = brushSettings.tool === 'brush' || brushSettings.tool === 'eraser'
+  const panRequested = panMode || spaceDown
 
   // 加载图片
   useEffect(() => {
@@ -179,9 +182,9 @@ export default function MaskCanvas({
     if (!isActive) return
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (e.code === 'Space' && !e.repeat) {
+      if (e.code === 'Space') {
         e.preventDefault()
-        setSpaceDown(true)
+        if (!e.repeat) setSpaceDown(true)
       }
       // Ctrl+Z 撤销
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
@@ -192,7 +195,7 @@ export default function MaskCanvas({
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
         setSpaceDown(false)
-        setIsPanning(false)
+        if (!panMode) setIsPanning(false)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -201,7 +204,7 @@ export default function MaskCanvas({
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [isActive, onUndo])
+  }, [isActive, onUndo, panMode])
 
   // 点采样：判断是否应该添加新点
   const shouldAddPoint = useCallback(
@@ -264,11 +267,12 @@ export default function MaskCanvas({
       if (!pos) return
 
       // 检查是否应该平移
-      if (spaceDown || e.evt.button === 1) {
+      if (e.evt.button === 1 || (panRequested && e.evt.button === 0)) {
         setIsPanning(true)
         panStartRef.current = { x: pos.x - offset.x, y: pos.y - offset.y }
         return
       }
+      if (e.evt.button !== 0) return
 
       // ROI 矩形绘制模式
       if (canvasTool === 'rectangle') {
@@ -295,7 +299,7 @@ export default function MaskCanvas({
         setCurrentPoints([imgPoint.x, imgPoint.y])
       }
     },
-    [spaceDown, canvasTool, isBrushMode, isDrawingTool, offset, getStagePoint]
+    [panRequested, canvasTool, isBrushMode, isDrawingTool, offset, getStagePoint]
   )
 
   const handleMouseMove = useCallback(
@@ -497,7 +501,7 @@ export default function MaskCanvas({
   // 光标样式
   const cursor = isPanning
     ? 'grabbing'
-    : spaceDown
+    : panRequested
     ? 'grab'
     : isBrushMode && isDrawingTool
     ? 'crosshair'
@@ -557,7 +561,7 @@ export default function MaskCanvas({
                   fill="transparent"
                   onClick={() => onROISelect?.(roi.id)}
                   onTap={() => onROISelect?.(roi.id)}
-                  listening={canvasTool === 'rectangle'}
+                  listening={canvasTool === 'rectangle' && !panRequested}
                 />
               )
             })}

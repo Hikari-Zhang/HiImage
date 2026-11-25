@@ -9,6 +9,7 @@ function createEditorSettings() {
     device: string
     inpaintModel: string
     defaultDilation: number
+    inpaintDilationOverrides: Record<string, number | undefined>
     sensitivity: number
     disableNsfw: boolean
     postprocessMethod: string
@@ -26,7 +27,7 @@ function createEditorSettings() {
     referenceFileName: string
     setDevice: (value: string) => void
     setInpaintModel: (value: string) => void
-    setDilation: (value: number) => void
+    setInpaintDilation: (modelId: string, value: number | undefined) => void
     setSensitivity: (value: number) => void
     setPostprocessMethod: (value: string) => void
     setPostprocessEnabled: (value: boolean) => void
@@ -44,6 +45,7 @@ function createEditorSettings() {
     device: defaults.device,
     inpaintModel: defaults.inpaintModel,
     defaultDilation: defaults.defaultDilation,
+    inpaintDilationOverrides: {},
     sensitivity: defaults.sensitivity,
     disableNsfw: defaults.disableNsfw,
     postprocessMethod: defaults.postprocessMethod,
@@ -61,7 +63,9 @@ function createEditorSettings() {
     referenceFileName: '',
     setDevice: (device) => set({ device }),
     setInpaintModel: (inpaintModel) => set({ inpaintModel }),
-    setDilation: (defaultDilation) => set({ defaultDilation }),
+    setInpaintDilation: (modelId, dilation) => set(({ inpaintDilationOverrides }) => ({
+      inpaintDilationOverrides: { ...inpaintDilationOverrides, [modelId]: dilation },
+    })),
     setSensitivity: (sensitivity) => set({ sensitivity }),
     setPostprocessMethod: (postprocessMethod) => set({ postprocessMethod }),
     setPostprocessEnabled: (postprocessEnabled) => set({ postprocessEnabled }),

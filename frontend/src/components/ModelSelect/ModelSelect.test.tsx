@@ -22,3 +22,17 @@ it('continues to show actual backend errors as download failure', () => {
   expect(screen.getByText('下载失败: 服务器错误')).toBeInTheDocument()
   expect(screen.queryByTitle('重新连接下载状态')).not.toBeInTheDocument()
 })
+
+it.each([
+  ['partial', '模型文件不完整'],
+  ['corrupted', '模型文件已损坏'],
+  ['unknown', '模型状态未知'],
+] as const)('shows %s separately while still allowing a download', (status, label) => {
+  useDownloadStore.getState().setTask('a', { status })
+  render(<ModelSelect value="a" onChange={() => {}} options={[{ value: 'a', label: '模型 A' }]} />)
+  expect(screen.getByText(label)).toBeInTheDocument()
+  expect(screen.queryByText(/模型未下载/)).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '模型 A' }))
+  fireEvent.click(screen.getByTitle('下载此模型'))
+  expect(startDownload).toHaveBeenCalledWith('a')
+})

@@ -95,10 +95,10 @@ class RestormerExecutor(BaseModelExecutor):
     def _get_model_path(self) -> str:
         """获取模型权重路径（完整文件路径）"""
         import os
-        from .paths import resolve_model_cache_path
+        from .paths import find_local_model_path
 
         # 使用 paths.py 统一解析模型缓存路径
-        full_path = str(resolve_model_cache_path(self.model_config))
+        full_path = str(find_local_model_path(self.model_config))
 
         # 如果是目录，查找其中的 .pth 文件
         if os.path.isdir(full_path):

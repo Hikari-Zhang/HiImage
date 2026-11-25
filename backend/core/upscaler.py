@@ -95,14 +95,14 @@ def _get_weight_path(model_name: str) -> str:
     获取模型权重路径。
     使用 paths.py 统一解析（MODELS_CACHE_DIR / 'realesrgan' / weight_filename）。
     """
-    from .paths import resolve_model_cache_path
+    from .paths import find_local_model_path
 
-    # 构建最小 cfg 字典，供 resolve_model_cache_path() 使用
+    # 构建最小 cfg 字典，供 find_local_model_path() 使用
     cfg = {
         "provider": "realesrgan",
         "weight_filename": _MODEL_WEIGHT.get(model_name, f"{model_name}.pth")
     }
-    return str(resolve_model_cache_path(cfg))
+    return str(find_local_model_path(cfg))
 
 
 def _download_weight(model_name: str, progress_callback=None) -> str:

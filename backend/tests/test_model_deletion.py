@@ -44,6 +44,51 @@ async def delete(model_id="first"):
         return await client.delete(f"/api/models/{model_id}/files")
 
 
+def test_shared_weight_preview_and_confirm_only_delete_selected_resource(cache):
+    register(first={"hf_models": [{"id": "owner/shared"}, {"id": "owner/unique"}]},
+             second={"dependencies": ["owner/shared"]})
+    shared = weight()
+    unique = weight("owner/unique")
+
+    async def exercise():
+        app = FastAPI()
+        app.include_router(models.router, prefix="/api")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            path = "/api/models/first/file-resources"
+            plan = (await client.get(path)).json()["resources"]
+            resource = next(entry for entry in plan if entry["label"] == "owner/shared")
+            assert [entry["id"] for entry in resource["affected_models"]] == ["first", "second"]
+            stale = await client.request("DELETE", path, json={
+                "resource_id": resource["id"], "affected_model_ids": ["first"],
+            })
+            assert stale.status_code == 409
+            assert shared.exists() and unique.exists()
+            response = await client.request("DELETE", path, json={
+                "resource_id": resource["id"], "affected_model_ids": ["first", "second"],
+            })
+            assert response.status_code == 200 and response.json()["ok"]
+            assert not shared.exists() and unique.exists()
+
+    asyncio.run(exercise())
+
+
+def test_legacy_realesrgan_path_is_used_for_check_load_and_delete(cache, monkeypatch):
+    from core.upscaler import _get_weight_path
+
+    monkeypatch.setattr(paths.Path, "home", lambda: cache)
+    monkeypatch.setattr(paths, "REALESRGAN_HOME", cache / "new-esrgan")
+    cfg = next(model for model in model_registry.MODELS if model["id"] == "RealESRGAN_x2plus")
+    register(first={**cfg, "id": "first", "size_mb": None})
+    legacy, root = paths.legacy_model_cache_path(cfg)
+    root.mkdir(parents=True)
+    legacy.write_bytes(b"legacy weights")
+    assert model_checker.ModelChecker().check_config(model_registry.MODEL_BY_ID["first"]).file_path == str(legacy)
+    assert _get_weight_path(cfg["id"]) == str(legacy)
+    response = asyncio.run(delete())
+    assert response.status_code == 200 and response.json()["ok"]
+    assert not legacy.exists()
+
+
 @pytest.mark.parametrize("other", [
     {"hf_model_id": "owner/shared"},
     {"hf_models": [{"id": "owner/shared"}]},

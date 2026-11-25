@@ -46,7 +46,7 @@ export interface BrushSettings {
   /** 笔尖形状 */
   shape: 'circle' | 'square';
   /** 当前工具 */
-  tool: 'brush' | 'eraser' | 'magicWand' | 'add_fg' | 'remove_fg';
+  tool: 'brush' | 'eraser' | 'add_fg' | 'remove_fg';
 }
 
 /** 遮罩导出选项 */

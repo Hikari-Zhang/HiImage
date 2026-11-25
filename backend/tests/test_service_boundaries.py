@@ -38,6 +38,40 @@ def test_aggregate_and_independent_model_catalogs_are_identical(kind):
     asyncio.run(scenario())
 
 
+def test_slow_device_probe_does_not_block_model_list(monkeypatch):
+    from app.routers import models, system
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def probe():
+        started.set()
+        release.wait(2)
+        return False
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        __version__="test", backends=SimpleNamespace(), version=SimpleNamespace(cuda=None),
+        cuda=SimpleNamespace(is_available=probe),
+    ))
+    monkeypatch.setattr(models.ModelChecker, "check_all", lambda _: [])
+    app = FastAPI()
+    app.include_router(system.router)
+    app.include_router(models.router)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            device_request = asyncio.create_task(client.get("/devices"))
+            try:
+                assert await asyncio.to_thread(started.wait, 2)
+                assert (await client.get("/models/list")).status_code == 200
+                assert not device_request.done()
+            finally:
+                release.set()
+                assert (await device_request).status_code == 200
+
+    asyncio.run(scenario())
+
+
 def test_model_catalog_preserves_order_scale_capabilities_and_cutout_default(monkeypatch):
     monkeypatch.setattr(model_catalog, "get_models_for_mode", lambda mode: [
         {"id": "one", "display_group": "B", "scale": 2, "supports_custom_outscale": True},
