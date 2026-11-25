@@ -55,9 +55,11 @@ def cache_dirs_from_env(env: Optional[dict[str, str]] = None) -> dict[str, Path]
     values = os.environ if env is None else env
     cache = Path(values.get("HIIMAGE_CACHE", str(Path.home() / ".cache"))).expanduser()
     u2net_default = cache / "u2net" if "HIIMAGE_CACHE" in values else Path.home() / ".u2net"
+    xdg_cache = Path(values.get("XDG_CACHE_HOME") or str(cache)).expanduser()
+    hf_default = cache if "HIIMAGE_CACHE" in values else xdg_cache
     defaults = {
-        "HF_HOME": cache / "huggingface",
-        "TORCH_HOME": cache / "torch",
+        "HF_HOME": hf_default / "huggingface",
+        "TORCH_HOME": hf_default / "torch",
         "GFPGAN_HOME": cache / "gfpgan",
         "REALESRGAN_HOME": cache / "realesrgan",
         "RESTORMER_HOME": cache / "restormer",
@@ -131,8 +133,14 @@ def ensure_runtime_dirs() -> RuntimePaths:
 # ──────────────────────────────────────────────────────────────
 
 def get_hf_hub_dir() -> Path:
-    """获取 HuggingFace hub 缓存目录（hub/ 子目录）"""
-    return HF_HOME / "hub"
+    """返回 Hub 客户端和 HiImage 共用的下载目录。"""
+    value = os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE")
+    return Path(os.path.expandvars(value)).expanduser() if value else HF_HOME / "hub"
+
+
+def get_hf_hub_dirs() -> tuple[Path, ...]:
+    """以前的 HiImage 直接写入 HF_HOME/hub，读取和删除时仍识别该目录。"""
+    return tuple(dict.fromkeys((get_hf_hub_dir(), HF_HOME / "hub")))
 
 
 def get_hf_manual_dir() -> Path:
@@ -166,41 +174,29 @@ def resolve_model_path(local_path: str, project_root: Optional[Path] = None) -> 
     return project_root / local_path
 
 
-def resolve_hf_model_path(repo_id: str) -> str:
-    """
-    解析 HF 模型加载路径。
+def find_hf_snapshot(repo_id: str) -> Optional[Path]:
+    """返回加载器实际使用的 main 快照或兼容的手动缓存。"""
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
 
-    检查顺序：
-      1. 标准 hub 缓存（新下载位置）：通过 snapshot_download(local_files_only=True) 获取 snapshot 路径
-      2. manual/ 扁平目录（旧下载位置，向后兼容）
-      3. 均未找到：返回原始 repo_id，由 transformers/diffusers 自行解析
-
-    用法：
-        from core.paths import resolve_hf_model_path
-        local_path = resolve_hf_model_path("timbrooks/instruct-pix2pix")
-    """
-    # 1. 标准 hub 缓存（新路径）
-    hub_dir = HF_HOME / "hub"
-    if hub_dir.exists():
+    for hub_dir in get_hf_hub_dirs():
         try:
-            from huggingface_hub import snapshot_download
             path = snapshot_download(
                 repo_id=repo_id,
                 local_files_only=True,
                 cache_dir=str(hub_dir),
             )
-            if path:
-                return path
-        except Exception:
-            pass
-
-    # 2. manual/ 扁平目录（旧路径，向后兼容）
+            if Path(path).is_dir():
+                return Path(path)
+        except LocalEntryNotFoundError:
+            continue
     manual_dir = get_hf_manual_dir() / repo_id.replace("/", "--")
-    if manual_dir.exists() and manual_dir.is_dir():
-        return str(manual_dir)
+    return manual_dir if manual_dir.is_dir() else None
 
-    # 3. 未找到：返回 repo_id 让 diffusers 自行解析（可能会触发在线下载）
-    return repo_id
+
+def resolve_hf_model_path(repo_id: str) -> str:
+    path = find_hf_snapshot(repo_id)
+    return str(path) if path is not None else repo_id
 
 
 def model_cache_root(cfg: dict) -> Optional[Path]:
@@ -238,6 +234,31 @@ def resolve_model_cache_path(cfg: dict) -> Path:
         return resolve_model_path(local_path)
     weight_filename = cfg.get("weight_filename") or os.path.basename(local_path)
     return root / weight_filename
+
+
+def legacy_model_cache_path(cfg: dict) -> Optional[tuple[Path, Path]]:
+    """返回旧版 HiImage 权重路径和它所属的缓存目录。"""
+    weight = cfg.get("weight_filename") or Path(cfg.get("local_path", "")).name
+    provider = "gfpgan" if cfg.get("executor") == "gfpgan" else cfg.get("provider")
+    cache = Path.home() / ".cache" / "hiimage"
+    roots = {"realesrgan": cache / "models" / "realesrgan",
+             "restormer": cache / "models" / "restormer", "gfpgan": cache / "gfpgan"}
+    if weight and (root := roots.get(provider)) is not None:
+        return root / weight, root
+    return None
+
+
+def find_local_model_path(cfg: dict) -> Path:
+    path = resolve_model_cache_path(cfg)
+    legacy = legacy_model_cache_path(cfg)
+    if not path.exists() and legacy and legacy[0].exists():
+        return legacy[0]
+    return path
+
+
+def rembg_model_path(cfg: dict) -> Path:
+    session = cfg.get("rembg_session_name", cfg.get("rembg_model_name", cfg["id"]))
+    return U2NET_HOME / cfg.get("onnx_filename", f"{session}.onnx")
 
 
 # ──────────────────────────────────────────────────────────────

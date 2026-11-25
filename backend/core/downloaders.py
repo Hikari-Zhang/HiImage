@@ -9,13 +9,16 @@
 import os
 import hashlib
 import tempfile
-import shutil
 import time
 import urllib.request
 from pathlib import Path
 
 from core.utils import fmt_speed, fmt_size
-from core.paths import resolve_model_cache_path, U2NET_HOME, HF_HOME as _HF_HOME
+from core.hf_weights import check_file, read_config
+from core.paths import get_hf_hub_dir, rembg_model_path, resolve_model_cache_path
+
+_HF_CONFIG_FILES = {"model_index.json", "config.json", "preprocessor_config.json",
+                    "scheduler_config.json", "tokenizer_config.json", "tokenizer.json", "vocab.json"}
 
 
 # ── 取消检查辅助 ───────────────────────────────────────────────────────────────
@@ -45,17 +48,8 @@ def download_rembg(cfg: dict, progress_cb=None, cancel_check=None) -> None:
 
     from app.config import get as get_config
 
-    def _on_cancel():
-        _check_cancel(cancel_check)
-
-    import urllib.request
-    from pathlib import Path
-
-    onnx_filename = cfg.get("onnx_filename")
-    if not onnx_filename:
-        # 向后兼容
-        session_name = cfg.get("rembg_session_name", cfg.get("rembg_model_name", cfg["id"]))
-        onnx_filename = f"{session_name}.onnx"
+    dest = rembg_model_path(cfg)
+    onnx_filename = dest.name
 
     github_url = cfg.get("github_download_url", "")
     if not github_url:
@@ -68,9 +62,7 @@ def download_rembg(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     else:
         url = github_url
 
-    u2net_home = Path(os.environ.get("U2NET_HOME", Path.home() / ".u2net"))
-    u2net_home.mkdir(parents=True, exist_ok=True)
-    dest = u2net_home / onnx_filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
     # 文件已存在且大小合理则跳过（避免重复下载）
     size_mb = cfg.get("size_mb", 0) or 0
@@ -81,56 +73,11 @@ def download_rembg(cfg: dict, progress_cb=None, cancel_check=None) -> None:
                 progress_cb({"message": f"文件已存在，跳过", "speed": "", "downloaded": "", "total_size": ""})
             return
 
-    req = urllib.request.Request(url, headers={"User-Agent": "HiImage/2.0"})
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            content_length = resp.headers.get("Content-Length")
-            total_bytes = int(content_length) if content_length else 0
-
-            downloaded = 0
-            start_time = time.monotonic()
-            last_report_time = start_time
-            last_report_bytes = 0
-
-            with open(dest, "wb") as f:
-                while True:
-                    _on_cancel()
-                    chunk = resp.read(256 * 1024)  # 256KB
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-
-                    now = time.monotonic()
-                    elapsed = now - last_report_time
-                    if elapsed >= 0.5 and progress_cb:
-                        speed = (downloaded - last_report_bytes) / elapsed
-                        last_report_time = now
-                        last_report_bytes = downloaded
-                        pct = f"{downloaded * 100 // total_bytes}%" if total_bytes else ""
-                        progress_cb({
-                            "message": f"{onnx_filename} {pct}",
-                            "speed": fmt_speed(speed),
-                            "downloaded": fmt_size(downloaded),
-                            "total_size": fmt_size(total_bytes) if total_bytes else "?",
-                        })
-
-        elapsed_total = time.monotonic() - start_time
-        avg_speed = downloaded / elapsed_total if elapsed_total > 0 else 0
-
+        _download_file(cfg, dest, url, progress_cb, cancel_check)
     except InterruptedError:
-        if dest.exists():
-            try:
-                dest.unlink()
-            except OSError:
-                pass
         raise
     except Exception as e:
-        if dest.exists():
-            try:
-                dest.unlink()
-            except OSError:
-                pass
         raise RuntimeError(
             f"下载 {onnx_filename} 失败: {e}\n"
             f"原始地址: {github_url}\n"
@@ -214,7 +161,6 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     from huggingface_hub import list_repo_files, hf_hub_download, try_to_load_from_cache
     from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
-    hf_cache = str(_HF_HOME)
     token = os.environ.get("HF_TOKEN") or None
     repo_id = cfg["hf_model_id"]
     name = cfg.get("name", repo_id)
@@ -225,24 +171,7 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     IGNORE_SUFFIXES = {".msgpack", ".h5"}
     IGNORE_PREFIXES = ("flax_model", "tf_model")
 
-    # 下载前先检测：如果已存在但状态为 corrupted，删除缓存目录重新下载
-    from core.model_checker import ModelChecker
-    checker = ModelChecker()
-    pre_check = checker.check_model(cfg["id"])
     required_files = cfg.get("hf_required_files")
-    if pre_check.status == "corrupted" and not required_files:
-        # 清理 hub/ 目录（新路径）——直接按路径公式删除，避免 scan_cache_dir
-        # 对合成符号链接结构（无真实 blobs）返回不一致结果的问题
-        try:
-            hub_model_dir = Path(hf_cache) / "hub" / ("models--" + repo_id.replace("/", "--"))
-            if hub_model_dir.exists():
-                shutil.rmtree(hub_model_dir)
-        except Exception:
-            pass
-        # 向后兼容：也清理旧的 manual/ 目录
-        manual_dir = Path(hf_cache) / "manual" / repo_id.replace("/", "--")
-        if manual_dir.exists():
-            shutil.rmtree(manual_dir)
 
     try:
         all_files = list(list_repo_files(repo_id, token=token))
@@ -266,8 +195,10 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
             raise RuntimeError(f"{name} 的 Diffusers 文件清单与远端仓库不一致")
         files = list(required_files)
 
-    hub_cache_dir = str(Path(hf_cache) / "hub")
+    hub_cache_dir = str(get_hf_hub_dir())
     total_files = len(files)
+    if not total_files:
+        raise RuntimeError(f"{name} 的仓库没有可下载文件")
 
     for file_idx, filename in enumerate(files):
         _on_cancel()  # 文件间取消检查
@@ -289,9 +220,15 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
             )
             if _supports_tqdm_class:
                 hf_kwargs["tqdm_class"] = tqdm_cls
-            if required_files:
-                cached = try_to_load_from_cache(repo_id, filename, cache_dir=hub_cache_dir)
-                if isinstance(cached, str) and Path(cached).stat().st_size != required_files[filename]:
+            cached = try_to_load_from_cache(repo_id, filename, cache_dir=hub_cache_dir)
+            if isinstance(cached, str):
+                cached_path = Path(cached)
+                try:
+                    check_file(cached_path, required_files[filename] if required_files else None)
+                    if not required_files and (cached_path.name in _HF_CONFIG_FILES or
+                                               cached_path.name.endswith(".index.json")):
+                        read_config(cached_path)
+                except (OSError, ValueError):
                     hf_kwargs["force_download"] = True
             downloaded = hf_hub_download(**hf_kwargs)
             if required_files and Path(downloaded).stat().st_size != required_files[filename]:
@@ -344,13 +281,12 @@ def download_direct(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     :param cancel_check: 可选，无参函数，返回 True 时抛出 InterruptedError 终止下载。
     """
 
-    def _on_cancel():
-        _check_cancel(cancel_check)
-
     dest = resolve_model_cache_path(cfg)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    _download_file(cfg, dest, cfg["download_url"], progress_cb, cancel_check)
 
-    url = cfg["download_url"]
+
+def _download_file(cfg, dest, url, progress_cb, cancel_check):
     name = cfg.get("name", cfg.get("id", url))
 
     req = urllib.request.Request(url, headers={"User-Agent": "HiImage/2.0"})
@@ -371,7 +307,7 @@ def download_direct(cfg: dict, progress_cb=None, cancel_check=None) -> None:
             with tempfile.NamedTemporaryFile(mode="wb", dir=dest.parent, suffix=".download", delete=False) as f:
                 temporary = Path(f.name)
                 while True:
-                    _on_cancel()
+                    _check_cancel(cancel_check)
                     chunk = resp.read(256 * 1024)
                     if not chunk:
                         break
@@ -394,7 +330,9 @@ def download_direct(cfg: dict, progress_cb=None, cancel_check=None) -> None:
                             "total_size": fmt_size(total_bytes) if total_bytes else "?",
                         })
 
-        _on_cancel()
+        _check_cancel(cancel_check)
+        if not downloaded or (total_bytes and downloaded != total_bytes):
+            raise ValueError(f"{name} 权重下载不完整")
         if digest is not None and digest.hexdigest() != expected_digest:
             raise ValueError(f"{name} 权重 SHA-256 校验失败")
         os.replace(temporary, dest)

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -29,14 +28,6 @@ _BACKEND_DIR = _PROJECT_ROOT / "backend"
 
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
-
-# 设置 HF_HOME（与 app/main.py 保持一致）
-_MODELS_DIR = _PROJECT_ROOT / "models"
-if "HF_HOME" not in os.environ:
-    os.environ["HF_HOME"] = str(_MODELS_DIR / "huggingface")
-if "TORCH_HOME" not in os.environ:
-    os.environ["TORCH_HOME"] = str(_MODELS_DIR / "torch")
-
 
 # ── 颜色/图标常量 ─────────────────────────────────────────────────────────────
 
@@ -174,13 +165,15 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        from core.paths import apply_default_env_vars
+        apply_default_env_vars()
         from core.model_checker import ModelChecker
     except ImportError as e:
         print(f"[ERROR] 无法导入 model_checker: {e}", file=sys.stderr)
         print(f"  请确保已激活虚拟环境：source venv/bin/activate", file=sys.stderr)
         return 1
 
-    checker = ModelChecker(project_root=_PROJECT_ROOT)
+    checker = ModelChecker()
 
     # 选择检测范围
     if args.model:

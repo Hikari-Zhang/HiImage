@@ -176,11 +176,13 @@ function ensureSubscribed(modelId: string, client: ReturnType<typeof createApiCl
 
 /** 下载完成后立即重查单个模型状态，把 store 里的 done → ok。 */
 async function _syncOne(modelId: string, client: ReturnType<typeof createApiClient>, isCurrent: () => boolean) {
+  const store = useDownloadStore.getState()
+  const completedTask = store.getTask(modelId)
   try {
     const res = await client.fetch(`${ApiPath.MODELS_HEALTH}/${encodeURIComponent(modelId)}`)
     const data = await readApiResponse<{ status: string; name?: string }>(res, '读取模型状态失败')
-    if (!isCurrent()) return
-    useDownloadStore.getState().setTask(modelId, {
+    if (!isCurrent() || store.getTask(modelId) !== completedTask) return
+    store.setTask(modelId, {
       status: data.status === ModelStatus.OK ? ModelStatus.OK : ModelStatus.MISSING,
       speed: '', downloaded: '', totalSize: '', message: '',
     })

@@ -2,6 +2,7 @@
 import asyncio
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -59,7 +60,24 @@ def harness(monkeypatch):
         "c": {"id": "c", "name": "C", "hf_model_id": "test/independent"},
     })
     monkeypatch.setattr(downloaders, "download_hf", state.download)
+    monkeypatch.setattr(download_queue.ModelChecker, "check_config",
+                        lambda *_: SimpleNamespace(status="ok"))
     return state
+
+
+def test_incomplete_weights_after_downloader_returns_are_reported_as_error(harness, monkeypatch):
+    monkeypatch.setattr(download_queue.ModelChecker, "check_config",
+                        lambda *_: SimpleNamespace(status="partial", message="missing configuration"))
+
+    async def exercise():
+        task = harness.queue.submit("a")
+        await until(lambda: bool(harness.gates))
+        harness.gates[0].set()
+        await until(lambda: task.status == "error")
+        assert "missing configuration" in task.message
+        assert not harness.queue.list_active()
+
+    asyncio.run(exercise())
 
 
 def test_cancel_keeps_slot_until_real_worker_exits(harness):

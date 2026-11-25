@@ -560,7 +560,10 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | `DELETE /api/models/download/{model_id}` | 取消下载任务；可传 `download_id` 仅取消匹配实例，旧 ID 返回 404 |
 | `GET /api/models/subscribe/{model_id}` | SSE `status` 订阅并立即补发当前快照，终态后关闭；记录不存在返回 404 |
 | `GET /api/models/queue` | 活跃及等待下载快照 |
+| `POST /api/models/{model_id}/open-folder` | 在本机 Windows 资源管理器打开权重目录，需要本地请求与操作标记 |
 | `DELETE /api/models/{model_id}/files` | 删除独占闲置的受控缓存文件；共享或占用时返回 409，拒绝删除 |
+| `GET /api/models/{model_id}/file-resources` | 列出该模型已有的本地权重和每份权重影响的模型 |
+| `DELETE /api/models/{model_id}/file-resources` | 按已确认的权重和模型列表删除。权重占用或影响范围变化时返回 409 |
 
 ### 16.4 图像与错误约定
 
@@ -601,7 +604,8 @@ FLUX Fill 的直接执行和 GroundingDINO + SAM 复合编辑共用 DiffusersExe
 | `HIIMAGE_OUTPUT_DIR` | 项目 `output/`，受控运行产物；不等于浏览器自动保存位置 |
 | `HIIMAGE_MODELS_DIR` | 项目 `models/`，保留部分兼容模型路径 |
 | `HIIMAGE_CACHE` | 默认用户 `~/.cache`，可重定向缓存根 |
-| `HF_HOME` / `TORCH_HOME` | 默认缓存根下 `huggingface/`、`torch/` |
+| `HF_HOME` / `TORCH_HOME` | 此两项未设置时依次使用 `HIIMAGE_CACHE`、`XDG_CACHE_HOME`、`~/.cache` 下的 `huggingface/`、`torch/` |
+| `HF_HUB_CACHE` | Hub 下载目录，兼容旧变量 `HUGGINGFACE_HUB_CACHE`，默认为 `HF_HOME/hub` |
 | `U2NET_HOME` | 未设置缓存根时默认 `~/.u2net`；显式缓存根下为 `u2net/` |
 | `GFPGAN_HOME` / `REALESRGAN_HOME` / `RESTORMER_HOME` | 各模型框架缓存子目录 |
 
@@ -665,7 +669,7 @@ Remove-Item Env:HIIMAGE_LIVE
 6. 页面兼顾请求、状态和展示，部分文件较大；整图遮罩预览与 Base64 会产生额外 CPU 和内存成本，尚无统一资源对象存储。
 7. 注册模型数、标签和文件检查状态不代表每条组合均可执行；近似试穿、禁用复原分支、复合 provider 需按实际路径解释。
 8. 本地与容器推理依赖尚未完全统一；仓库未看到提交触发的 CI 工作流，完整模型与效果评估仍需显式执行。
-9. 模型路径解析未完整遵循各框架的缓存优先级，尤其是 `HF_HUB_CACHE`、`XDG_CACHE_HOME`；旧 manual 缓存、软链接及占位元数据增加兼容成本。统一目录和环境初始化已列入第 19.3 节待修改清单，尚未实施。
+9. 模型管理和推理共用 Hugging Face 快照解析及本地权重路径。各框架的附加缓存、旧 manual 缓存迁移和部署验证见第 19.3 节。
 
 这些项目是当前实现的事实或待改进事项，不是本次文档更新已完成的代码改造。
 
@@ -678,9 +682,9 @@ Remove-Item Env:HIIMAGE_LIVE
 - 改部署：核对前后端端口、同源代理、WebSocket/SSE、目录权限、模型缓存卷及依赖版本。
 - 更新文档：修改本文件及相关专项文档，运行链接/命令检查和架构接口覆盖测试，避免出现多个相互矛盾的主架构版本。
 
-### 19.3 待修改：统一模型目录解析与环境变量设置
+### 19.3 模型目录解析与环境变量设置
 
-**编号：MODEL-PATH-01。状态：待实施。** 2026-11-02 加入清单。完整排序以[待修改项判断与优先级](OPTIMIZATION_BACKLOG.md)为准；在下载取消及状态同步修复之后、统一模型运行实例管理之前实施。本项登记不表示已开始移动模型或修改加载逻辑。
+**编号：MODEL-PATH-01。状态：部分实施。** 已接通模型管理中的 Hugging Face 与本地权重路径，保留旧缓存读取。各框架附加缓存、部署验证和迁移方案仍待验证或实施。完整排序见[待修改项判断与优先级](OPTIMIZATION_BACKLOG.md)。
 
 修改范围：
 

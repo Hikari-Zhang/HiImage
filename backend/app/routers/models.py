@@ -25,6 +25,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from app.services.model_catalog import model_groups
 from core.model_checker import ModelChecker
@@ -334,6 +335,69 @@ async def delete_model_files(model_id: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except OSError as exc:
         logger.exception("删除模型文件失败: %s", model_id)
+        raise HTTPException(status_code=500, detail="删除模型文件失败，请检查文件占用和权限后重试") from exc
+
+
+class DeleteWeightRequest(BaseModel):
+    resource_id: str
+    affected_model_ids: list[str]
+
+
+@router.get("/{model_id}/file-resources")
+def model_file_resources(model_id: str):
+    from core.model_files import affected_model_ids, deletion_resources
+    from core.model_registry import MODEL_BY_ID
+
+    cfg = MODEL_BY_ID.get(model_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="未找到模型")
+    resources = []
+    try:
+        for resource_id, (label, targets) in deletion_resources(cfg).items():
+            if any(os.path.lexists(path) for path, _ in targets):
+                affected = affected_model_ids(targets, MODEL_BY_ID)
+                resources.append({
+                    "id": resource_id,
+                    "label": label,
+                    "affected_models": [{"id": mid, "name": MODEL_BY_ID[mid].get("name", mid)} for mid in affected],
+                })
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"resources": resources}
+
+
+@router.delete("/{model_id}/file-resources")
+async def delete_model_file_resource(model_id: str, request: DeleteWeightRequest):
+    from core.download_queue import get_download_queue
+    from core.model_checker import invalidate_model_cache
+    from core.model_files import affected_model_ids, delete_targets, deletion_resources
+    from core.model_registry import MODEL_BY_ID
+    from core.model_resources import ModelResourcesBusy, model_resources
+
+    cfg = MODEL_BY_ID.get(model_id)
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="未找到模型")
+    try:
+        with model_resources.deleting():
+            if get_download_queue().list_active():
+                raise ModelResourcesBusy("当前存在下载或排队任务，请结束后再删除模型文件")
+            resource = deletion_resources(cfg).get(request.resource_id)
+            if resource is None:
+                raise HTTPException(status_code=404, detail="未找到该模型权重")
+            _, targets = resource
+            affected = affected_model_ids(targets, MODEL_BY_ID)
+            if sorted(request.affected_model_ids) != affected:
+                raise HTTPException(status_code=409, detail="受影响的模型已变化，请重新确认删除")
+            try:
+                return {**delete_targets(targets), "affected_model_ids": affected}
+            finally:
+                invalidate_model_cache()
+    except ModelResourcesBusy as exc:
+        raise HTTPException(status_code=409, detail={"code": "MODEL_FILES_BUSY", "message": str(exc)}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        logger.exception("删除模型权重失败: %s", model_id)
         raise HTTPException(status_code=500, detail="删除模型文件失败，请检查文件占用和权限后重试") from exc
 
 

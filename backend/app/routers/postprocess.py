@@ -104,6 +104,11 @@ async def postprocess_fix(req: PostprocessRequest):
     validate_matching_dimensions(original, inpainted, "处理结果")
     validate_matching_dimensions(original, mask)
 
+    if req.method == "gfpgan":
+        ready, message = await ensure_model_ready_with_progress("gfpgan", "人脸修复", req.task_id, source="postprocess")
+        if not ready:
+            return JSONResponse(status_code=422, content={"detail": message, "message": message})
+
     log_manager.info(
         f"开始后处理修复: method={req.method}, device={req.device}",
         source="postprocess",

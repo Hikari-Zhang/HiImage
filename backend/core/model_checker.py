@@ -16,20 +16,14 @@
 """
 from __future__ import annotations
 
-import os
 import time
-from dataclasses import dataclass, field
+from threading import Lock
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-# 使用统一路径管理器
-from core.paths import (
-    PROJECT_ROOT as _PR,
-    MODELS_DIR as _MODELS_DIR,
-    HF_HOME as _HF_HOME,
-    U2NET_HOME as _U2NET_HOME,
-    resolve_hf_model_path as _resolve_hf,
-)
+from core import paths
+from core.hf_weights import check_file, check_snapshot
 
 # ── TTL 缓存配置 ────────────────────────────────────────────────────────────
 # 缓存有效期（秒）：平衡实时性与性能，5 秒足够覆盖一次 UI 刷新的周期
@@ -37,7 +31,8 @@ MODEL_CHECK_CACHE_TTL = 5.0
 
 # 模块级缓存：{model_id: (ModelCheckResult, timestamp)}
 _model_check_cache: dict[str, tuple] = {}
-_last_cache_clear: float = 0.0
+_cache_lock = Lock()
+_cache_generation = 0
 
 
 def invalidate_model_cache(model_id: str | None = None) -> None:
@@ -47,26 +42,17 @@ def invalidate_model_cache(model_id: str | None = None) -> None:
     :param model_id: 指定模型 ID 则只失效该模型；None 时清空全部缓存。
                     下载完成后应调用此方法刷新状态。
     """
-    global _model_check_cache
-    if model_id is None:
-        _model_check_cache.clear()
-    else:
-        _model_check_cache.pop(model_id, None)
+    global _cache_generation
+    with _cache_lock:
+        _cache_generation += 1
+        if model_id is None:
+            _model_check_cache.clear()
+        else:
+            _model_check_cache.pop(model_id, None)
 
 
 def resolve_hf_model_path(repo_id: str) -> str:
-    """
-    解析 HF 模型加载路径。
-
-    优先使用 paths.py 中定义的逻辑（检查 manual/ 目录），
-    找不到时返回原始 repo_id，由 transformers/diffusers 自行解析标准 HF 缓存。
-
-    用法：
-        from core.model_checker import resolve_hf_model_path
-        local_path = resolve_hf_model_path("timbrooks/instruct-pix2pix")
-        pipe = SomePipeline.from_pretrained(local_path, ...)
-    """
-    return _resolve_hf(repo_id)
+    return paths.resolve_hf_model_path(repo_id)
 
 # 延迟导入：model_registry 在模块级加载 models.yaml，
 # 这里同样在模块级引入（一次性，无性能问题）。
@@ -91,38 +77,15 @@ class ModelCheckResult:
 
 
 class ModelChecker:
-    """
-    检测所有注册模型的文件完整性。
-
-    三类存储路径的处理策略：
-      1. rembg 模型     → ~/.u2net/<rembg_model_name>.onnx
-      2. 本地直接路径    → <PROJECT_ROOT>/<local_path>（GFPGAN、Real-ESRGAN 等）
-      3. HuggingFace 缓存 → 通过 scan_cache_dir() 判断是否完整下载
-    """
-
-    def __init__(self, project_root: Optional[Path] = None):
-        # 使用 paths.py 中定义的 PROJECT_ROOT（单一数据源）
-        self.project_root = project_root or _PR
-        self.models_dir = _MODELS_DIR if project_root is None else self.project_root / "models"
-
-        # HF 缓存目录：使用 paths.py 中的定义
-        self.hf_cache_dir = _HF_HOME / "hub"
-
-    # ── 公共 API ─────────────────────────────────────────────────────────────
+    """检查当前推理路径上的模型权重及其必需文件。"""
 
     def check_model(self, model_id: str, use_cache: bool = True) -> ModelCheckResult:
-        """
-        检测单个模型，返回结果（不抛异常）。
-
-        :param use_cache: 是否使用 TTL 缓存（默认 True）；传入 False 可强制刷新。
-        """
-        # ── TTL 缓存检查 ─────────────────────────────────────────────────
-        global _model_check_cache
         now = time.monotonic()
-        if use_cache and model_id in _model_check_cache:
-            cached_result, cached_time = _model_check_cache[model_id]
-            if now - cached_time < MODEL_CHECK_CACHE_TTL:
-                return cached_result
+        with _cache_lock:
+            generation = _cache_generation
+            cached = _model_check_cache.get(model_id)
+            if use_cache and cached and now - cached[1] < MODEL_CHECK_CACHE_TTL:
+                return cached[0]
 
         cfg = MODEL_BY_ID.get(model_id)
         if not cfg:
@@ -135,7 +98,22 @@ class ModelChecker:
             )
             return result
 
+        result = self.check_config(cfg)
+        with _cache_lock:
+            current = _model_check_cache.get(model_id)
+            if generation == _cache_generation and (current is None or now >= current[1]):
+                _model_check_cache[model_id] = (result, now)
+        return result
+
+    def check_config(self, cfg: dict) -> ModelCheckResult:
+        """直接检测一份配置，供下载队列检查提交时保存的配置快照。"""
         provider = cfg.get("provider", "")
+        model_id = cfg["id"]
+        for repo in cfg.get("dependencies", []):
+            if paths.find_hf_snapshot(repo) is None:
+                return ModelCheckResult(
+                    model_id, cfg.get("name", model_id), provider, MS.PARTIAL, f"缺少模型依赖: {repo}",
+                )
 
         if provider == Provider.REMBG:
             result = self._check_rembg(cfg)
@@ -154,8 +132,6 @@ class ModelChecker:
                 message="无法确定模型存储路径（缺少 hf_model_id / hf_models 和 local_path）",
             )
 
-        # 写入缓存
-        _model_check_cache[model_id] = (result, now)
         return result
 
     def check_all(self) -> list[ModelCheckResult]:
@@ -170,68 +146,10 @@ class ModelChecker:
     # ── 内部检测方法 ─────────────────────────────────────────────────────────
 
     def _check_rembg(self, cfg: dict) -> ModelCheckResult:
-        """
-        rembg 模型：检查 ~/.u2net/<onnx_filename> 是否存在且大小合理。
-
-        onnx_filename 示例：
-          birefnet      → BiRefNet-general-epoch_244.onnx
-          u2net         → u2net.onnx
-          modnet        → u2net_human_seg.onnx
-          isnet         → isnet-general-use.onnx
-          rmbg          → bria-rmbg-2.0.onnx
-        """
-        # 使用 paths.py 中定义的 U2NET_HOME
-        from core.paths import U2NET_HOME as _U2NET
-        u2net_home = _U2NET
-        onnx_filename = cfg.get("onnx_filename")
-        if not onnx_filename:
-            # 向后兼容旧字段
-            session_name = cfg.get("rembg_session_name", cfg.get("rembg_model_name", cfg["id"]))
-            onnx_filename = f"{session_name}.onnx"
-
-        onnx_path = u2net_home / onnx_filename
-        return self._check_file(cfg, onnx_path)
+        return self._check_file(cfg, paths.rembg_model_path(cfg))
 
     def _check_local_path(self, cfg: dict) -> ModelCheckResult:
-        """
-        直接路径模型（GFPGAN、Real-ESRGAN 等）：
-        使用 paths.py 中的 resolve_model_cache_path() 统一解析路径。
-        新路径优先，旧路径（~/.cache/hiimage/...）作为向后兼容 fallback。
-        """
-        from core.paths import resolve_model_cache_path
-
-        path = resolve_model_cache_path(cfg)
-        result = self._check_file(cfg, path)
-        if result.status == MS.MISSING:
-            # 向后兼容：检查旧的 ~/.cache/hiimage/... 路径
-            old_path = self._resolve_legacy_cache_path(cfg)
-            if old_path and old_path != path:
-                old_result = self._check_file(cfg, old_path)
-                if old_result.status != MS.MISSING:
-                    return old_result
-        return result
-
-    def _resolve_legacy_cache_path(self, cfg: dict) -> Optional[Path]:
-        """
-        返回 ~/.cache/hiimage/ 下的旧缓存路径（向后兼容）。
-
-        旧路径结构：
-          Real-ESRGAN → ~/.cache/hiimage/models/realesrgan/<weight>
-          Restormer   → ~/.cache/hiimage/models/restormer/<weight>
-          GFPGAN      → ~/.cache/hiimage/gfpgan/<weight>
-        """
-        old_cache = Path.home() / ".cache" / "hiimage"
-        provider = cfg.get("provider", "")
-        weight = cfg.get("weight_filename") or os.path.basename(cfg.get("local_path", ""))
-        if not weight:
-            return None
-        if provider == "realesrgan":
-            return old_cache / "models" / "realesrgan" / weight
-        if provider == "restormer":
-            return old_cache / "models" / "restormer" / weight
-        if provider == "gfpgan":
-            return old_cache / "gfpgan" / weight
-        return None
+        return self._check_file(cfg, paths.find_local_model_path(cfg))
 
     def _check_hf_multi(self, cfg: dict) -> ModelCheckResult:
         """
@@ -276,7 +194,7 @@ class ModelChecker:
             # 找出所有有问题的子模型
             bad = [r for r in sub_results if r.status != "ok"]
             bad_names = ", ".join(r.name for r in bad)
-            message = f"{worst.status}: {bad_names} — {bad[0].message}"
+            message = f"{worst.status}: {bad_names} — {worst.message}"
 
         return ModelCheckResult(
             model_id=model_id,
@@ -284,315 +202,51 @@ class ModelChecker:
             provider=provider,
             status=worst.status,
             message=message,
+            file_path=next((r.file_path for r in sub_results if r.file_path), None),
             size_bytes=total_bytes or None,
             expected_size_mb=total_size_mb,
         )
 
-    def _check_required_hf_files(self, cfg: dict) -> ModelCheckResult:
-        from huggingface_hub import try_to_load_from_cache
-
-        repo_id = cfg["hf_model_id"]
-        index = try_to_load_from_cache(repo_id, "model_index.json", cache_dir=str(self.hf_cache_dir))
-        directory = (Path(index).parent if isinstance(index, str)
-                     else self.hf_cache_dir.parent / "manual" / repo_id.replace("/", "--"))
-        total = 0
-        status, message = MS.OK, "Diffusers 文件齐全"
-        for filename, expected in cfg["hf_required_files"].items():
-            file = directory / filename
-            try:
-                size = file.stat().st_size
-            except OSError:
-                status, message = MS.PARTIAL, f"缺少模型文件: {filename}"
-                break
-            if not file.is_file() or size != expected:
-                status, message = MS.CORRUPTED, f"模型文件字节数异常: {filename}"
-                break
-            total += size
-        if not directory.is_dir():
-            status, message = MS.MISSING, "未找到本地 Diffusers 模型"
-        return ModelCheckResult(
-            model_id=cfg["id"], name=cfg.get("name", repo_id), provider=cfg["provider"],
-            status=status, message=message, file_path=str(directory), size_bytes=total,
-            expected_size_mb=cfg.get("size_mb"),
-        )
-
     def _check_hf_cache(self, cfg: dict) -> ModelCheckResult:
-        """
-        HuggingFace Hub 缓存模型。
-
-        检测顺序：
-          1. 优先检查标准 hub/ 缓存（新下载位置，hf_hub_download 写入格式）
-          2. 再 fallback 到 manual/ 路径（旧下载位置，向后兼容）
-        """
-        if cfg.get("hf_required_files"):
-            return self._check_required_hf_files(cfg)
         repo_id = cfg["hf_model_id"]
-        name = cfg.get("name", "")
-        provider = cfg.get("provider", "")
-        size_mb = cfg.get("size_mb")
-
-        # ── 1. 优先检查标准 hub/ 缓存 ─────────────────────────────────────────
-        _hub_nb_files_zero = False  # hub/ 目录存在但无 blob：可能是合成符号链接
+        directory = None
+        size = None
         try:
-            from huggingface_hub import scan_cache_dir
-            if self.hf_cache_dir.exists():
-                cache_info = scan_cache_dir(self.hf_cache_dir)
-                for repo in cache_info.repos:
-                    if repo.repo_id == repo_id:
-                        if repo.nb_files == 0:
-                            # hub/ 目录存在但无 blob 文件：
-                            # 兼容已有的本地缓存符号链接
-                            # （snapshots/main → manual/<repo>），实际文件在 manual/。
-                            # 继续检查 manual/ 以获取更准确状态（包括 git-lfs 指针检测）。
-                            _hub_nb_files_zero = True
-                            break
-
-                        repo_has_warning = any(
-                            str(repo.repo_path) in str(w)
-                            for w in cache_info.warnings
-                        )
-                        if repo_has_warning:
-                            return ModelCheckResult(
-                                model_id=cfg["id"],
-                                name=name,
-                                provider=provider,
-                                status=MS.CORRUPTED,
-                                message="HF 缓存目录存在结构性问题（文件可能损坏）",
-                                file_path=str(repo.repo_path),
-                                size_bytes=repo.size_on_disk,
-                                expected_size_mb=size_mb,
-                            )
-
-                        if size_mb:
-                            expected_min_bytes = int(size_mb * 0.5 * 1024 * 1024)
-                            if repo.size_on_disk < expected_min_bytes:
-                                actual_mb = repo.size_on_disk / (1024 * 1024)
-                                return ModelCheckResult(
-                                    model_id=cfg["id"],
-                                    name=name,
-                                    provider=provider,
-                                    status=MS.CORRUPTED,
-                                    message=(
-                                        f"缓存过小: {actual_mb:.1f} MB（期望 ~{size_mb} MB），"
-                                        "可能下载不完整"
-                                    ),
-                                    file_path=str(repo.repo_path),
-                                    size_bytes=repo.size_on_disk,
-                                    expected_size_mb=size_mb,
-                                )
-
-                        repo_size_mb = repo.size_on_disk // (1024 * 1024)
-                        return ModelCheckResult(
-                            model_id=cfg["id"],
-                            name=name,
-                            provider=provider,
-                            status=MS.OK,
-                            message=f"{repo.nb_files} 个文件, {repo_size_mb} MB",
-                            file_path=str(repo.repo_path),
-                            size_bytes=repo.size_on_disk,
-                            expected_size_mb=size_mb,
-                        )
+            directory = paths.find_hf_snapshot(repo_id)
+            if directory is None:
+                status, message = MS.MISSING, f"未找到本地模型快照: {repo_id}"
+            else:
+                size = check_snapshot(directory, cfg)
+                status, message = MS.OK, f"必需文件齐全，权重 {size / (1024 * 1024):.0f} MB"
+        except FileNotFoundError as exc:
+            status, message = MS.PARTIAL, f"缺少模型文件: {exc.filename or exc}"
         except ImportError:
-            pass  # huggingface_hub 未安装，继续检查 manual/
-        except Exception:
-            pass  # scan_cache_dir 扫描失败，继续检查 manual/
-
-        # ── 2. Fallback：manual/ 路径（旧下载位置，向后兼容）─────────────────
-        manual_dir = self.hf_cache_dir.parent / "manual" / repo_id.replace("/", "--")
-        if manual_dir.exists() and manual_dir.is_dir():
-            # 只统计权重文件，忽略 README/json/tokenizer 等配置文件
-            WEIGHT_SUFFIXES = {".safetensors", ".bin", ".onnx", ".pth", ".pt", ".ckpt"}
-            weight_files = [
-                f for f in manual_dir.rglob("*")
-                if f.is_file() and f.suffix.lower() in WEIGHT_SUFFIXES
-            ]
-            all_files = [f for f in manual_dir.rglob("*") if f.is_file()]
-
-            if not weight_files:
-                # 目录存在但无权重文件（可能只有 README 或下载中断）
-                return ModelCheckResult(
-                    model_id=cfg["id"],
-                    name=name,
-                    provider=provider,
-                    status=MS.PARTIAL if all_files else MS.MISSING,
-                    message="缓存目录存在但无权重文件（下载可能中断）",
-                    file_path=str(manual_dir),
-                    expected_size_mb=size_mb,
-                )
-
-            total_bytes = sum(f.stat().st_size for f in all_files)
-
-            # 大小合理性检查
-            if size_mb:
-                expected_min_bytes = int(size_mb * 0.5 * 1024 * 1024)
-                if total_bytes < expected_min_bytes:
-                    actual_mb = total_bytes / (1024 * 1024)
-                    return ModelCheckResult(
-                        model_id=cfg["id"],
-                        name=name,
-                        provider=provider,
-                        status=MS.CORRUPTED,
-                        message=(
-                            f"文件过小: {actual_mb:.1f} MB（期望 ~{size_mb} MB），"
-                            "可能下载不完整"
-                        ),
-                        file_path=str(manual_dir),
-                        size_bytes=total_bytes,
-                        expected_size_mb=size_mb,
-                    )
-
-            # ── git-lfs 指针文件检测 ───────────────────────────────────────────
-            # 旧版 urllib 下载器不支持 git-lfs，会将 ~130 字节的指针文件直接存为权重。
-            # 检测：权重文件若异常小（< 1KB），读取头部确认是否为 git-lfs 指针格式。
-            for wf in weight_files:
-                if wf.suffix.lower() in {".bin", ".pt", ".pth", ".ckpt"} and wf.stat().st_size < 1024:
-                    try:
-                        head = wf.read_bytes(200).decode("utf-8", errors="ignore")
-                    except OSError:
-                        head = ""
-                    if "git-lfs.github.com" in head:
-                        return ModelCheckResult(
-                            model_id=cfg["id"],
-                            name=name,
-                            provider=provider,
-                            status=MS.CORRUPTED,
-                            message=(
-                                f"检测到 git-lfs 指针文件 ({wf.name})，"
-                                "旧版下载器未获取真实权重，需重新下载"
-                            ),
-                            file_path=str(manual_dir),
-                            size_bytes=total_bytes,
-                            expected_size_mb=size_mb,
-                        )
-
-            # .safetensors 文件头验证（只读前 8 字节 header length，避免阻塞大文件）
-            for sf in weight_files:
-                if sf.suffix.lower() == ".safetensors":
-                    try:
-                        with open(str(sf), "rb") as _f:
-                            header_len_bytes = _f.read(8)
-                        if len(header_len_bytes) < 8:
-                            raise ValueError("文件过短，无法读取 header length")
-                        import struct
-                        header_len = struct.unpack("<Q", header_len_bytes)[0]
-                        # header length 合理性检查：不应超过 100MB
-                        if header_len == 0 or header_len > 100 * 1024 * 1024:
-                            raise ValueError(f"header length 异常: {header_len}")
-                    except Exception as e:
-                        return ModelCheckResult(
-                            model_id=cfg["id"],
-                            name=name,
-                            provider=provider,
-                            status=MS.CORRUPTED,
-                            message=f"safetensors 文件头损坏 ({sf.name}): {e}",
-                            file_path=str(sf),
-                            size_bytes=total_bytes,
-                            expected_size_mb=size_mb,
-                        )
-
-            return ModelCheckResult(
-                model_id=cfg["id"],
-                name=name,
-                provider=provider,
-                status=MS.OK,
-                message=f"{len(weight_files)} 个权重文件, {total_bytes // (1024 * 1024)} MB",
-                file_path=str(manual_dir),
-                size_bytes=total_bytes,
-                expected_size_mb=size_mb,
-            )
-
-        # manual/ 不存在；根据 hub/ 是否有合成符号链接决定报告 PARTIAL 还是 MISSING
-        if _hub_nb_files_zero:
-            return ModelCheckResult(
-                model_id=cfg["id"],
-                name=name,
-                provider=provider,
-                status=MS.PARTIAL,
-                message="缓存目录存在但无有效权重文件（可能下载中断）",
-                expected_size_mb=size_mb,
-            )
+            status, message = MS.UNKNOWN, "未安装 huggingface_hub"
+        except (OSError, ValueError) as exc:
+            status, message = MS.CORRUPTED, f"模型文件异常: {exc}"
         return ModelCheckResult(
-            model_id=cfg["id"],
-            name=name,
-            provider=provider,
-            status=MS.MISSING,
-            message=f"未在 HF 缓存中找到 {repo_id}（hub: {self.hf_cache_dir}, manual: {manual_dir}）",
-            expected_size_mb=size_mb,
+            model_id=cfg["id"], name=cfg.get("name", repo_id), provider=cfg.get("provider", ""),
+            status=status, message=message, file_path=str(directory) if directory is not None else None,
+            size_bytes=size, expected_size_mb=cfg.get("size_mb"),
         )
 
     def _check_file(self, cfg: dict, path: Path) -> ModelCheckResult:
-        """
-        通用文件检测：
-          1. 存在性
-          2. 大小合理性（允许 ±50% 误差，主要排除明显截断的下载）
-          3. .safetensors 文件头验证（不读取权重数据）
-        """
-        name = cfg.get("name", cfg["id"])
+        model_id = cfg["id"]
+        name = cfg.get("name", model_id)
         provider = cfg.get("provider", "")
         size_mb = cfg.get("size_mb")
-
-        if not path.exists():
-            return ModelCheckResult(
-                model_id=cfg["id"],
-                name=name,
-                provider=provider,
-                status=MS.MISSING,
-                message=f"文件不存在: {path}",
-                expected_size_mb=size_mb,
-            )
-
-        size_bytes = path.stat().st_size
-
-        # 大小合理性检查（仅对有参考大小的模型）
-        if size_mb:
-            expected_min_bytes = int(size_mb * 0.5 * 1024 * 1024)
-            if size_bytes < expected_min_bytes:
-                actual_mb = size_bytes / (1024 * 1024)
-                return ModelCheckResult(
-                    model_id=cfg["id"],
-                    name=name,
-                    provider=provider,
-                    status=MS.CORRUPTED,
-                    message=(
-                        f"文件过小: {actual_mb:.1f} MB（期望 ~{size_mb} MB）"
-                        "，可能下载不完整"
-                    ),
-                    file_path=str(path),
-                    size_bytes=size_bytes,
-                    expected_size_mb=size_mb,
-                )
-
-        # safetensors 文件头验证（只读前 8 字节，避免阻塞）
-        if path.suffix == ".safetensors":
-            try:
-                with open(str(path), "rb") as _f:
-                    header_len_bytes = _f.read(8)
-                if len(header_len_bytes) < 8:
-                    raise ValueError("文件过短，无法读取 header length")
-                import struct
-                header_len = struct.unpack("<Q", header_len_bytes)[0]
-                if header_len == 0 or header_len > 100 * 1024 * 1024:
-                    raise ValueError(f"header length 异常: {header_len}")
-            except Exception as e:
-                return ModelCheckResult(
-                    model_id=cfg["id"],
-                    name=name,
-                    provider=provider,
-                    status=MS.CORRUPTED,
-                    message=f"safetensors 文件头损坏: {e}",
-                    file_path=str(path),
-                    size_bytes=size_bytes,
-                    expected_size_mb=size_mb,
-                )
-
-        actual_mb = size_bytes / (1024 * 1024)
-        return ModelCheckResult(
-            model_id=cfg["id"],
-            name=name,
-            provider=provider,
-            status=MS.OK,
-            message=f"{actual_mb:.0f} MB",
-            file_path=str(path),
-            size_bytes=size_bytes,
-            expected_size_mb=size_mb,
-        )
+        size_bytes = None
+        try:
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            size_bytes = check_file(path)
+            if size_mb and size_bytes < int(size_mb * 0.5 * 1024 * 1024):
+                raise ValueError(f"权重文件过小: {size_bytes / (1024 * 1024):.1f} MB")
+        except FileNotFoundError:
+            return ModelCheckResult(model_id, name, provider, MS.MISSING, f"文件不存在: {path}",
+                                    expected_size_mb=size_mb)
+        except (OSError, ValueError) as error:
+            status, message = MS.CORRUPTED, str(error)
+        else:
+            status, message = MS.OK, f"{size_bytes / (1024 * 1024):.0f} MB"
+        return ModelCheckResult(model_id, name, provider, status, message, str(path), size_bytes, size_mb)

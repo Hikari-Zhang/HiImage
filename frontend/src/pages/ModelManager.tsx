@@ -36,6 +36,17 @@ interface ModeGroup {
   name: string
 }
 
+interface WeightResource {
+  id: string
+  label: string
+  affected_models: { id: string; name: string }[]
+}
+
+interface WeightRemoval {
+  model: ModelEntry
+  resources: WeightResource[]
+}
+
 // ── 辅助 ──────────────────────────────────────────────────────────────────────
 
 const STATUS_ICON: Record<ModelStatusValue, React.ReactElement> = {
@@ -88,7 +99,8 @@ export default function ModelManager() {
   const [loading, setLoading] = useState(false)
   const [selectedGroup, setSelectedGroup] = useState<string>('__all__')
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [weightRemoval, setWeightRemoval] = useState<WeightRemoval | null>(null)
+  const [deleteError, setDeleteError] = useState('')
   const [bulkPanelOpen, setBulkPanelOpen] = useState(false)
 
   // 下载相关（来自独立 store）
@@ -209,39 +221,59 @@ export default function ModelManager() {
 
   // ── 删除文件 ─────────────────────────────────────────────────────────────────
 
-  const handleDelete = async (model: ModelEntry) => {
-    if (confirmDeleteId !== model.id) {
-      setConfirmDeleteId(model.id)
-      return
-    }
-    setConfirmDeleteId(null)
+  const loadWeightRemoval = async (model: ModelEntry) => {
+    setDeleteError('')
     setDeletingId(model.id)
     try {
-      const res = await client.fetch(`/api/models/${model.id}/files`, { method: 'DELETE' })
-      const data = await readApiResponse<{ ok: boolean; message?: string }>(res, '删除模型文件失败')
-      if (data.ok) {
-        showToast('success', data.message ?? '删除成功')
-        // 更新 downloadStore：删除后状态变为 missing，功能页面模型选择器立即同步
-        useDownloadStore.getState().setTask(model.id, {
-          status: ModelStatus.MISSING,
-          message: '',
-          speed: '',
-          downloaded: '',
-          totalSize: '',
-        })
-        loadModels()
-      } else {
-        showToast('error', data.message ?? '删除失败')
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
-      showToast('error', `删除失败: ${msg}`)
+      const data = await client.json<{ resources: WeightResource[] }>(
+        `/api/models/${encodeURIComponent(model.id)}/file-resources`, undefined, '读取本地权重失败',
+      )
+      if (data.resources.length) setWeightRemoval({ model, resources: data.resources })
+      else showToast('info', '未找到可删除的本地权重')
+    } catch (error) {
+      showToast('error', error instanceof Error ? error.message : String(error))
     } finally {
       setDeletingId(null)
     }
   }
 
-  const cancelConfirm = () => setConfirmDeleteId(null)
+  const deleteWeight = async (model: ModelEntry, resource: WeightResource) => {
+    setDeleteError('')
+    setDeletingId(model.id)
+    try {
+      const data = await client.json<{ ok: boolean; message: string; affected_model_ids: string[] }>(
+        `/api/models/${encodeURIComponent(model.id)}/file-resources`,
+        {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            resource_id: resource.id,
+            affected_model_ids: resource.affected_models.map(({ id }) => id),
+          }),
+        },
+        '删除模型权重失败',
+      )
+      if (data.ok) {
+        showToast('success', data.message)
+        const store = useDownloadStore.getState()
+        for (const id of data.affected_model_ids) {
+          const status = store.getTask(id)?.status
+          if (status !== DownloadStatus.QUEUED && status !== DownloadStatus.DOWNLOADING) store.removeTask(id)
+        }
+        setWeightRemoval(null)
+        controllerRef.current?.abort()
+        controllerRef.current = null
+        await loadModels()
+      } else {
+        setDeleteError(data.message)
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setDeleteError(msg)
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   // ── 一键下载相关状态 ─────────────────────────────────────────────────────────
 
@@ -264,7 +296,7 @@ export default function ModelManager() {
   // ── 渲染 ─────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-1 min-h-0 overflow-hidden" onClick={cancelConfirm}>
+    <div className="flex flex-1 min-h-0 overflow-hidden">
       {/* ── 左侧分组导航 ──────────────────────────────────────────────────── */}
       <div className="w-36 flex-shrink-0 border-r border-border-subtle overflow-y-auto py-2">
         <GroupItem
@@ -433,12 +465,11 @@ export default function ModelManager() {
                     model={model}
                     downloadTask={downloadTask}
                     isDeleting={deletingId === model.id}
-                    isConfirming={confirmDeleteId === model.id}
+                    deleteDisabled={deletingId !== null}
                     onDownload={(e) => { e.stopPropagation(); startDownload(model.id) }}
                     onCancel={(e) => { e.stopPropagation(); cancelDownload(model.id) }}
-                    onDelete={(e) => { e.stopPropagation(); handleDelete(model) }}
+                    onDelete={() => { void loadWeightRemoval(model) }}
                     onOpenFolder={showOpenFolder ? () => handleOpenFolder(model.id) : undefined}
-                    onCancelConfirm={(e) => { e.stopPropagation(); setConfirmDeleteId(null) }}
                   />
                 )
               })}
@@ -446,7 +477,78 @@ export default function ModelManager() {
           )}
         </div>
       </div>
+      {weightRemoval && (
+        <WeightRemovalDialog
+          plan={weightRemoval}
+          busy={deletingId !== null}
+          error={deleteError}
+          onClose={() => setWeightRemoval(null)}
+          onDelete={(resource) => { void deleteWeight(weightRemoval.model, resource) }}
+        />
+      )}
     </div>
+  )
+}
+
+function WeightRemovalDialog({ plan, busy, error, onClose, onDelete }: {
+  plan: WeightRemoval
+  busy: boolean
+  error: string
+  onClose: () => void
+  onDelete: (resource: WeightResource) => void
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const [selectedId, setSelectedId] = useState(plan.resources[0].id)
+  const resource = plan.resources.find(({ id }) => id === selectedId) ?? plan.resources[0]
+  useEffect(() => {
+    const dialog = dialogRef.current
+    dialog?.showModal()
+    return () => dialog?.close()
+  }, [])
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="weight-removal-title"
+      onCancel={(event) => { event.preventDefault(); if (!busy) onClose() }}
+      className="w-[min(92vw,480px)] max-h-[85vh] overflow-auto rounded-xl bg-bg-secondary p-5 text-fg-primary backdrop:bg-black/60"
+    >
+      <h2 id="weight-removal-title" className="font-medium">删除模型权重</h2>
+      <p className="mt-1 text-sm text-fg-secondary">{plan.model.name}</p>
+      <fieldset disabled={busy} className="mt-4 space-y-2">
+        <legend className="text-sm text-fg-secondary">选择要删除的权重</legend>
+        {plan.resources.map((entry) => (
+          <label key={entry.id} className="flex items-start gap-2 break-all rounded bg-bg-hover px-3 py-2 text-sm">
+            <input
+              type="radio"
+              name="weight-resource"
+              checked={entry.id === resource.id}
+              onChange={() => setSelectedId(entry.id)}
+              className="mt-1"
+            />
+            {entry.label}
+          </label>
+        ))}
+      </fieldset>
+      <p className="mt-4 text-sm text-fg-secondary">
+        {resource.affected_models.length > 1 ? '这是共享权重。以下模型需要重新下载该权重。' : '以下模型需要重新下载该权重。'}
+      </p>
+      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
+        {resource.affected_models.map(({ id, name }) => <li key={id}>{name}</li>)}
+      </ul>
+      {error && <p role="alert" className="mt-4 text-sm text-status-error">{error}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" disabled={busy} onClick={onClose} className="rounded bg-bg-hover px-3 py-2 text-sm">取消</button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onDelete(resource)}
+          className="rounded bg-status-error/20 px-3 py-2 text-sm text-status-error disabled:opacity-50"
+        >
+          {busy ? '正在删除…' : '确认删除'}
+        </button>
+      </div>
+    </dialog>
   )
 }
 
@@ -537,24 +639,23 @@ function GroupItem({
 // ── 模型行 ────────────────────────────────────────────────────────────────────
 
 function ModelRow({
-  model, downloadTask, isDeleting, isConfirming,
-  onDownload, onCancel, onDelete, onCancelConfirm, onOpenFolder,
+  model, downloadTask, isDeleting, deleteDisabled,
+  onDownload, onCancel, onDelete, onOpenFolder,
 }: {
   model: ModelEntry
   downloadTask: DownloadTask | undefined
   isDeleting: boolean
-  isConfirming: boolean
+  deleteDisabled: boolean
   onDownload: (e: React.MouseEvent) => void
   onCancel: (e: React.MouseEvent) => void
-  onDelete: (e: React.MouseEvent) => void
-  onCancelConfirm: (e: React.MouseEvent) => void
+  onDelete: () => void
   onOpenFolder?: () => void
 }) {
   const isDownloading = downloadTask?.status === DownloadStatus.DOWNLOADING
   const isQueued = downloadTask?.status === DownloadStatus.QUEUED
   const syncFailed = downloadTask?.status === DownloadStatus.ERROR && downloadTask.statusSyncFailed === true
   const isDone = downloadTask?.status === DownloadStatus.DONE || model.status === ModelStatus.OK
-  const canDelete = isDone && !isDownloading && !isQueued && !syncFailed
+  const canDelete = (model.has_local_path ?? isDone) && !isDownloading && !isQueued && !syncFailed
   const canDownload = !isDone && !isDownloading && !isQueued
 
   // 行内进度百分比
@@ -660,7 +761,7 @@ function ModelRow({
       {/* 操作区 */}
       <div className="flex items-center gap-1 flex-shrink-0 mt-0.5" onClick={(e) => e.stopPropagation()}>
         {/* 单独下载按钮 */}
-        {(canDownload || syncFailed) && !isConfirming && (
+        {(canDownload || syncFailed) && (
           <button
             onClick={onDownload}
             title={syncFailed ? '重新连接下载状态' : '下载此模型'}
@@ -681,7 +782,7 @@ function ModelRow({
           </button>
         )}
 
-        {onOpenFolder && !isConfirming && (
+        {onOpenFolder && (
           <button
             type="button"
             onClick={onOpenFolder}
@@ -698,26 +799,12 @@ function ModelRow({
         {/* 删除区域 */}
         {isDeleting ? (
           <Loader2 size={14} className="animate-spin text-fg-secondary" />
-        ) : isConfirming ? (
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] text-status-error">确认删除?</span>
-            <button
-              onClick={onDelete}
-              className="text-[10px] px-2 py-0.5 bg-status-error/20 text-status-error rounded hover:bg-status-error/30 transition-colors"
-            >
-              确认
-            </button>
-            <button
-              onClick={onCancelConfirm}
-              className="text-[10px] px-2 py-0.5 bg-bg-hover text-fg-secondary rounded hover:bg-bg-active transition-colors"
-            >
-              取消
-            </button>
-          </div>
         ) : canDelete ? (
           <button
             onClick={onDelete}
-            title="删除本地文件"
+            disabled={deleteDisabled}
+            title="删除模型权重"
+            aria-label={`删除 ${model.name} 的模型权重`}
             className="p-1.5 rounded text-fg-secondary hover:text-status-error hover:bg-status-error/10 transition-colors"
           >
             <Trash2 size={13} />

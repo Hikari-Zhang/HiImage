@@ -8,8 +8,6 @@
 from __future__ import annotations
 from core.model_session import model_session
 
-import os
-import sys
 import numpy as np
 import cv2
 from typing import Optional, Literal
@@ -17,20 +15,6 @@ from core.utils import resolve_default_device
 
 PostMethod = Literal["poisson", "gfpgan", "none"]
 
-
-# GFPGAN 权重存放目录：使用 paths.py 中的定义
-# 可通过环境变量 GFPGAN_HOME 自定义
-from core.paths import GFPGAN_HOME as _GFPGAN_HOME, resolve_model_cache_path
-
-_GFPGAN_WEIGHTS_DIR = str(_GFPGAN_HOME)
-_GFPGAN_WEIGHT_FILE = "GFPGANv1.4.pth"
-_GFPGAN_WEIGHT_URL = (
-    "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth"
-)
-_GFPGAN_WEIGHT_FILE = "GFPGANv1.4.pth"
-_GFPGAN_WEIGHT_URL = (
-    "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth"
-)
 
 # 可供 GUI 直接读取的方法列表
 METHOD_GROUPS = [
@@ -176,40 +160,14 @@ def _gfpgan_enhance(
 
 
 def _ensure_gfpgan_weights() -> str:
-    """确保 GFPGAN 权重文件存在，不存在则自动下载"""
-    # 使用 paths.py 统一解析路径
-    cfg = {"provider": "gfpgan", "weight_filename": _GFPGAN_WEIGHT_FILE}
-    weight_path = str(resolve_model_cache_path(cfg))
-    weight_dir = os.path.dirname(weight_path)
-    os.makedirs(weight_dir, exist_ok=True)
+    """复用注册表中的权重路径和下载器。"""
+    from core.downloaders import download_direct
+    from core.model_registry import get_model
+    from core.paths import find_local_model_path
 
-    if os.path.exists(weight_path):
-        return weight_path
-
-    print(f"[BackgroundFixer] 正在下载 GFPGAN 权重: {_GFPGAN_WEIGHT_URL}")
-    import urllib.request
-
-    def _reporthook(block_num, block_size, total_size):
-        downloaded = block_num * block_size
-        if total_size > 0:
-            pct = min(100, downloaded * 100 // total_size)
-            bar = '#' * (pct // 5) + '.' * (20 - pct // 5)
-            print(f"\r[BackgroundFixer] [{bar}] {pct}%  ", end='', flush=True)
-        else:
-            mb = downloaded / 1024 / 1024
-            print(f"\r[BackgroundFixer] 已下载 {mb:.1f} MB  ", end='', flush=True)
-
-    try:
-        urllib.request.urlretrieve(_GFPGAN_WEIGHT_URL, weight_path, reporthook=_reporthook)
-        print()
-        print(f"[BackgroundFixer] GFPGAN 权重下载完成: {weight_path}")
-    except Exception as e:
-        if os.path.exists(weight_path):
-            os.remove(weight_path)
-        raise RuntimeError(
-            f"GFPGAN 权重下载失败: {e}\n"
-            f"请手动下载至：{weight_path}\n"
-            f"下载链接：{_GFPGAN_WEIGHT_URL}"
-        ) from e
-
-    return weight_path
+    cfg = get_model("gfpgan")
+    weight = find_local_model_path(cfg)
+    if not weight.is_file():
+        download_direct(cfg)
+        weight = find_local_model_path(cfg)
+    return str(weight)

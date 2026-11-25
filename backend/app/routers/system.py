@@ -115,7 +115,7 @@ async def readiness_check():
 
 
 @router.get("/devices")
-async def available_devices():
+def available_devices():
     """检测当前环境中各计算设备的可用性，并返回不可用时的诊断原因"""
     mps_available = False
     mps_reason = ""

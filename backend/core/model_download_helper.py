@@ -27,7 +27,7 @@ from typing import Any, Callable, Optional, Tuple
 from core.model_checker import ModelChecker, ModelCheckResult
 from core.model_registry import MODEL_BY_ID
 from core.constants import ModelStatus as MS, DownloadStatus as DS
-from core.download_queue import get_download_queue
+from core.download_queue import DownloadTask, get_download_queue
 
 logger = logging.getLogger("model_download_helper")
 
@@ -95,7 +95,7 @@ async def ensure_model_ready(
     
     # 2. 检查模型是否已下载
     checker = ModelChecker()
-    check_result: ModelCheckResult = checker.check_model(model_id)
+    check_result: ModelCheckResult = await asyncio.to_thread(checker.check_model, model_id)
     
     logger.info(f"[ensure_model_ready] 模型状态: {check_result.status} - {check_result.message}")
     
@@ -118,8 +118,7 @@ async def ensure_model_ready(
     # 4. 等待下载完成（轮询方式）
     try:
         success, error_msg = await _wait_for_download_completion_poll(
-            model_id=model_id,
-            queue=queue,
+            task=task,
             progress_callback=progress_callback,
             model_name=name,
             timeout=timeout,
@@ -147,8 +146,7 @@ async def ensure_model_ready(
 
 
 async def _wait_for_download_completion_poll(
-    model_id: str,
-    queue: "DownloadQueue",
+    task: DownloadTask,
     progress_callback: Optional[Callable[..., Any]],
     model_name: str,
     timeout: int,
@@ -158,8 +156,7 @@ async def _wait_for_download_completion_poll(
     
     通过轮询下载队列的任务状态来等待下载完成。
     
-    :param model_id: 模型 ID
-    :param queue: 下载队列实例
+    :param task: 提交时取得的下载任务实例
     :param progress_callback: 进度回调函数
     :param model_name: 模型名称（用于日志）
     :param timeout: 超时时间（秒）
@@ -172,14 +169,6 @@ async def _wait_for_download_completion_poll(
         elapsed = asyncio.get_running_loop().time() - start_time
         if elapsed > timeout:
             raise asyncio.TimeoutError()
-        
-        # 获取任务状态
-        task = queue.get_task(model_id)
-        
-        if task is None:
-            # 任务不存在，可能已完成并被清理
-            logger.warning(f"[_wait_for_download_completion_poll] 任务不存在: {model_name}")
-            return True, ""
         
         status = task.status
         message = task.message

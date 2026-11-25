@@ -66,13 +66,11 @@ def test_redraw_options_are_forwarded_to_worker(monkeypatch):
 
 
 def test_required_hf_files_distinguish_partial_corrupted_and_complete(monkeypatch, tmp_path):
-    import huggingface_hub
-
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
     index = snapshot / "model_index.json"
     index.write_bytes(b"{}")
-    monkeypatch.setattr(huggingface_hub, "try_to_load_from_cache", lambda *a, **kw: str(index))
+    monkeypatch.setattr("core.paths.find_hf_snapshot", lambda _: snapshot)
     checker = ModelChecker()
     config = {**get_model("flux_fill"), "hf_required_files": {"model_index.json": 2, "weights.safetensors": 4}}
     assert checker._check_hf_cache(config).status == "partial"
@@ -100,7 +98,6 @@ def test_download_fetches_only_declared_diffusers_files(monkeypatch, tmp_path):
     monkeypatch.setattr(huggingface_hub, "list_repo_files", lambda *a, **kw: [*files, "original.safetensors"])
     monkeypatch.setattr(huggingface_hub, "try_to_load_from_cache", lambda *a, **kw: None)
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", download)
-    monkeypatch.setattr(ModelChecker, "check_model", lambda *_: SimpleNamespace(status="partial"))
     download_hf({**get_model("flux_fill"), "hf_required_files": files})
     assert fetched == list(files)
 
