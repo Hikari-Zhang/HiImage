@@ -3,6 +3,7 @@ import { base64ToBytes } from './fileService'
 
 export const imageHistoryLabels = {
   watermark: '去水印',
+  repair: '瑕疵修复',
   cutout: '抠图',
   refine: '抠图精修',
   composite: '背景合成',

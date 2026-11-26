@@ -60,12 +60,13 @@ export function createProcessingAPI(client: ApiClient) {
     dilation: number
     disable_nsfw: boolean
     task_id: string
+    preserve_alpha?: boolean
     redraw?: RedrawOptions
   }) => client.json<{ image: string }>('/api/inpaint/with-mask', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
-  }, '遮罩去水印失败')
+  }, '选区修复失败')
 
   const upscale = (params: {
     image: string

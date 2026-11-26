@@ -8,7 +8,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.services.image_codec import (decode_image, decode_mask, encode_image, check_image_size,
+import numpy as np
+
+from app.services.image_codec import (decode_image, decode_mask, decode_rgba_image, encode_image, encode_rgba_image, check_image_size,
                                       validate_matching_dimensions)
 from app.services.model_readiness import ensure_model_ready_with_progress
 from app.services.progress import make_progress_callback
@@ -60,6 +62,7 @@ class InpaintWithMaskRequest(BaseModel):
     device: str = Field(default_factory=lambda: resolve_default_device(get("inpaint.default_device")))
     dilation: int | None = Field(default=None, ge=0, le=100)
     disable_nsfw: bool = False
+    preserve_alpha: bool = False
     redraw: RedrawOptions | None = None
     task_id: TaskId
 
@@ -158,7 +161,7 @@ async def inpaint_with_rois(req: InpaintRequest, request: Request = None):
 
 @router.post("/inpaint/with-mask", dependencies=[Depends(inference_admission)])
 async def inpaint_with_mask(req: InpaintWithMaskRequest, request: Request = None):
-    """使用自定义掩码去除水印"""
+    """使用自定义掩码修复图像。"""
     if (err := unavailable_response("watermark_removal", req.model)):
         return err
     if err := await redraw_response(req.model, req.device, req.redraw):
@@ -166,7 +169,8 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest, request: Request = None
     if (err := check_image_size(req.image)):
         return err
 
-    image = decode_image(req.image)
+    rgba = decode_rgba_image(req.image, orient=True) if req.preserve_alpha else None
+    image = np.ascontiguousarray(rgba[:, :, :3]) if rgba is not None else decode_image(req.image)
     mask = decode_mask(req.mask)
     validate_matching_dimensions(image, mask)
     repair_options = resolve_watermark_options(req.model, req.dilation, req.redraw)
@@ -200,6 +204,9 @@ async def inpaint_with_mask(req: InpaintWithMaskRequest, request: Request = None
         )
         await progress_manager.send_complete(task_id=req.task_id)
         log_manager.info("掩码修复完成", source="inpaint")
+        if rgba is not None:
+            rgba[:, :, :3] = result
+            return {"image": encode_rgba_image(rgba)}
         return {"image": encode_image(result)}
     except Exception as e:
         err_str = str(e)

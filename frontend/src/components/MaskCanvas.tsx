@@ -3,7 +3,7 @@ import { Stage, Layer, Image as KonvaImage, Line, Rect, Transformer } from 'reac
 import Konva from 'konva'
 import type { MaskStroke, BrushSettings, MaskTool } from '../types/mask'
 import { POINT_SAMPLE_RATIO } from '../types/mask'
-import { exportCombinedMask } from '../services/maskExport'
+import { exportCombinedMask, type MaskOperation } from '../services/maskExport'
 
 interface ROI {
   id: string
@@ -31,7 +31,13 @@ interface MaskCanvasProps {
   onUndo: () => void
   showMaskPreview?: boolean
   maskPreviewMaxEdge?: number
-  renderedImage?: HTMLCanvasElement | null
+  maskExpansion?: number
+  maskOperationOrder?: MaskOperation[]
+  onMaskPresence?: (present: boolean) => void
+  readOnly?: boolean
+  keepViewOnSameSize?: boolean
+  onImageError?: () => void
+  renderedImage?: HTMLCanvasElement | HTMLImageElement | null
   regionControls?: {
     mode: 'draw' | 'select' | 'asset'
     keepRatio?: boolean
@@ -42,6 +48,50 @@ interface MaskCanvasProps {
 }
 
 const EMPTY_ROIS: ROI[] = []
+
+function tintMask({ data, width, height }: ImageData, radius: number) {
+  const present = data.some((value, index) => index % 4 === 0 && value > 0)
+  const distances = radius && present ? new Uint16Array(width * height) : null
+  const reaches = distances ? Array.from({ length: radius + 1 }, (_, y) =>
+    Math.round(Math.sqrt(radius * radius - y * y))) : []
+  // The nearest horizontal hit in each row lets us preview an elliptical expansion without reading every neighbor.
+  if (distances) {
+    for (let row = 0; row < height; row++) {
+      const start = row * width
+      let distance = radius + 1
+      for (let column = 0; column < width; column++) {
+        const index = start + column
+        distance = data[index * 4] ? 0 : Math.min(radius + 1, distance + 1)
+        distances[index] = distance
+      }
+      distance = radius + 1
+      for (let column = width - 1; column >= 0; column--) {
+        const index = start + column
+        distance = data[index * 4] ? 0 : Math.min(radius + 1, distance + 1)
+        distances[index] = Math.min(distances[index], distance)
+      }
+    }
+  }
+  for (let index = 0; index < width * height; index++) {
+    const pixel = index * 4
+    const intensity = data[pixel]
+    let expanded = false
+    if (!intensity && distances) {
+      const row = Math.floor(index / width)
+      for (let dy = Math.max(-radius, -row); dy <= Math.min(radius, height - 1 - row); dy++) {
+        if (distances[index + dy * width] <= reaches[Math.abs(dy)]) {
+          expanded = true
+          break
+        }
+      }
+    }
+    data[pixel] = expanded ? 255 : 76
+    data[pixel + 1] = expanded ? 180 : 175
+    data[pixel + 2] = 80
+    data[pixel + 3] = expanded ? 88 : intensity * 0.5
+  }
+  return present
+}
 
 /**
  * 低 CPU 占用的遮罩绘制画布组件
@@ -64,6 +114,12 @@ export default function MaskCanvas({
   onUndo,
   showMaskPreview = true,
   maskPreviewMaxEdge = Infinity,
+  maskExpansion = 0,
+  maskOperationOrder,
+  onMaskPresence,
+  readOnly = false,
+  keepViewOnSameSize = false,
+  onImageError,
   renderedImage,
   regionControls,
 }: MaskCanvasProps) {
@@ -80,11 +136,13 @@ export default function MaskCanvas({
   useEffect(() => {
     let active = true
     setMaskPreview(null)
+    onMaskPresence?.(false)
     if (!isActive || !showMaskPreview || !imageObj || (!strokes.length && !rois.length)) return
     const timer = setTimeout(() => {
       const { naturalWidth, naturalHeight } = imageObj
       const scale = Math.min(1, maskPreviewMaxEdge / Math.max(naturalWidth, naturalHeight))
-      exportCombinedMask(strokes, rois, naturalWidth, naturalHeight, scale).then(url => {
+      exportCombinedMask(strokes, rois, naturalWidth, naturalHeight, scale,
+        maskOperationOrder ? { operationOrder: maskOperationOrder } : undefined).then(url => {
         if (!active) return
         const mask = new window.Image()
         mask.onload = () => {
@@ -95,13 +153,8 @@ export default function MaskCanvas({
           const ctx = overlay.getContext('2d')!
           ctx.drawImage(mask, 0, 0)
           const pixels = ctx.getImageData(0, 0, overlay.width, overlay.height)
-          for (let i = 0; i < pixels.data.length; i += 4) {
-            const alpha = pixels.data[i] * 0.5
-            pixels.data[i] = 76
-            pixels.data[i + 1] = 175
-            pixels.data[i + 2] = 80
-            pixels.data[i + 3] = alpha
-          }
+          const radius = maskExpansion > 0 ? Math.max(1, Math.round(maskExpansion * scale)) : 0
+          onMaskPresence?.(tintMask(pixels, radius))
           ctx.putImageData(pixels, 0, 0)
           setMaskPreview(overlay)
         }
@@ -109,7 +162,7 @@ export default function MaskCanvas({
       }).catch(() => { if (active) setMaskPreview(null) })
     }, 150)
     return () => { active = false; clearTimeout(timer) }
-  }, [imageObj, strokes, rois, isActive, showMaskPreview, maskPreviewMaxEdge])
+  }, [imageObj, strokes, rois, isActive, showMaskPreview, maskPreviewMaxEdge, maskExpansion, maskOperationOrder, onMaskPresence])
 
   // 视图状态
   const [scale, setScale] = useState(1)
@@ -136,7 +189,7 @@ export default function MaskCanvas({
 
   // 获取当前工具模式
   const isBrushMode = canvasTool === 'brush'
-  const isDrawingTool = brushSettings.tool === 'brush' || brushSettings.tool === 'eraser'
+  const isDrawingTool = !readOnly && (brushSettings.tool === 'brush' || brushSettings.tool === 'eraser')
   const panRequested = panMode || spaceDown
   const regionMode = regionControls?.mode
   const editingRegion = regionMode === 'select' && !panRequested
@@ -159,13 +212,17 @@ export default function MaskCanvas({
     let active = true
     img.onload = () => {
       if (!active) return
+      const previous = imageObjRef.current
       imageObjRef.current = img
       setImageObj(img)  // 触发重新渲染
       onImageLoad?.(img.naturalWidth, img.naturalHeight)
-      fitToView(img)
+      if (!keepViewOnSameSize || previous?.naturalWidth !== img.naturalWidth || previous.naturalHeight !== img.naturalHeight) {
+        fitToView(img)
+      }
     }
+    img.onerror = () => { if (active) onImageError?.() }
     img.src = imageSrc
-    return () => { active = false; img.onload = null }
+    return () => { active = false; img.onload = null; img.onerror = null }
   }, [imageSrc])
 
   // 适配视图
@@ -301,6 +358,7 @@ export default function MaskCanvas({
         return
       }
       if (e.evt.button !== 0) return
+      if (readOnly) return
       if (regionMode && regionMode !== 'draw') return
 
       // ROI 矩形绘制模式
@@ -328,7 +386,7 @@ export default function MaskCanvas({
         setCurrentPoints([imgPoint.x, imgPoint.y])
       }
     },
-    [panRequested, canvasTool, isBrushMode, isDrawingTool, offset, getStagePoint, regionMode]
+    [panRequested, canvasTool, isBrushMode, isDrawingTool, offset, getStagePoint, regionMode, readOnly]
   )
 
   const handleMouseMove = useCallback(

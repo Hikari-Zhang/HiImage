@@ -119,6 +119,7 @@ const actions = (sessionId: EditorSessionId) => ({
 
 const sessionActions = {
   watermark: actions('watermark'),
+  repair: actions('repair'),
   upscale: actions('upscale'),
   'upscale-batch': actions('upscale-batch'),
   cutout: actions('cutout'),

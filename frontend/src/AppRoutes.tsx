@@ -4,6 +4,7 @@ import LazyPage from './components/layout/PageBoundary'
 
 const pages = [
   { path: 'watermark', load: () => import('./pages/WatermarkRemoval') },
+  { path: 'repair', load: () => import('./pages/RepairPage') },
   { path: 'cutout', load: () => import('./pages/CutoutPage') },
   { path: 'upscale', load: () => import('./pages/SuperResolution') },
   { path: 'prompt-edit', load: () => import('./pages/PromptEditPage') },

@@ -29,7 +29,7 @@
  */
 
 self.onmessage = async function (e) {
-  const { type, strokes, rois, polygons, imageWidth, imageHeight, scale = 1 } = e.data
+  const { type, strokes, rois, polygons, imageWidth, imageHeight, scale = 1, operationOrder, requireNonempty } = e.data
 
   if (type !== 'export' && type !== 'export-combined') {
     return
@@ -50,12 +50,10 @@ self.onmessage = async function (e) {
     // 清空画布（透明）
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // 选区是底层遮罩，之后的橡皮擦可以修正矩形选区。
-    if (type === 'export-combined' && rois) {
+    function drawRectangle([x1, y1, x2, y2]) {
+      ctx.globalCompositeOperation = 'source-over'
       ctx.fillStyle = 'white'
-      rois.forEach(([x1, y1, x2, y2]) => ctx.fillRect(
-        x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale,
-      ))
+      ctx.fillRect(x1 * scale, y1 * scale, (x2 - x1) * scale, (y2 - y1) * scale)
     }
     if (type === 'export-combined' && polygons) {
       ctx.fillStyle = 'white'
@@ -70,8 +68,7 @@ self.onmessage = async function (e) {
       })
     }
 
-    // 绘制所有笔划
-    strokes.forEach((stroke) => {
+    function drawStroke(stroke) {
       const isEraser = stroke.tool === 'eraser'
 
       ctx.lineCap = stroke.shape === 'square' ? 'square' : 'round'
@@ -118,12 +115,30 @@ self.onmessage = async function (e) {
       }
       if (points.length >= 4) ctx.stroke()
       ctx.shadowBlur = 0 // 重置
-    })
+    }
+
+    if (operationOrder) {
+      for (const { kind, index } of operationOrder) {
+        if (kind === 'rectangle') drawRectangle(rois[index])
+        else drawStroke(strokes[index])
+      }
+    } else {
+      // 去水印的矩形与多边形是底层遮罩，画笔和橡皮擦在其上调整。
+      if (type === 'export-combined') rois?.forEach(drawRectangle)
+      strokes.forEach(drawStroke)
+    }
 
     // PNG 中明确存储黑底，避免透明白色被灰度解码成白色遮罩。
     ctx.globalCompositeOperation = 'destination-over'
     ctx.fillStyle = 'black'
     ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    if (requireNonempty) {
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      if (!data.some((value, index) => index % 4 === 0 && value > 0)) {
+        throw new Error('选区为空，请标记要修复的区域。')
+      }
+    }
 
     // 导出为 PNG
     const blob = await canvas.convertToBlob({ type: 'image/png' })

@@ -8,7 +8,7 @@ import { downloadRecoveredResult } from '../services/recoveredResult'
 
 const labels: Record<EditorSessionId, string> = {
   watermark: '去水印', upscale: '超分辨率', 'upscale-batch': '批量超分', cutout: '抠图',
-  'prompt-edit': '提示词编辑',
+  'prompt-edit': '提示词编辑', repair: '瑕疵修复',
 }
 type RecoveryRow = PendingTask & { text: string; resultAvailable?: boolean; downloading?: boolean }
 

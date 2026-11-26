@@ -1,5 +1,8 @@
 import type { MaskStroke, ROI } from '../types/mask'
 
+export type MaskOperation = { kind: 'rectangle' | 'stroke'; index: number }
+type MaskOptions = { operationOrder?: MaskOperation[]; requireNonempty?: boolean }
+
 type ExportRequest = {
   type: 'export' | 'export-combined'
   strokes: MaskStroke[]
@@ -8,7 +11,7 @@ type ExportRequest = {
   imageWidth: number
   imageHeight: number
   scale: number
-}
+} & MaskOptions
 
 function runExport(request: ExportRequest): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -45,8 +48,9 @@ export function exportMask(strokes: MaskStroke[], imageWidth: number, imageHeigh
   return runExport({ type: 'export', strokes, imageWidth, imageHeight, scale })
 }
 
-export function exportCombinedMask(strokes: MaskStroke[], rois: ROI[], imageWidth: number, imageHeight: number, scale = 1) {
+export function exportCombinedMask(strokes: MaskStroke[], rois: ROI[], imageWidth: number, imageHeight: number,
+  scale = 1, options?: MaskOptions) {
   return runExport({ type: 'export-combined', strokes,
     rois: rois.filter(r => !r.polygon).map((r) => [r.x1, r.y1, r.x2, r.y2]),
-    polygons: rois.flatMap(r => r.polygon ? [r.polygon] : []), imageWidth, imageHeight, scale })
+    polygons: rois.flatMap(r => r.polygon ? [r.polygon] : []), imageWidth, imageHeight, scale, ...options })
 }

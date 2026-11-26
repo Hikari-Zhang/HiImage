@@ -24,7 +24,7 @@ const DEFAULT_OPTIONS: DeviceOption[] = [
  */
 export function useDeviceOptions(selection?: {
   device: string
-  setDevice: (device: string) => void
+  setDevice?: (device: string) => void
 }): { options: DeviceOption[]; loading: boolean; cudaAvailable: boolean | null } {
   const { getDevices } = useBackendAPI()
   const settings = useSettingsStore()
@@ -78,7 +78,7 @@ export function useDeviceOptions(selection?: {
         // 若当前选中设备不可用，自动切换到最优可用设备
         const currentInfo = availMap[device]
         const currentUnavailable = currentInfo && !currentInfo.available
-        if (currentUnavailable) {
+        if (currentUnavailable && setDevice) {
           const best = DEVICE_PRIORITY.find((id) => {
             const info = availMap[id]
             return !info || info.available
