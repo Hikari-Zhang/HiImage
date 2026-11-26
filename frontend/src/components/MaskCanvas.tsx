@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
-import { Stage, Layer, Image as KonvaImage, Line, Rect } from 'react-konva'
+import { Stage, Layer, Image as KonvaImage, Line, Rect, Transformer } from 'react-konva'
 import Konva from 'konva'
 import type { MaskStroke, BrushSettings, MaskTool } from '../types/mask'
 import { POINT_SAMPLE_RATIO } from '../types/mask'
@@ -31,6 +31,14 @@ interface MaskCanvasProps {
   onUndo: () => void
   showMaskPreview?: boolean
   maskPreviewMaxEdge?: number
+  renderedImage?: HTMLCanvasElement | null
+  regionControls?: {
+    mode: 'draw' | 'select' | 'asset'
+    keepRatio?: boolean
+    onChange: (roi: ROI) => void
+    onMoveAsset: (id: string, dx: number, dy: number) => void
+    onDeselect: () => void
+  }
 }
 
 const EMPTY_ROIS: ROI[] = []
@@ -56,6 +64,8 @@ export default function MaskCanvas({
   onUndo,
   showMaskPreview = true,
   maskPreviewMaxEdge = Infinity,
+  renderedImage,
+  regionControls,
 }: MaskCanvasProps) {
   const stageRef = useRef<Konva.Stage>(null)
   const imageLayerRef = useRef<Konva.Layer>(null)
@@ -63,6 +73,8 @@ export default function MaskCanvas({
   const containerRef = useRef<HTMLDivElement>(null)
   const [imageObj, setImageObj] = useState<HTMLImageElement | null>(null)
   const imageObjRef = useRef<HTMLImageElement | null>(null)
+  const editRect = useRef<Konva.Rect>(null)
+  const transformer = useRef<Konva.Transformer>(null)
   const [maskPreview, setMaskPreview] = useState<HTMLCanvasElement | null>(null)
 
   useEffect(() => {
@@ -126,6 +138,14 @@ export default function MaskCanvas({
   const isBrushMode = canvasTool === 'brush'
   const isDrawingTool = brushSettings.tool === 'brush' || brushSettings.tool === 'eraser'
   const panRequested = panMode || spaceDown
+  const regionMode = regionControls?.mode
+  const editingRegion = regionMode === 'select' && !panRequested
+  const movingAsset = regionMode === 'asset' && !panRequested
+  const activeRegion = selectedROIs[0]
+
+  useLayoutEffect(() => {
+    transformer.current?.nodes(editRect.current ? [editRect.current] : [])
+  }, [editingRegion, activeRegion, containerSize.w])
 
   // 加载图片
   useEffect(() => {
@@ -187,13 +207,15 @@ export default function MaskCanvas({
   useEffect(() => {
     if (!isActive) return
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
+        || (regionMode && (e.target instanceof HTMLSelectElement || e.target instanceof HTMLButtonElement
+          || (e.target instanceof HTMLElement && e.target.closest('dialog[open]'))))) return
       if (e.code === 'Space') {
         e.preventDefault()
         if (!e.repeat) setSpaceDown(true)
       }
       // Ctrl+Z 撤销
-      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
+      if (!regionMode && (e.ctrlKey || e.metaKey) && e.code === 'KeyZ') {
         e.preventDefault()
         onUndo()
       }
@@ -210,7 +232,7 @@ export default function MaskCanvas({
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
     }
-  }, [isActive, onUndo, panMode])
+  }, [isActive, onUndo, panMode, regionMode])
 
   // 点采样：判断是否应该添加新点
   const shouldAddPoint = useCallback(
@@ -279,6 +301,7 @@ export default function MaskCanvas({
         return
       }
       if (e.evt.button !== 0) return
+      if (regionMode && regionMode !== 'draw') return
 
       // ROI 矩形绘制模式
       if (canvasTool === 'rectangle') {
@@ -305,7 +328,7 @@ export default function MaskCanvas({
         setCurrentPoints([imgPoint.x, imgPoint.y])
       }
     },
-    [panRequested, canvasTool, isBrushMode, isDrawingTool, offset, getStagePoint]
+    [panRequested, canvasTool, isBrushMode, isDrawingTool, offset, getStagePoint, regionMode]
   )
 
   const handleMouseMove = useCallback(
@@ -509,9 +532,28 @@ export default function MaskCanvas({
     ? 'grabbing'
     : panRequested
     ? 'grab'
-    : isBrushMode && isDrawingTool
+    : movingAsset
+    ? 'move'
+    : isBrushMode && isDrawingTool && (!regionControls || regionControls.mode === 'draw')
     ? 'crosshair'
     : 'default'
+
+  function finishRegionDrag(roi: ROI, node: Konva.Rect) {
+    if (!regionControls || !imageObj) return
+    const x = (node.x() - offset.x) / scale
+    const y = (node.y() - offset.y) / scale
+    const width = Math.min(imageObj.naturalWidth, Math.max(1, Math.round(node.width() * node.scaleX() / scale)))
+    const height = Math.min(imageObj.naturalHeight, Math.max(1, Math.round(node.height() * node.scaleY() / scale)))
+    node.scale({ x: 1, y: 1 })
+    node.position({ x: roi.x1 * scale + offset.x, y: roi.y1 * scale + offset.y })
+    if (movingAsset) {
+      regionControls.onMoveAsset(roi.id, Math.round(x - roi.x1), Math.round(y - roi.y1))
+      return
+    }
+    const x1 = Math.round(Math.max(0, Math.min(imageObj.naturalWidth - width, x)))
+    const y1 = Math.round(Math.max(0, Math.min(imageObj.naturalHeight - height, y)))
+    regionControls.onChange({ id: roi.id, x1, y1, x2: x1 + width, y2: y1 + height })
+  }
 
   // 清理 rAF
   useEffect(() => {
@@ -529,19 +571,25 @@ export default function MaskCanvas({
           ref={stageRef}
           width={containerSize.w}
           height={containerSize.h}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
+          onMouseDown={regionControls ? undefined : handleMouseDown}
+          onMouseMove={regionControls ? undefined : handleMouseMove}
+          onMouseUp={regionControls ? undefined : handleMouseUp}
+          onMouseLeave={regionControls ? undefined : handleMouseUp}
+          onPointerDown={regionControls ? handleMouseDown : undefined}
+          onPointerMove={regionControls ? handleMouseMove : undefined}
+          onPointerUp={regionControls ? handleMouseUp : undefined}
+          onPointerLeave={regionControls ? handleMouseUp : undefined}
+          onClick={editingRegion ? () => regionControls?.onDeselect() : undefined}
+          onTap={editingRegion ? () => regionControls?.onDeselect() : undefined}
           onWheel={handleWheel}
-          style={{ cursor }}
+          style={{ cursor, touchAction: regionMode ? 'none' : undefined }}
           className="absolute inset-0"
         >
           {/* 图像层：静态，仅图片变化时重绘 */}
           <Layer ref={imageLayerRef} imageSmoothingEnabled={true}>
             {imageObj && (
               <KonvaImage
-                image={imageObj}
+                image={renderedImage ?? imageObj}
                 x={offset.x}
                 y={offset.y}
                 width={imageObj.naturalWidth * scale}
@@ -555,22 +603,37 @@ export default function MaskCanvas({
             {/* 已存在的 ROI */}
             {rois.map((roi) => {
               const isSelected = selectedROIs.includes(roi.id)
+              const canDrag = isSelected && (editingRegion || movingAsset)
               return (
                 <Rect
                   key={roi.id}
+                  ref={editingRegion && isSelected ? editRect : undefined}
                   x={roi.x1 * scale + offset.x}
                   y={roi.y1 * scale + offset.y}
                   width={(roi.x2 - roi.x1) * scale}
                   height={(roi.y2 - roi.y1) * scale}
-                  stroke={isSelected ? '#00a8ff' : '#ff9800'}
+                  stroke={isSelected ? '#00a8ff' : regionControls ? undefined : '#ff9800'}
                   strokeWidth={2}
                   fill="transparent"
-                  onClick={() => onROISelect?.(roi.id)}
-                  onTap={() => onROISelect?.(roi.id)}
-                  listening={canvasTool === 'rectangle' && !panRequested}
+                  onClick={e => { if (regionControls) e.cancelBubble = true; onROISelect?.(roi.id) }}
+                  onTap={e => { if (regionControls) e.cancelBubble = true; onROISelect?.(roi.id) }}
+                  listening={regionControls ? editingRegion || movingAsset : canvasTool === 'rectangle' && !panRequested}
+                  draggable={canDrag}
+                  onDragEnd={canDrag ? e => finishRegionDrag(roi, e.target as Konva.Rect) : undefined}
+                  onTransformEnd={canDrag ? e => finishRegionDrag(roi, e.target as Konva.Rect) : undefined}
                 />
               )
             })}
+            {editingRegion && activeRegion && (
+              <Transformer
+                ref={transformer}
+                rotateEnabled={false}
+                flipEnabled={false}
+                keepRatio={regionControls?.keepRatio}
+                enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+                boundBoxFunc={(previous, next) => next.width < 4 || next.height < 4 ? previous : next}
+              />
+            )}
 
             {/* 当前正在绘制的 ROI */}
             {currentROIRect && (
@@ -599,7 +662,7 @@ export default function MaskCanvas({
       )}
 
       {/* 画笔光标预览 */}
-      {isBrushMode && isDrawingTool && cursorPos && (
+      {isBrushMode && isDrawingTool && cursorPos && (!regionControls || regionControls.mode === 'draw') && (
         <BrushCursor
           x={cursorPos.x}
           y={cursorPos.y}

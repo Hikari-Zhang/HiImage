@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Eraser, Maximize, Settings, ChevronLeft, ChevronRight, Layers, ScrollText, Scissors, Wand2 } from 'lucide-react'
+import { Eraser, Maximize, Settings, ChevronLeft, ChevronRight, Layers, ScrollText, Scissors, Shield, Wand2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import SidebarItem from './SidebarItem'
 import ThemeSelect from './ThemeSelect'
@@ -11,6 +11,7 @@ const navItems = [
   { path: '/cutout', label: '抠图', icon: Scissors },
   { path: '/upscale', label: '超分辨率', icon: Maximize },
   { path: '/prompt-edit', label: '提示词编辑', icon: Wand2 },
+  { path: '/privacy', label: '隐私打码', icon: Shield },
   { path: '/logs', label: '日志', icon: ScrollText },
   { path: '/settings', label: '设置', icon: Settings },
 ]
