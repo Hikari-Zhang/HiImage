@@ -14,6 +14,7 @@ SCHEMA_VERSION = 1
 # pipeline -> (executor, 兼容 provider, architecture 集合, capabilities 集合)
 PIPELINE_SPECS = {
     "lama": ("lama", "lama", {"big_lama"}, {"inpaint"}),
+    "slbr": ("slbr", "slbr", {"slbr_clwd"}, {"inpaint"}),
     "rembg": ("rembg", "rembg", {"birefnet", "rmbg2", "isnet", "u2net"}, {"matting"}),
     "flux_fill": ("diffusers", "diffusers", {"flux_fill"}, {"inpaint"}),
     "gfpgan": ("gfpgan", "facexlib", {"gfpgan"}, {"face_enhance"}),
@@ -29,6 +30,7 @@ MODE_CAPABILITIES = {
 _GENERATION_PARAMS = {"num_inference_steps", "guidance_scale", "seed", "prompt"}
 PIPELINE_PARAMS = {
     "lama": set(),
+    "slbr": set(),
     "rembg": set(), "flux_fill": _GENERATION_PARAMS,
     "gfpgan": {"upscale"},
     "realesrgan": set(),
@@ -177,6 +179,12 @@ def validate_registry(document: Any) -> tuple[list[dict], list[dict]]:
                 _require(_text(model.get(field)), where + "." + field, "缺少抠图模型加载或下载信息")
         elif executor == "diffusers":
             _require(_text(model.get("hf_model_id")), where + ".hf_model_id", "缺少模型仓库 ID")
+        elif executor == "slbr":
+            _require(_text(model.get("local_path")) and _text(model.get("setup_hint")),
+                     where, "SLBR 需要本地权重路径和安装说明")
+            _require(not {"download_url", "hf_model_id", "hf_models"} & model.keys(),
+                     where, "SLBR 使用本地导出的 ONNX")
+            _require(model.get("device_override") == "cpu", where + ".device_override", "SLBR 当前使用 CPU")
         else:
             for field in ("local_path", "download_url"):
                 _require(_text(model.get(field)), where + "." + field, "缺少权重或下载位置")

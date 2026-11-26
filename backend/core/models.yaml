@@ -535,6 +535,24 @@ models:
       dilation: 1
     supported_params: {}
 
+  - id: wm_slbr
+    name: SLBR 细字修复
+    executor: slbr
+    architecture: slbr_clwd
+    pipeline: slbr
+    capabilities: [inpaint]
+    provider: slbr
+    description: 尝试保留半透明细字下方的纹理，适合与 LaMa 对比。不透明水印优先使用 LaMa。
+    tags: [watermark_removal]
+    size_mb: 85
+    local_path: models/slbr/slbr-clwd-512.onnx
+    setup_hint: 请在后端运行 scripts/export_slbr.py 导入官方 CLWD 权重，步骤见 README。
+    device_override: cpu
+    display_group: 本地备选模型
+    watermark_defaults:
+      dilation: 1
+    supported_params: {}
+
 mode_groups:
 - id: watermark_removal
   name: 去水印

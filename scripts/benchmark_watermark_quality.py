@@ -16,7 +16,7 @@ from PIL import Image
 from .watermark_quality_samples import CORPORA, VERSION, samples
 
 
-DEVICES = {"wm_lama": "cpu", "flux_fill": "cuda"}
+DEVICES = {"wm_lama": "cpu", "flux_fill": "cuda", "wm_slbr": "cpu"}
 DETECTION_IOU = 0.30
 REDRAW = {
     "prompt": "Reconstruct the surrounding background and texture naturally.",
@@ -201,7 +201,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True, help="A new directory for this run")
     parser.add_argument("--base-url", default="http://127.0.0.1:8787")
-    parser.add_argument("--models", nargs="+", choices=DEVICES, default=list(DEVICES))
+    parser.add_argument("--models", nargs="+", choices=DEVICES, default=["wm_lama", "flux_fill"])
     parser.add_argument("--corpus", choices=CORPORA, default="synthetic")
     parser.add_argument("--sample", action="append", help="Run only this sample ID; repeat to select several")
     parser.add_argument("--steps", type=int, choices=range(1, 51), default=REDRAW["num_inference_steps"])

@@ -19,6 +19,7 @@
 ```sh
 python -m scripts.benchmark_watermark_quality --output tmp/hiimage-quality-synthetic
 python -m scripts.benchmark_watermark_quality --corpus photo --models wm_lama --detect --output tmp/hiimage-quality-photo-cpu
+python -m scripts.benchmark_watermark_quality --corpus photo --models wm_lama wm_slbr --output tmp/hiimage-quality-slbr
 python -m scripts.benchmark_watermark_quality --corpus photo --sample photo-coffee-translucent --sample photo-clock-tilted --steps 12 --output tmp/hiimage-quality-photo-ab
 ```
 
@@ -62,3 +63,9 @@ FLUX Fill 的真实 CUDA API 调用省略遮罩扩张和重绘参数后，挂钟
 ### FLUX Fill 视觉复查
 
 咖啡杯入选参数的综合误差为 67.44，输出仍生成了新字形。进一步保持 12 步和 2 像素扩张，降低引导到 6、改用整行遮罩，以及在整行遮罩下使用场景提示词，分别得到 71.98、85.85 和 68.36。放大检查发现三档仍有新字形或条带，整行遮罩在杯口附近影响更大。LaMa 2 像素在同一水印遮罩上的综合误差为 10.41，杯口轮廓更完整。本轮 FLUX Fill 各档未通过该样本的视觉验收，去水印页默认使用 LaMa，并在重绘参数旁提示文字伪影。
+
+## SLBR 接入复测
+
+在 Windows 与 Intel Core Ultra 9 285K 上，通过项目遮罩 API 实测 SLBR CLWD 512 ONNX，使用默认 1 px 扩张。固定实拍底图的 15 张带水印样图均出图，中位请求耗时 4.50 秒。平均综合误差为 SLBR 31.26、LaMa 7.81。猫毛半透明字是 SLBR 6.93、LaMa 10.07，咖啡杯半透明字则是 SLBR 30.44、LaMa 10.28，SLBR 留下了可见字形。LaMa 为页面默认，SLBR 供手动选用。
+
+复跑另 9 张不同字体、颜色和位置的叠加样图，SLBR 在 6 张上误差更低，均值为 6.37，LaMa 为 6.60。所有 24 张带水印样图以及 3 张无水印对照保持原尺寸，扩张后的遮罩之外共 0 个像素改动。矩形接口和组合接口也完成真实权重出图。可选权重的本地导出见 [README](../README.md#slbr-去水印备选模型)。

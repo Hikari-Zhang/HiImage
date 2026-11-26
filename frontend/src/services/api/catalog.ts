@@ -22,8 +22,8 @@ interface Devices {
 export interface PromptEditStatus {
   available: boolean
   reason: string | null
-  model: string
-  default_model?: string
+  model: string | null
+  default_model?: string | null
   models?: Array<{
     id: string
     name: string

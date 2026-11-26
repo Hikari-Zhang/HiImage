@@ -85,6 +85,9 @@ class ModelExecutorFactory:
         if executor == "lama":
             from .lama_executor import LamaExecutor
             return LamaExecutor(model_config, device)
+        if executor == "slbr":
+            from .slbr_executor import SLBRExecutor
+            return SLBRExecutor(model_config, device)
         if executor == "diffusers":
             from .diffusers_executor import DiffusersExecutor
             return DiffusersExecutor(model_config, device)

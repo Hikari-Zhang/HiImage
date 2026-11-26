@@ -87,7 +87,7 @@ def test_detection_benchmark_records_false_positives_and_false_negatives(tmp_pat
     }
 
 
-def test_benchmark_sends_same_mask_and_scores_both_models(tmp_path, monkeypatch):
+def test_benchmark_sends_same_mask_and_scores_all_selected_models(tmp_path, monkeypatch):
     from scripts import benchmark_watermark_quality as benchmark
 
     corpus = list(samples())
@@ -102,12 +102,12 @@ def test_benchmark_sends_same_mask_and_scores_both_models(tmp_path, monkeypatch)
     output = tmp_path / "run"
     assert benchmark.run([sample, clean], list(benchmark.DEVICES), output,
                          "http://localhost:8787", benchmark.REDRAW) == 0
-    assert len(requests) == 2
-    lama, flux = requests
-    assert lama["mask"] == flux["mask"] == benchmark.encode(sample.mask)
-    assert lama["image"] == flux["image"]
-    assert lama["device"] == "cpu" and "redraw" not in lama
-    assert flux["device"] == "cuda" and flux["redraw"] == benchmark.REDRAW
+    assert len(requests) == len(benchmark.DEVICES)
+    for request in requests:
+        assert request["mask"] == benchmark.encode(sample.mask)
+        assert request["image"] == benchmark.encode(sample.input)
+        assert request["device"] == benchmark.DEVICES[request["model"]]
+        assert request.get("redraw") == (benchmark.REDRAW if request["model"] == "flux_fill" else None)
     report = json.loads((output / "report.json").read_text())
     for model in benchmark.DEVICES:
         metrics = report["samples"][0]["results"][model]

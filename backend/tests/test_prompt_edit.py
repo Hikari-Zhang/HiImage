@@ -1,4 +1,5 @@
 import base64
+from dataclasses import replace
 import io
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from PIL import Image, ImageDraw
 
 from app.routers import prompt_edit as router
 from app.services import prompt_edit as service
+from core.prompt_edit_windows import RUNTIME_BINARIES, WINDOWS_MODELS
 
 
 def encode(image, file_format="PNG", **options):
@@ -21,8 +23,14 @@ def png(width, height):
     return encode(Image.new("RGB", (width, height), "blue"))
 
 
+@pytest.fixture
+def mac_models(monkeypatch):
+    monkeypatch.setattr(service, "windows_x64", lambda: False)
+    monkeypatch.setattr(service, "platform_unavailable_reason", lambda: None)
+
+
 @pytest.mark.parametrize(("model_id", "steps"), [(None, "4"), ("flux3-image-klein", "16"), ("fibo2-edit-turbo", "4")])
-def test_prompt_edit_tracks_result_with_local_weights(monkeypatch, tmp_path, isolated_task_registry, model_id, steps):
+def test_prompt_edit_tracks_result_with_local_weights(monkeypatch, tmp_path, isolated_task_registry, mac_models, model_id, steps):
     executable, weights = tmp_path / "mflux", tmp_path / "weights"
     monkeypatch.setattr(service, "runtime", lambda model: (executable, weights, None))
 
@@ -60,7 +68,7 @@ def test_prompt_edit_tracks_result_with_local_weights(monkeypatch, tmp_path, iso
         assert isolated_task_registry.get(request["task_id"])["status"] == "succeeded"
 
 
-def test_selection_uses_model_mask_and_preserves_outer_pixels(monkeypatch, tmp_path, isolated_task_registry):
+def test_selection_uses_model_mask_and_preserves_outer_pixels(monkeypatch, tmp_path, isolated_task_registry, mac_models):
     monkeypatch.setattr(service, "runtime", lambda model: (tmp_path / "mflux", tmp_path / "weights", None))
     source = Image.new("RGBA", (1073, 803), (0, 152, 255, 91))
     mask = Image.new("L", source.size)
@@ -113,7 +121,8 @@ def test_selection_uses_display_orientation_for_the_source(monkeypatch, tmp_path
         return 0
 
     monkeypatch.setattr(service, "_stream_cli_output", run)
-    result = service.edit_image("fibo2-edit-turbo", tmp_path / "mflux", tmp_path, jpeg, "Edit", 42, encode(mask))
+    model_id = "fibo2-edit-turbo"
+    result = service.edit_image(model_id, service.EDIT_MODELS[model_id], tmp_path / "mflux", tmp_path, jpeg, "Edit", 42, encode(mask))
     assert result.size == mask.size
     assert result.getpixel((20, 10)) == tuple(service.decode_image(jpeg)[10, 20])
     assert result.getpixel((20, 50)) == (255, 0, 0)
@@ -128,7 +137,7 @@ def test_selection_uses_display_orientation_for_the_source(monkeypatch, tmp_path
         ("fibo2-edit-turbo", Image.new("L", (64, 64), 127), "选区太小"),
     ],
 )
-def test_invalid_selection_is_rejected_before_inference(monkeypatch, tmp_path, isolated_task_registry, model, mask, message):
+def test_invalid_selection_is_rejected_before_inference(monkeypatch, tmp_path, isolated_task_registry, mac_models, model, mask, message):
     monkeypatch.setattr(service, "runtime", lambda model: (tmp_path, tmp_path, None))
     monkeypatch.setattr(service, "_stream_cli_output", lambda *args, **kw: pytest.fail("inference was called"))
     app = FastAPI()
@@ -141,13 +150,14 @@ def test_invalid_selection_is_rejected_before_inference(monkeypatch, tmp_path, i
         assert message in response.json()["detail"]
 
 
-def test_missing_runtime_and_blank_instruction_are_reported(monkeypatch, tmp_path, isolated_task_registry):
+def test_missing_runtime_and_blank_instruction_are_reported(monkeypatch, tmp_path, isolated_task_registry, mac_models):
     monkeypatch.setattr(service, "runtime", lambda model: (tmp_path, tmp_path, "权重尚未下载完整"))
     app = FastAPI()
     app.include_router(router.router, prefix="/api")
     with TestClient(app) as client:
         status = client.get("/api/prompt-edit/status").json()
         assert status["available"] is False and status["reason"] == "权重尚未下载完整"
+        assert {model["id"] for model in status["models"]} == service.EDIT_MODELS.keys()
         request = {"image": png(32, 32), "prompt": "   ", "task_id": "empty-prompt"}
         assert client.post("/api/prompt-edit", json=request).status_code == 422
         assert client.post("/api/prompt-edit", json={
@@ -158,8 +168,78 @@ def test_missing_runtime_and_blank_instruction_are_reported(monkeypatch, tmp_pat
         }).status_code == 422
 
 
+@pytest.mark.parametrize(("system", "machine"), [("Windows", "ARM64"), ("Linux", "aarch64"), ("Darwin", "x86_64")])
+def test_prompt_edit_hides_mac_models_on_unsupported_backends(monkeypatch, system, machine):
+    monkeypatch.setattr(service.platform, "system", lambda: system)
+    monkeypatch.setattr(service.platform, "machine", lambda: machine)
+    monkeypatch.setattr(service, "runtime", lambda model: pytest.fail("model readiness was checked"))
+
+    assert router.get_prompt_edit_status() == {
+        "available": False, "reason": "提示词编辑需要 Apple Silicon macOS 或 Windows x64 后端。",
+        "model": None, "default_model": None, "models": [],
+    }
+
+
 @pytest.mark.parametrize(("source", "expected"), [
     ((4096, 2304), (1024, 576)), ((33, 65), (32, 64)), ((1, 5000), (32, 1024)),
 ])
 def test_edit_dimensions_align_to_the_model(source, expected):
     assert service.edit_dimensions(*source) == expected
+
+
+def test_windows_uses_ready_model_and_its_own_command(monkeypatch, tmp_path, isolated_task_registry):
+    monkeypatch.setattr(service, "windows_x64", lambda: True)
+    monkeypatch.setattr(service, "install_root", lambda: tmp_path)
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(service, "runtime_directory", lambda: runtime)
+    monkeypatch.setenv("HIIMAGE_PROMPT_EDIT_VULKAN_DEVICE", "vulkan1")
+    model_id = "qwen-image-2.1"
+    profile = WINDOWS_MODELS[model_id]
+    profile = replace(
+        profile, diffusion=replace(profile.diffusion, size=2), encoder=replace(profile.encoder, size=2),
+        vae=replace(profile.vae, size=2), projector=replace(profile.projector, size=2),
+    )
+    monkeypatch.setattr(service, "WINDOWS_MODELS", {**WINDOWS_MODELS, model_id: profile})
+    assert "安装" in service.runtime(profile)[2]
+    runtime.mkdir()
+    for file in RUNTIME_BINARIES:
+        (runtime / file).write_bytes(b"exe")
+    assert "权重" in service.runtime(profile)[2]
+    for weight in profile.files:
+        path = weight.path(tmp_path / "weights")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ok")
+
+    def run(command, env, timeout, consume, **options):
+        def arg(flag):
+            return command[command.index(flag) + 1]
+
+        assert Path(command[0]) == runtime / "sd-cli.exe"
+        assert Path(arg("--diffusion-model")) == profile.diffusion.path(tmp_path / "weights")
+        assert Path(arg("--llm_vision")) == profile.projector.path(tmp_path / "weights")
+        assert (arg("--steps"), arg("--cfg-scale"), arg("--seed")) == ("30", "6.0", "42")
+        assert arg("--backend") == "te=cpu,vae=cpu,diffusion=vulkan1"
+        assert arg("--max-vram") == "vulkan1=3"
+        assert Path(arg("--prompt-file")).read_text(encoding="utf-8") == "把杯子改成蓝色"
+        assert env["HF_HUB_OFFLINE"] == "1"
+        with Image.open(arg("-r")) as source:
+            assert source.size == (64, 96)
+        Image.new("RGB", (64, 96), "blue").save(arg("-o"))
+        return 0
+
+    monkeypatch.setattr(service, "_stream_cli_output", run)
+    app = FastAPI()
+    app.include_router(router.router, prefix="/api")
+    with TestClient(app) as client:
+        status = client.get("/api/prompt-edit/status").json()
+        assert status["available"] and status["default_model"] == model_id
+        assert [model["id"] for model in status["models"]] == list(WINDOWS_MODELS)
+        assert not any(model["supports_mask"] for model in status["models"])
+        request = {"image": png(65, 97), "prompt": "把杯子改成蓝色", "task_id": "windows-edit", "seed": 42}
+        response = client.post("/api/prompt-edit", json=request)
+        assert response.status_code == 200
+        assert isolated_task_registry.get(request["task_id"])["status"] == "succeeded"
+        response = client.post("/api/prompt-edit", json={
+            **request, "mask": png(65, 97), "model": "fibo2-edit-turbo", "task_id": "windows-selection",
+        })
+        assert response.status_code == 422

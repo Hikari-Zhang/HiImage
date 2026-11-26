@@ -95,7 +95,9 @@ async def ensure_model_ready(
     
     # 2. 检查模型是否已下载
     checker = ModelChecker()
-    check_result: ModelCheckResult = await asyncio.to_thread(checker.check_model, model_id)
+    setup_hint = cfg.get("setup_hint")
+    check_options = {"use_cache": False} if setup_hint else {}
+    check_result: ModelCheckResult = await asyncio.to_thread(checker.check_model, model_id, **check_options)
     
     logger.info(f"[ensure_model_ready] 模型状态: {check_result.status} - {check_result.message}")
     
@@ -105,6 +107,10 @@ async def ensure_model_ready(
         await _call_progress_callback(progress_callback, 100, f"模型已就绪: {name}")
         return True, ""
     
+    if setup_hint:
+        await _call_progress_callback(progress_callback, -1, setup_hint)
+        return False, setup_hint
+
     # 3. 模型未下载或下载不完整，触发下载
     logger.info(f"[ensure_model_ready] 模型未就绪，开始下载: {name} (status={check_result.status})")
     await _call_progress_callback(progress_callback, 0, f"开始下载模型: {name}")

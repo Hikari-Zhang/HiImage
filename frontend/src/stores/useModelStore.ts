@@ -79,7 +79,7 @@ export const useModelStore = create<ModelStoreState>((set) => ({
       const data = await createApiClient(backendURL).json<{
         inpaint: { default_model?: string; groups: Array<{ label: string; models: Array<{
           id: string; name: string; description: string; badge?: string; device_override?: string;
-          pipeline?: string; watermark_defaults?: WatermarkDefaults
+          pipeline?: string; watermark_defaults?: WatermarkDefaults; setup_hint?: string
         }> }> }
         upscale: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; scale: number; outscale: number; badge?: string; supports_custom_outscale: boolean }> }> }
         cutout: { groups: Array<{ label: string; models: Array<{ id: string; name: string; description: string; recommended_for?: string; size_mb?: number; badge?: string; provider?: string }> }>; default_model: string }
@@ -94,6 +94,7 @@ export const useModelStore = create<ModelStoreState>((set) => ({
           value: m.id,
           label: m.name,
           description: m.description,
+          setupHint: m.setup_hint,
         })),
       }))
 

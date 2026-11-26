@@ -20,6 +20,8 @@ def model_groups(mode: str) -> dict:
         elif mode == "watermark_removal":
             item["device_override"] = model.get("device_override")
             item["pipeline"] = model.get("pipeline")
+            if setup_hint := model.get("setup_hint"):
+                item["setup_hint"] = setup_hint
             if defaults := model.get("watermark_defaults"):
                 item["watermark_defaults"] = defaults
         elif mode == "cutout":

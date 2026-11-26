@@ -591,7 +591,7 @@ function ModelRow({
   const syncFailed = downloadTask?.status === DownloadStatus.ERROR && downloadTask.statusSyncFailed === true
   const isDone = downloadTask?.status === DownloadStatus.DONE || model.status === ModelStatus.OK
   const canDelete = (model.has_local_path ?? isDone) && !isDownloading && !isQueued && !syncFailed
-  const canDownload = !isDone && !isDownloading && !isQueued
+  const canDownload = !model.setup_hint && !isDone && !isDownloading && !isQueued
 
   // 行内进度百分比
   const pct = (() => {
@@ -680,8 +680,10 @@ function ModelRow({
             )}>
               {STATUS_LABEL[model.status] ?? '未知'}
             </span>
-            {model.message && model.status !== ModelStatus.OK && (
-              <span className="text-[10px] text-fg-secondary truncate max-w-[200px]">{model.message}</span>
+            {model.status !== ModelStatus.OK && (model.setup_hint || model.message) && (
+              <span className={clsx('text-[10px] text-fg-secondary', !model.setup_hint && 'truncate max-w-[200px]')}>
+                {model.setup_hint || model.message}
+              </span>
             )}
             {model.size_mb && (
               <span className="text-[10px] text-fg-secondary">
@@ -696,7 +698,7 @@ function ModelRow({
       {/* 操作区 */}
       <div className="flex items-center gap-1 flex-shrink-0 mt-0.5" onClick={(e) => e.stopPropagation()}>
         {/* 单独下载按钮 */}
-        {(canDownload || syncFailed) && (
+        {(canDownload || (!model.setup_hint && syncFailed)) && (
           <button
             onClick={onDownload}
             title={syncFailed ? '重新连接下载状态' : '下载此模型'}

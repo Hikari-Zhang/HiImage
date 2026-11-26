@@ -23,9 +23,12 @@ def test_scope_accounts_for_all_existing_models_without_overlap():
     assert len(keep) == len(set(keep)) == 33
     assert len(retire) == len(set(retire)) == 15
     assert not set(keep) & set(retire)
-    # 迁移期间允许逐项移除退役项，保留项必须仍存在；新增条目须同步评审范围。
+    added = set(SCOPE["post_migration_model_ids"])
+    assert not added & (set(keep) | set(retire))
+    assert added <= set(registry())
+    # 迁移阶段的统计与迁移后登记的本地模型分别核对。
     assert set(registry()) == set(SCOPE["current_model_ids"])
-    assert set(registry()) | set(SCOPE["removed_model_ids"]) == set(keep) | set(retire)
+    assert set(registry()) | set(SCOPE["removed_model_ids"]) == set(keep) | set(retire) | added
     assert not set(registry()) & set(SCOPE["removed_model_ids"])
 
 

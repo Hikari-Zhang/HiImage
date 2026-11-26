@@ -200,15 +200,13 @@ async def queue_download_bulk():
     checker = ModelChecker()
     loop = asyncio.get_running_loop()
 
-    downloadable = MODELS
-
     # 检测哪些模型需要下载
     results = await loop.run_in_executor(None, checker.check_all)
     status_map = {r.model_id: r.status for r in results}
 
     need_download = [
-        m for m in downloadable
-        if status_map.get(m["id"], MS.MISSING) != MS.OK
+        m for m in MODELS
+        if not m.get("setup_hint") and status_map.get(m["id"], MS.MISSING) != MS.OK
     ]
 
     queue = get_download_queue()
@@ -238,6 +236,8 @@ async def queue_download_single(model_id: str):
     logger.info(f"[POST /download/{model_id}] 收到请求, cfg 存在={cfg is not None}")
     if not cfg:
         raise HTTPException(status_code=404, detail=f"未知模型 ID: {model_id!r}")
+    if setup_hint := cfg.get("setup_hint"):
+        raise HTTPException(status_code=422, detail=setup_hint)
 
     from core.download_queue import get_download_queue
     queue = get_download_queue()

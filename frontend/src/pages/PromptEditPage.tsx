@@ -36,7 +36,7 @@ const useEdit = create<{
 const fileTypes = ['image/png', 'image/jpeg', 'image/webp']
 
 export default function PromptEditPage() {
-  const { file, revision, prompt, scope, modelIds, strokes, result } = useEdit()
+  const { file, revision, prompt, scope: savedScope, modelIds, strokes, result } = useEdit()
   const { isProcessing, progress, statusMessage, startProcess, finishProcess, setError, reset } = useSessionProcess('prompt-edit')
   const { editWithPrompt, getPromptEditStatus } = useBackendAPI()
   const input = useRef<HTMLInputElement>(null)
@@ -49,13 +49,15 @@ export default function PromptEditPage() {
   const [imageSize, setImageSize] = useState<{ revision: number; width: number; height: number } | null>(null)
   const original = preview && preview.file === file ? preview.url : null
   const edited = result ? `data:image/png;base64,${result.image}` : null
+  const canSelectRegion = status?.models?.some(model => model.supports_mask) === true
+  const scope = canSelectRegion ? savedScope : 'whole'
   const local = scope === 'selection'
   const models = local ? status?.models?.filter(model => model.supports_mask) : status?.models
   const selectedModel = models?.find(model => model.id === modelIds[scope])
     ?? (local ? models?.find(model => model.available) ?? models?.[0] : models?.find(model => model.id === status?.default_model))
   const available = selectedModel?.available ?? (!local && status?.available === true)
   const unavailableReason = selectedModel ? selectedModel.reason
-    : local && status ? '当前后端没有支持选区的模型。' : status?.reason
+    : status?.reason ?? (local && status ? '当前后端没有支持选区的模型。' : null)
   const dimensions = imageSize?.revision === revision ? imageSize : null
   const brushSize = dimensions ? Math.max(1, Math.round(Math.min(dimensions.width, dimensions.height) * brushPercent / 100)) : 30
   const ready = Boolean(file && prompt.trim() && available && (!local || (dimensions && strokes.length)))
@@ -102,9 +104,9 @@ export default function PromptEditPage() {
 
   async function generate() {
     const instruction = prompt.trim()
-    if (!file || !ready || !status || isProcessing) return
+    const modelName = selectedModel?.name ?? status?.model
+    if (!file || !ready || !modelName || isProcessing) return
     const taskId = createTaskId()
-    const modelName = selectedModel?.name ?? status.model
     startProcess(modelName, taskId)
     try {
       const [image, mask] = await Promise.all([
@@ -220,9 +222,11 @@ export default function PromptEditPage() {
         </div>
         <form className="flex w-full flex-shrink-0 flex-col gap-3 border-t border-border-subtle bg-bg-secondary p-4 lg:w-[320px] lg:border-l lg:border-t-0"
           onSubmit={event => { event.preventDefault(); void generate() }}>
-          <Select label="编辑范围" value={scope} disabled={isProcessing}
-            options={[{ value: 'whole', label: '整图' }, { value: 'selection', label: '局部选区' }]}
-            onChange={event => useEdit.setState({ scope: event.target.value as EditScope })} />
+          {canSelectRegion && (
+            <Select label="编辑范围" value={scope} disabled={isProcessing}
+              options={[{ value: 'whole', label: '整图' }, { value: 'selection', label: '局部选区' }]}
+              onChange={event => useEdit.setState({ scope: event.target.value as EditScope })} />
+          )}
           {models?.length ? (
             <Select label="编辑模型" value={selectedModel?.id ?? ''} disabled={isProcessing}
               options={models.map(model => ({

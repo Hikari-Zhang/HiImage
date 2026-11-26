@@ -3,6 +3,7 @@
   "decision_date": "2026-11-02",
   "source_commit": "03a0278",
   "scope_status": "frozen",
+  "post_migration_model_ids": ["wm_slbr"],
   "runtime_status": "legacy_removed_native_adaptation_pending",
   "models": {
     "keep": [
@@ -205,6 +206,7 @@
     "realesr-general-x4v3",
     "rmbg",
     "u2net",
-    "wm_lama"
+    "wm_lama",
+    "wm_slbr"
   ]
 }

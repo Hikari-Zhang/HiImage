@@ -68,6 +68,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
   const { inpaintGroups, upscaleGroups, inpaintDeviceOverrides, inpaintPipelines, watermarkDefaults, defaultInpaintModel } = useModelStore()
   const hasModel = (id: string) => inpaintGroups.some(group => group.options.some(model => model.value === id))
   const inpaintModel = hasModel(preferredInpaintModel) ? preferredInpaintModel : defaultInpaintModel
+  const manualSetup = inpaintGroups.some(group => group.options.some(model => model.value === inpaintModel && model.setupHint))
   const modelDefaults = watermarkDefaults[inpaintModel]
   const dilationOverride = inpaintDilationOverrides[inpaintModel]
   const savedDilation = inpaintModel === 'wm_lama' ? lamaDilation : null
@@ -209,7 +210,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
       showToast('info', `模型${task.status === DownloadStatus.QUEUED ? '排队中，' : ''}下载中，请稍候...`)
       return
     }
-    if (modelNeedsDownload(task?.status) || task?.status === DownloadStatus.ERROR) {
+    if (!manualSetup && (modelNeedsDownload(task?.status) || task?.status === DownloadStatus.ERROR)) {
       showToast('info', `${modelFileIssue(task?.status) ?? '模型未下载'}，已自动加入下载队列，完成后可继续操作`)
       startDownload(inpaintModel)
       return
@@ -744,7 +745,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
             {(() => {
               const task = downloadTasks[inpaintModel]
               const isModelBusy = task?.status === DownloadStatus.DOWNLOADING || task?.status === DownloadStatus.QUEUED
-              const isModelMissing = modelNeedsDownload(task?.status) || task?.status === DownloadStatus.ERROR
+              const isModelMissing = !manualSetup && (modelNeedsDownload(task?.status) || task?.status === DownloadStatus.ERROR)
               const canProcess = repairReady && sourceImage && (maskStrokes.length > 0 || rois.length > 0) && !isModelBusy
               return (
                 <Button

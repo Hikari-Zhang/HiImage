@@ -22,7 +22,7 @@ def test_current_registry_validates_without_mutation(document):
     original = deepcopy(document)
     models, modes = validate_registry(document)
     assert document == original
-    assert len(models) == 17
+    assert len(models) == 18
     assert {mode["id"] for mode in modes} == {"cutout", "upscale", "watermark_removal"}
     assert {m["pipeline"] for m in models} >= {"flux_fill", "rembg", "realesrgan"}
     assert next(mode for mode in modes if mode["id"] == "cutout")["models"] == [
@@ -183,7 +183,7 @@ def test_loading_registry_does_not_import_inference_libraries(monkeypatch):
         assert name.split(".")[0] not in {"torch", "diffusers", "rembg", "onnxruntime"}
         return original_import(name, *args, **kwargs)
     monkeypatch.setattr(builtins, "__import__", guarded_import)
-    assert len(model_registry._load()[0]) == 17
+    assert len(model_registry._load()[0]) == 18
 
 
 def test_catalog_api_keeps_existing_fields_and_exposes_new_metadata(monkeypatch):
@@ -200,7 +200,7 @@ def test_catalog_api_keeps_existing_fields_and_exposes_new_metadata(monkeypatch)
             response = await client.get("/api/models/list")
             assert response.status_code == 200
             rows = response.json()["models"]
-            assert len(rows) == 17
+            assert len(rows) == 18
             flux = next(row for row in rows if row["id"] == "flux_fill")
             assert flux["provider"] == "diffusers"
             assert flux["pipeline"] == "flux_fill"
@@ -209,7 +209,7 @@ def test_catalog_api_keeps_existing_fields_and_exposes_new_metadata(monkeypatch)
             defaults = (await client.get("/api/models/defaults")).json()
             assert defaults == {"upscale": "RealESRGAN_x4plus", "cutout": "birefnet", "watermark_removal": "wm_lama"}
             groups = (await client.get("/api/models/groups")).json()
-            assert {m["id"] for group in groups["inpaint"]["groups"] for m in group["models"]} == {"wm_lama", "flux_fill"}
+            assert {m["id"] for group in groups["inpaint"]["groups"] for m in group["models"]} == {"wm_lama", "flux_fill", "wm_slbr"}
             assert groups["cutout"]["default_model"] == "birefnet"
             gfpgan = next(row for row in rows if row["id"] == "gfpgan")
             assert gfpgan["tags"] == [] and gfpgan["capabilities"] == ["face_enhance"]
@@ -228,4 +228,4 @@ def test_standalone_validator_exit_status(document, tmp_path, valid):
     result = subprocess.run([sys.executable, "-X", "utf8", str(root / "scripts/check_model_registry.py"),
                              "--path", str(file)], capture_output=True, text=True, encoding="utf-8", timeout=10)
     assert result.returncode == (0 if valid else 1)
-    assert ("17 models, 3 modes" in result.stdout) if valid else ("models[birefnet].pipeline" in result.stderr)
+    assert ("18 models, 3 modes" in result.stdout) if valid else ("models[birefnet].pipeline" in result.stderr)

@@ -14,6 +14,7 @@ export interface ModelEntry {
   size_mb?: number
   hf_model_id?: string
   download_url?: string
+  setup_hint?: string
   display_group?: string
   status: ModelStatusValue
   message: string

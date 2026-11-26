@@ -401,7 +401,7 @@ sequenceDiagram
 ```text
 原图 → /api/detect → watermark_ocr.scan_text → 多边形候选 → 用户勾选
     → ROI/笔画合并 PNG → /api/inpaint/with-mask
-    → 权重就绪检查 → LaMa 或 FLUX Fill worker → 遮罩内合成 → 原尺寸结果
+    → 权重就绪检查 → LaMa、SLBR 或 FLUX Fill worker → 遮罩内合成 → 原尺寸结果
 ```
 
 检测最长边先限制为 1600。常规 OCR 返回空、发现斜向文字或敏感度不低于 0.7 时，对有空间纹理的图像增加 CLAHE 对比度增强及正负 20 度旋转搜索。旋转扩展画布，候选逆变换回原图坐标，按交叠程度合并重复框。候选包含 `region`、`polygon`、`text`、`text_confidence`、`watermark_score` 和 `reasons`。
@@ -512,7 +512,7 @@ FLUX Fill 通过 DiffusersExecutor 执行去水印重绘。运行时在加载权
 | `POST /api/cutout` | `image`、模型/设备；返回 RGBA `image` 和 `mask` |
 | `POST /api/cutout/refine` | 原图、mask、增加/去除笔画、羽化与膨胀；返回图像和 mask |
 | `POST /api/cutout/composite` | RGBA `image` 与 `background_color`；返回合成图 |
-| `GET /api/prompt-edit/status` | 默认模型，以及各模型的名称、就绪状态与 `supports_mask` |
+| `GET /api/prompt-edit/status` | Apple Silicon Mac 返回默认模型和各模型的就绪状态、名称与 `supports_mask`。其他后端返回平台说明和空模型列表 |
 | `POST /api/prompt-edit` | `image`、`prompt`、`task_id`，可选 `model`、`seed`、`mask`，返回 PNG、宽、高 |
 | `POST /api/postprocess/fix` | 原图、修复图、mask、后处理方法/设备；返回图像 |
 | `POST /api/pipeline/run` | 图像、mask 或 ROI、修复/后处理/超分开关及参数；返回图像、宽、高 |

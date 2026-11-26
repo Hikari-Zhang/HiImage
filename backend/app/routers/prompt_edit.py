@@ -18,7 +18,7 @@ router = APIRouter(route_class=TaskRoute)
 class PromptEditRequest(BaseModel):
     image: str
     prompt: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
-    model: str = prompt_edit.DEFAULT_MODEL
+    model: str | None = None
     mask: str | None = None
     seed: int | None = Field(default=None, strict=True, ge=0, le=2**31 - 1)
     task_id: TaskId
@@ -26,21 +26,26 @@ class PromptEditRequest(BaseModel):
 
 @router.get("/prompt-edit/status")
 def get_prompt_edit_status():
+    if reason := prompt_edit.platform_unavailable_reason():
+        return {"available": False, "reason": reason, "model": None, "default_model": None, "models": []}
+
     models = []
-    for model_id, model in prompt_edit.EDIT_MODELS.items():
+    for model_id, model in prompt_edit.active_models().items():
         _, _, reason = prompt_edit.runtime(model)
         models.append({
             "id": model_id, "name": model.name, "available": reason is None, "reason": reason,
             "supports_mask": model.supports_mask,
         })
-    default = next(model for model in models if model["id"] == prompt_edit.DEFAULT_MODEL)
+    preferred = next(model for model in models if model["id"] == prompt_edit.DEFAULT_MODEL)
+    default = preferred if preferred["available"] else next((model for model in models if model["available"]), preferred)
     return {"available": default["available"], "reason": default["reason"], "model": default["name"],
-            "default_model": prompt_edit.DEFAULT_MODEL, "models": models}
+            "default_model": default["id"], "models": models}
 
 
 @router.post("/prompt-edit", dependencies=[Depends(inference_admission)])
 async def run_prompt_edit(req: PromptEditRequest):
-    model = prompt_edit.EDIT_MODELS.get(req.model)
+    model_id = req.model if req.model is not None else (get_prompt_edit_status()["default_model"] or prompt_edit.DEFAULT_MODEL)
+    model = prompt_edit.active_models().get(model_id)
     if model is None:
         raise HTTPException(422, "不支持该提示词编辑模型。")
     if req.mask is not None and not model.supports_mask:
@@ -57,7 +62,7 @@ async def run_prompt_edit(req: PromptEditRequest):
 
     def process():
         try:
-            result = prompt_edit.edit_image(req.model, executable, weights, req.image, req.prompt, req.seed, req.mask)
+            result = prompt_edit.edit_image(model_id, model, executable, weights, req.image, req.prompt, req.seed, req.mask)
             encode = encode_rgba_image if result.mode == "RGBA" else encode_image
             return {"image": encode(np.asarray(result)), "width": result.width, "height": result.height}
         except ProcessCleanupError:

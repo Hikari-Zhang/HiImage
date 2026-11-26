@@ -243,7 +243,7 @@ class ModelChecker:
             if size_mb and size_bytes < int(size_mb * 0.5 * 1024 * 1024):
                 raise ValueError(f"权重文件过小: {size_bytes / (1024 * 1024):.1f} MB")
         except FileNotFoundError:
-            return ModelCheckResult(model_id, name, provider, MS.MISSING, f"文件不存在: {path}",
+            return ModelCheckResult(model_id, name, provider, MS.MISSING, cfg.get("setup_hint", f"文件不存在: {path}"),
                                     expected_size_mb=size_mb)
         except (OSError, ValueError) as error:
             status, message = MS.CORRUPTED, str(error)

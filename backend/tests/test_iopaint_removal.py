@@ -14,7 +14,7 @@ def test_registry_has_no_legacy_provider_or_dangling_defaults():
         assert "iopaint" not in str(model).lower()
     for mode in MODE_GROUPS:
         assert not mode.get("default_model") or mode["default_model"] in ids
-    assert {m["id"] for m in get_models_for_mode("watermark_removal")} == {"wm_lama", "flux_fill"}
+    assert {m["id"] for m in get_models_for_mode("watermark_removal")} == {"wm_lama", "flux_fill", "wm_slbr"}
     assert "IOPaint" not in ModelExecutorFactory.get_supported_providers()
 
 
@@ -57,7 +57,7 @@ def test_http_unavailable_marks_failed_task_and_keeps_catalogs_working(isolated_
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url="http://test") as client:
             catalog=(await client.get("/api/models/inpaint")).json()
             assert catalog["available"] is True
-            assert {m["id"] for group in catalog["groups"] for m in group["models"]} == {"wm_lama", "flux_fill"}
+            assert {m["id"] for group in catalog["groups"] for m in group["models"]} == {"wm_lama", "flux_fill", "wm_slbr"}
             response=await client.post("/api/inpaint",json={"task_id":task_id,"image":"invalid","rois":[],"model":"wm_migan"})
             assert response.status_code == 503
             assert response.json()["code"] == "FEATURE_UNAVAILABLE"

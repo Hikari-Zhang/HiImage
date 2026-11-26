@@ -11,6 +11,7 @@ export interface ModelOption {
   label: string
   /** 模型描述（tooltip 或说明） */
   description?: string
+  setupHint?: string
 }
 
 /** 分组模型选项（用于 Select 组件的 groups prop） */

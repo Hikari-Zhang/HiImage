@@ -21,6 +21,7 @@ export interface ModelOption {
   value: string
   label: string
   description?: string
+  setupHint?: string
   disabled?: boolean
 }
 
@@ -41,7 +42,7 @@ interface ModelSelectProps {
 
 // ── 状态图标 ──────────────────────────────────────────────────────────────────
 
-function StatusIcon({ modelId, size = 11 }: { modelId: string; size?: number }) {
+function StatusIcon({ modelId, manualSetup, size = 11 }: { modelId: string; manualSetup?: boolean; size?: number }) {
   const task = useDownloadStore((s) => s.tasks[modelId])
   const status = task?.status
 
@@ -53,6 +54,7 @@ function StatusIcon({ modelId, size = 11 }: { modelId: string; size?: number }) 
     return <CheckCircle2 size={size} className="text-green-400 flex-shrink-0" />
   }
   if (status === ModelStatus.MISSING) {
+    if (manualSetup) return <AlertCircle size={size} className="text-orange-400 flex-shrink-0" />
     return <Download size={size} className="text-fg-secondary flex-shrink-0" />
   }
   if (modelFileIssue(status)) {
@@ -147,6 +149,9 @@ export default function ModelSelect({
   // 当前选中模型的状态提示文字
   const statusHint = (() => {
     if (!selectedTask) return null
+    if (selectedOption?.setupHint && selectedTask.status !== ModelStatus.OK && selectedTask.status !== DownloadStatus.DONE) {
+      return { type: 'file' as const, text: selectedOption.setupHint }
+    }
     if (selectedTask.statusSyncFailed) {
       return { type: 'unconfirmed' as const, text: '下载状态未确认，请重新连接' }
     }
@@ -193,7 +198,7 @@ export default function ModelSelect({
       >
         {/* 状态图标 */}
         <span className="flex-shrink-0 w-3.5 flex items-center justify-center">
-          <StatusIcon modelId={opt.value} />
+          <StatusIcon modelId={opt.value} manualSetup={!!opt.setupHint} />
         </span>
 
         {/* 名称 */}
@@ -209,7 +214,7 @@ export default function ModelSelect({
         {isQueued && (
           <span className="text-[10px] text-orange-400 flex-shrink-0">#{task.position}</span>
         )}
-        {isError && !isSelected && (
+        {!opt.setupHint && isError && !isSelected && (
           <button
             onClick={(e) => handleDownloadClick(e, opt.value)}
             title={task?.statusSyncFailed ? '重新连接下载状态' : '重新下载'}
@@ -218,7 +223,7 @@ export default function ModelSelect({
             <Download size={10} />
           </button>
         )}
-        {needDownload && !isError && !isDownloading && !isQueued && (
+        {!opt.setupHint && needDownload && !isError && !isDownloading && !isQueued && (
           <button
             onClick={(e) => handleDownloadClick(e, opt.value)}
             title="下载此模型"
@@ -249,7 +254,7 @@ export default function ModelSelect({
       >
         {/* 当前选中的状态图标 */}
         <span className="flex-shrink-0 w-3.5 flex items-center justify-center">
-          <StatusIcon modelId={value} size={11} />
+          <StatusIcon modelId={value} manualSetup={!!selectedOption?.setupHint} size={11} />
         </span>
         <span className="flex-1 truncate">{selectedOption?.label ?? value}</span>
         <ChevronDown size={12} className={clsx('flex-shrink-0 text-fg-secondary transition-transform', open && 'rotate-180')} />
@@ -269,7 +274,7 @@ export default function ModelSelect({
           {statusHint.type === 'queued'      && <Clock size={10} className="flex-shrink-0" />}
           {statusHint.type === 'error'       && <XCircle size={10} className="flex-shrink-0" />}
           {(statusHint.type === 'unconfirmed' || statusHint.type === 'file') && <AlertCircle size={10} className="flex-shrink-0" />}
-          <span className="truncate" title={statusHint.type === 'file' ? selectedTask?.message || undefined : undefined}>{statusHint.text}</span>
+          <span className={selectedOption?.setupHint ? undefined : 'truncate'} title={statusHint.type === 'file' ? selectedTask?.message || undefined : undefined}>{statusHint.text}</span>
           {statusHint.type === 'unconfirmed' && (
             <button type="button" title="重新连接下载状态" onClick={(event) => handleDownloadClick(event, value)}>
               <RefreshCw size={10} />

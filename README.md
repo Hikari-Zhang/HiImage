@@ -44,12 +44,43 @@ npm run typecheck
 npm test
 ```
 
+## SLBR 去水印备选模型
+
+去水印页面默认使用 LaMa。可选的「SLBR 细字修复」在 CPU 上运行，适合尝试有纹理背景上的半透明细字。用现有画笔或矩形确定修复范围。
+
+初次使用时，在后端本地导出 ONNX。请从 [SLBR 官方仓库](https://github.com/bcmi/SLBR-Visible-Watermark-Removal#pretrained-model) 下载 CLWD 的 `model_best.pth.tar`，保存到 `tmp/`。在已经完成 `npm run setup` 的项目环境中运行下面的命令。官方源码和权重用于本地导出，HiImage 不随项目分发它们。
+
+```bash
+git clone https://github.com/bcmi/SLBR-Visible-Watermark-Removal.git tmp/slbr-upstream
+git -C tmp/slbr-upstream checkout 47c665f1855ab6624cd52b28cefa797a9c8b96f7
+node scripts/python.js -m pip install "onnx==1.19.1"
+node scripts/python.js scripts/export_slbr.py --source tmp/slbr-upstream --checkpoint tmp/model_best.pth.tar
+```
+
+导出工具校验官方 checkpoint 的 SHA-256，并用 ONNX Runtime 验证导出的结果。权重默认放在 `models/slbr/slbr-clwd-512.onnx`。使用自定义模型目录的部署可用 `--output` 指定对应位置。导出成功后刷新模型管理页，再从去水印模型列表选择 SLBR。
+
 ## 提示词编辑
 
-在 Apple Silicon Mac 上直接运行后端时，可使用本地模型编辑单张图片。页面支持模型切换、本机和 Immich 导入、前后对比及结果下载。出图后可点击「将结果设为原图」，以当前结果继续编辑。
+在 Windows x64 或 Apple Silicon macOS 上直接运行后端时，可使用本地模型编辑单张图片。页面支持模型切换、本机和 Immich 导入、前后对比及结果下载。出图后可点击「将结果设为原图」，以当前结果继续编辑。
 
 - **整图**默认使用 FLUX.2 Klein 4B。输出长边最多 1024 像素，模型可能改变指令未提及的细节。
-- **局部选区**使用 FIBO 2.0 Edit Turbo。在原图上涂抹要修改的位置，提交提示词后可下载与原图同尺寸的 8 位 PNG。模型推理长边最多 1024 像素，合成时保留选区外的原图像素。
+- **局部选区**在 Apple Silicon macOS 上使用 FIBO 2.0 Edit Turbo。在原图上涂抹要修改的位置，提交提示词后可下载与原图同尺寸的 8 位 PNG。模型推理长边最多 1024 像素，合成时保留选区外的原图像素。
+
+### Windows x64
+
+先在仓库根目录完成 `npm run setup`。Windows 使用 [stable-diffusion.cpp 的 Vulkan 运行时](https://github.com/leejet/stable-diffusion.cpp/releases/tag/master-1133-52491bd)，需要 GPU 的 Vulkan 驱动。默认安装 FLUX.2 Klein 4B，约 5.3 GB 权重。
+
+```powershell
+node scripts/python.js scripts/setup_prompt_edit_windows.py
+```
+
+用 `--models qwen-image-2.1` 单独安装高质量模型，或用 `--all` 安装四款模型。四款共享部分权重，合计约 32 GB。安装脚本还支持 `--runtime-zip` 和 `--weights-from` 复用已下载的文件，安装时会校验 SHA-256。
+
+Qwen-Image-2.1 适合精细改色和改字，其[权重许可](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE)限非商业用途。Windows 上的 FLUX 3 Image Klein 和 FIBO 2.0 Edit Turbo 也可用于整图编辑。
+
+有多个 GPU 时，可在启动 HiImage 前设置 `HIIMAGE_PROMPT_EDIT_VULKAN_DEVICE`，默认是 `vulkan0`。运行时位于 `${HIIMAGE_CACHE}/hiimage/prompt-edit-windows`（未设置 `HIIMAGE_CACHE` 时使用 `~/.cache`）。运行其中的 `sd-cli.exe --list-devices` 可以查看设备编号。
+
+### Apple Silicon macOS
 
 在仓库根目录用 [uv](https://docs.astral.sh/uv/) 安装独立运行环境，并预下载约 4.6 GB 的量化权重。运行时在本机处理原图和提示词。
 
