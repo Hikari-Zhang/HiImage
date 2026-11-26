@@ -77,15 +77,19 @@ export function subscribeImageHistory(listener: () => void) {
 export function recordImageResult(id: string, operation: ImageOperation, image: string, fileName?: string) {
   const name = `${fileName?.replace(/\.[^.]+$/, '') || imageHistoryLabels[operation]}.png`
   const createdAt = Date.now()
-  void Promise.resolve().then(() => {
+  return Promise.resolve().then(() => {
     const bytes = base64ToBytes(image)
     return historyRequest('readwrite', (entries, images) => {
       // Raw bytes also work in WebKit when IndexedDB cannot store Blobs.
       images.put({ id, image: bytes.buffer })
       return entries.put({ id, operation, name, createdAt } satisfies ImageHistoryEntry)
     })
-  }).then(historyChanged).catch(error => {
+  }).then(() => {
+    historyChanged()
+    return true
+  }).catch(error => {
     showToast('warning', error?.name === 'QuotaExceededError' ? '浏览器存储空间不足，图片未保存到历史记录' : '保存历史记录失败')
+    return false
   })
 }
 

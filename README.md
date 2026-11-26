@@ -61,6 +61,8 @@ node scripts/python.js scripts/export_slbr.py --source tmp/slbr-upstream --check
 
 ## 提示词编辑
 
+在「生成张数」中可直接输入 1–64 的整数。批量生成使用同一张原图和同一条指令，通过不同种子逐张生成。每张成功的图片会单独保存到历史记录。
+
 在 Windows x64 或 Apple Silicon macOS 上直接运行后端时，可使用本地模型编辑单张图片。页面支持模型切换、本机和 Immich 导入、前后对比及结果下载。出图后可点击「将结果设为原图」，以当前结果继续编辑。
 
 - **整图**默认使用 FLUX.2 Klein 4B。输出长边最多 1024 像素，模型可能改变指令未提及的细节。

@@ -25,7 +25,7 @@ export interface WatermarkDetection {
 }
 
 export function createProcessingAPI(client: ApiClient) {
-  const editWithPrompt = (params: { image: string; prompt: string; task_id: string; model?: string; mask?: string }) =>
+  const editWithPrompt = (params: { image: string; prompt: string; task_id: string; model?: string; mask?: string; seed?: number }) =>
     client.json<ImageResult>('/api/prompt-edit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
