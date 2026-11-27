@@ -24,6 +24,7 @@ export interface ModelEntry {
 interface ModelListData {
   models: ModelEntry[]
   mode_groups: { id: string; name: string }[]
+  storage?: { directories: string[]; default_directory: string } | null
   can_open_model_folders: boolean
 }
 interface Snapshot {
@@ -86,6 +87,7 @@ async function load(backend: string, entry: ModelList) {
     publish(entry, {
       data: {
         models,
+        storage: result.storage,
         mode_groups: result.mode_groups ?? [],
         can_open_model_folders: result.can_open_model_folders === true,
       },

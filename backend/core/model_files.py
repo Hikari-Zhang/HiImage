@@ -18,28 +18,35 @@ def _repo_targets(repo):
     if any(part in ("", ".", "..") for part in repo.split("/")) or "\\" in repo:
         raise ValueError(f"无效模型仓库: {repo}")
     name = repo.replace("/", "--")
-    manual = paths.get_hf_manual_dir()
-    return [(manual / name, manual),
-            *((root / f"models--{name}", root) for root in paths.get_hf_hub_dirs())]
+    targets = []
+    for hub, manual in paths.hf_cache_locations():
+        targets.append((hub / f"models--{name}", hub))
+        if manual is not None:
+            targets.append((manual / name, manual))
+    return list(dict.fromkeys(targets))
 
 
-def deletion_resources(cfg):
+def _model_resources(cfg):
     resources = {}
     if cfg.get("provider") == "rembg":
-        onnx = paths.rembg_model_path(cfg)
-        resources["onnx"] = (onnx.name, [(onnx, paths.U2NET_HOME)])
+        targets = paths.rembg_locations(cfg)
+        resources["onnx"] = (targets[0][0].name, targets)
     if cfg.get("local_path"):
-        local = Path(paths.resolve_model_cache_path(cfg))
-        roots = [paths.CACHE_ROOT, paths.MODELS_DIR]
+        locations = paths.local_model_locations(cfg)
+        local = locations[0]
+        roots = [paths.CACHE_ROOT, paths.MODELS_DIR, paths.PROJECT_ROOT / "models"]
         provider_root = paths.model_cache_root(cfg)
         if provider_root is not None:
             roots.append(provider_root)
-        resolved = local.resolve()
-        root = next((r for r in roots if resolved.is_relative_to(r.resolve())
-                     and resolved != r.resolve()), None)
-        if root is None:
-            raise ValueError(f"路径安全检查失败，拒绝删除: {local}")
-        targets = [(local, root)]
+        roots.extend(paths.model_storage_dirs())
+        targets = []
+        for location in locations:
+            resolved = location.resolve()
+            root = next((r for r in roots if resolved.is_relative_to(r.resolve())
+                         and resolved != r.resolve()), None)
+            if root is None:
+                raise ValueError(f"路径安全检查失败，拒绝删除: {location}")
+            targets.append((location, root))
         legacy = paths.legacy_model_cache_path(cfg)
         if legacy and legacy[0] != local:
             targets.append(legacy)
@@ -49,13 +56,25 @@ def deletion_resources(cfg):
     return resources
 
 
+def deletion_resources(cfg):
+    resources = _model_resources(cfg)
+    for key, (label, targets) in resources.items():
+        # 用户可能将同一权重保存在不同磁盘。删除当前库的副本，保留后续库。
+        for root in paths.model_storage_dirs():
+            selected = [target for target in targets if target[0].is_relative_to(root) and os.path.lexists(target[0])]
+            if selected:
+                resources[key] = (label, selected)
+                break
+    return resources
+
+
 def deletion_targets(cfg):
     return [target for _, targets in deletion_resources(cfg).values() for target in targets]
 
 
 def model_resource_paths(cfg):
     """模型可能读写的缓存路径，包括组合模型和依赖仓库。"""
-    result = [p.resolve() for p, _ in deletion_targets(cfg)]
+    result = [p.resolve() for _, targets in _model_resources(cfg).values() for p, _ in targets]
     repos = set(cfg.get("dependencies", []))
     if cfg.get("local_path") and cfg.get("hf_model_id"):
         repos.add(cfg["hf_model_id"])

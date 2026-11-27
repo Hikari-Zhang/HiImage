@@ -176,7 +176,7 @@ def test_custom_gfpgan_cache_does_not_block_lama_deletion(cache, monkeypatch, ov
     assert not lama_file.exists()
     assert gfpgan_file.exists()
 
-    assert paths.resolve_model_cache_path(gfpgan) == gfpgan_file
+    assert paths.find_local_model_path(gfpgan) == gfpgan_file
     response = asyncio.run(delete("gfpgan"))
     assert response.status_code == 200, response.text
     assert not gfpgan_file.exists()
@@ -195,7 +195,7 @@ def test_rembg_deletes_actual_onnx_filename(cache):
 def test_both_manual_and_standard_cache_are_removed(cache):
     register(first={"hf_model_id": "owner/shared"})
     file = weight()
-    standard = paths.get_hf_hub_dir() / "models--owner--shared"
+    standard = paths.HF_HOME / "hub" / "models--owner--shared"
     standard.mkdir(parents=True)
     (standard / "model.bin").write_bytes(b"temporary")
     response = asyncio.run(delete())

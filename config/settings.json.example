@@ -1,4 +1,7 @@
 {
+  "storage": {
+    "model_directories": []
+  },
   "inpaint": {
     "default_dilation": 10,
     "lama_dilation": null,

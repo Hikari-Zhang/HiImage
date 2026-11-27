@@ -529,7 +529,8 @@ FLUX Fill 通过 DiffusersExecutor 执行去水印重绘。运行时在加载权
 | `GET /api/models/upscale` | 超分模型分组 |
 | `GET /api/cutout/models` | 抠图模型分组 |
 | `GET /api/postprocess/methods` | 后处理方法清单 |
-| `GET /api/models/list` | 模型元数据、当前文件状态和打开本地目录的可用性 |
+| `GET /api/models/list` | 模型元数据、文件状态和本机模型库设置 |
+| `PUT /api/models/storage` | 本机保存有序模型目录。读取时按列表、默认库、旧位置查找。新下载写入首项，留空使用 `~/.cache/HiImage/`（可通过 `HIIMAGE_CACHE` 更换缓存根） |
 | `GET /api/models/health` | 全量模型文件检查 |
 | `GET /api/models/health/{model_id}` | 单模型检查 |
 | `POST /api/models/download/bulk` | 把需要下载的模型加入队列 |
@@ -584,11 +585,11 @@ FLUX Fill 通过 DiffusersExecutor 执行去水印重绘。运行时在加载权
 | `HIIMAGE_MODELS_DIR` | 项目 `models/`，保留部分兼容模型路径 |
 | `HIIMAGE_CACHE` | 默认用户 `~/.cache`，可重定向缓存根 |
 | `HF_HOME` / `TORCH_HOME` | 此两项未设置时依次使用 `HIIMAGE_CACHE`、`XDG_CACHE_HOME`、`~/.cache` 下的 `huggingface/`、`torch/` |
-| `HF_HUB_CACHE` | Hub 下载目录，兼容旧变量 `HUGGINGFACE_HUB_CACHE`，默认为 `HF_HOME/hub` |
+| `HF_HUB_CACHE` | 兼容已有 Hub 权重的目录，兼容旧变量 `HUGGINGFACE_HUB_CACHE`，默认为 `HF_HOME/hub` |
 | `U2NET_HOME` | 未设置缓存根时默认 `~/.u2net`；显式缓存根下为 `u2net/` |
 | `GFPGAN_HOME` / `REALESRGAN_HOME` / `RESTORMER_HOME` | 各模型框架缓存子目录 |
 
-专用缓存变量优先于 `HIIMAGE_CACHE`。Hugging Face 路径优先解析标准 hub snapshot，再兼容 manual 缓存；找不到时可能回退仓库 ID 并触发在线下载。`MODELS_DIR`、`MODELS_CACHE_DIR` 和各框架缓存并未完全合并，扩展模型时应复用 `resolve_model_cache_path` 等实际解析入口。
+HiImage 按设置页的目录顺序查找注册模型，接着检查默认模型库 `${HIIMAGE_CACHE:-~/.cache}/HiImage`，最后检查上表中的旧安装位置。新权重写入第一项或默认库。Hugging Face 在每个库内依次查找 `huggingface/hub` 的 main 快照和 `huggingface/manual` 的手动安装。普通权重的下载和读取分别使用 `resolve_model_cache_path` 和 `find_local_model_path`。
 
 ## 18. 开发、部署与测试体系
 

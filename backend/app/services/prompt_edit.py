@@ -12,9 +12,9 @@ from PIL import Image
 
 from app.logging_manager import log_manager
 from app.services.image_codec import decode_image, decode_mask, decode_rgba_image, validate_matching_dimensions
-from core.paths import CACHE_ROOT
+from core.paths import CACHE_ROOT, storage_locations
 from core.process_runner import _cli_log_directory, _stream_cli_output
-from core.prompt_edit_windows import WINDOWS_MODELS, WindowsEditModel, install_root, runtime_directory, runtime_installed
+from core.prompt_edit_windows import WINDOWS_MODELS, WindowsEditModel, weight_locations, runtime_directory, runtime_installed
 
 MAX_EDGE = 1024
 TIMEOUT_SECONDS = 600
@@ -109,7 +109,8 @@ def runtime(model: EditModel | WindowsEditModel) -> tuple[Path, Path, str | None
     if isinstance(model, WindowsEditModel):
         directory = runtime_directory()
         executable = directory / "sd-cli.exe"
-        weights = install_root() / "weights"
+        locations = weight_locations()
+        weights = next((p for p in locations if all(f.installed(p) for f in model.files)), locations[0])
         if not re.fullmatch(r"vulkan[0-9]+", windows_device()):
             return executable, weights, "提示词编辑的 Vulkan 设备配置无效，请使用 vulkan0 等设备名。"
         if not runtime_installed(directory):
@@ -120,18 +121,19 @@ def runtime(model: EditModel | WindowsEditModel) -> tuple[Path, Path, str | None
 
     root = (CACHE_ROOT / "hiimage").resolve()
     executable = root / "prompt-edit/bin" / model.command
-    weights = root / model.directory
+    locations = storage_locations(model.directory, root / model.directory)
+    weights = locations[0]
     if reason := platform_unavailable_reason():
         return executable, weights, reason
     if not executable.is_file() or not os.access(executable, os.X_OK):
         return executable, weights, "本地后端尚未安装 MFlux，请按项目说明配置。"
-    try:
-        complete = all((weights / name).stat().st_size == size for name, size in model.files.items())
-    except OSError:
-        complete = False
-    if not complete:
-        return executable, weights, f"{model.name} 权重尚未下载完整。"
-    return executable, weights, None
+    for directory in locations:
+        try:
+            if all((directory / name).stat().st_size == size for name, size in model.files.items()):
+                return executable, directory, None
+        except OSError:
+            continue
+    return executable, weights, f"{model.name} 权重尚未下载完整。"
 
 
 def windows_command(

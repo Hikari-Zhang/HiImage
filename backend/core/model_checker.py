@@ -146,7 +146,7 @@ class ModelChecker:
     # ── 内部检测方法 ─────────────────────────────────────────────────────────
 
     def _check_rembg(self, cfg: dict) -> ModelCheckResult:
-        return self._check_file(cfg, paths.rembg_model_path(cfg))
+        return self._check_file(cfg, paths.rembg_model_path(cfg, installed=True))
 
     def _check_local_path(self, cfg: dict) -> ModelCheckResult:
         return self._check_file(cfg, paths.find_local_model_path(cfg))

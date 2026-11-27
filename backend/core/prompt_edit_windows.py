@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.paths import CACHE_ROOT
+from core.paths import CACHE_ROOT, storage_locations
 
 RUNTIME_RELEASE = "master-1133-52491bd"
 RUNTIME_ASSET = "sd-master-52491bd-bin-win-vulkan-x64.zip"
@@ -118,6 +118,10 @@ WINDOWS_MODELS = {
 
 def install_root() -> Path:
     return (CACHE_ROOT / "hiimage" / "prompt-edit-windows").resolve()
+
+
+def weight_locations() -> tuple[Path, ...]:
+    return storage_locations("prompt-edit-windows/weights", install_root() / "weights")
 
 
 def runtime_directory() -> Path:

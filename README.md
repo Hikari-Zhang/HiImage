@@ -44,6 +44,12 @@ npm run typecheck
 npm test
 ```
 
+## 模型存储位置
+
+在后端电脑上打开「设置 → 模型管理」，填写绝对路径（例如 `D:\AI\HiImage` 或 `/Volumes/Models/HiImage`），点击「保存位置」。目录会自动创建。每行填写一个目录。单个下载和「一键下载全部」都写入第一行，并按模型类型建立子目录。留空时下载到 `~/.cache/HiImage/`。设置了 `HIIMAGE_CACHE` 时，默认模型库位于该缓存目录下的 `HiImage/`。
+
+读取模型时依次检查列表中的目录、默认模型库和旧版本的安装位置。调整行顺序即可改变优先级。原有文件保留在原处。请等下载或推理完成后再切换。Windows 提示词编辑安装脚本和 SLBR 导出工具也会读取此设置。
+
 ## SLBR 去水印备选模型
 
 去水印页面默认使用 LaMa。可选的「SLBR 细字修复」在 CPU 上运行，适合尝试有纹理背景上的半透明细字。用现有画笔或矩形确定修复范围。
@@ -57,7 +63,7 @@ node scripts/python.js -m pip install "onnx==1.19.1"
 node scripts/python.js scripts/export_slbr.py --source tmp/slbr-upstream --checkpoint tmp/model_best.pth.tar
 ```
 
-导出工具校验官方 checkpoint 的 SHA-256，并用 ONNX Runtime 验证导出的结果。权重默认放在 `models/slbr/slbr-clwd-512.onnx`。使用自定义模型目录的部署可用 `--output` 指定对应位置。导出成功后刷新模型管理页，再从去水印模型列表选择 SLBR。
+导出工具校验官方 checkpoint 的 SHA-256，并用 ONNX Runtime 验证导出的结果。工具将文件导出到首选模型库下的 `slbr/slbr-clwd-512.onnx`，也可用 `--output` 单独指定。导出成功后刷新模型管理页，再从去水印模型列表选择 SLBR。
 
 ## 提示词编辑
 
@@ -88,11 +94,12 @@ Qwen-Image-2.1 适合精细改色和改字，其[权重许可](https://huggingfa
 
 ```bash
 edit_cache="${HIIMAGE_CACHE:-$HOME/.cache}/hiimage"
+model_dir=$(PYTHONPATH=backend node scripts/python.js -c 'from core.paths import model_storage_dirs; print(model_storage_dirs()[0])')
 uv venv --python 3.12 "$edit_cache/prompt-edit"
 uv pip install --python "$edit_cache/prompt-edit/bin/python" -r backend/requirements-prompt-edit.txt
 "$edit_cache/prompt-edit/bin/hf" download mflux-community/flux2-klein-4b-mflux-q4 \
   --revision 794cd159538149ad9830848508c31f0ea7088e58 \
-  --local-dir "$edit_cache/prompt-edit-model" \
+  --local-dir "$model_dir/prompt-edit-model" \
   --include 'text_encoder/*' --include 'tokenizer/*' --include 'transformer/*' --include 'vae/*'
 ```
 
@@ -102,13 +109,13 @@ uv pip install --python "$edit_cache/prompt-edit/bin/python" -r backend/requirem
 # FLUX 3 Image Klein · 约 5.3 GB
 "$edit_cache/prompt-edit/bin/hf" download mflux-community/flux-3-image-klein-mflux-q4 \
   --revision 79c0034de040c460e9685bf0127f40af042a2abe \
-  --local-dir "$edit_cache/prompt-edit-models/flux3-image-klein" \
+  --local-dir "$model_dir/prompt-edit-models/flux3-image-klein" \
   --include manifest.json --include 'text_encoder/*' --include 'transformer/*' --include 'vae/*'
 
 # FIBO 2.0 Edit Turbo · 约 7.2 GB
 "$edit_cache/prompt-edit/bin/hf" download mflux-community/fibo-2-0-edit-turbo-mflux-q4 \
   --revision b7c949d7e2a9e3e6b86859a3a97a40f7318293c4 \
-  --local-dir "$edit_cache/prompt-edit-models/fibo2-edit-turbo" \
+  --local-dir "$model_dir/prompt-edit-models/fibo2-edit-turbo" \
   --include mflux_model.json --include 'fonts/*' --include 'processor/*' \
   --include 'text_encoder/*' --include 'transformer/*' --include 'vae/*'
 ```

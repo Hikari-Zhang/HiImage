@@ -14,7 +14,8 @@ def test_retry_preserves_healthy_submodel_and_refreshes_only_broken_file(tmp_pat
     import huggingface_hub
 
     monkeypatch.setattr(paths, "HF_HOME", tmp_path)
-    hub = tmp_path / "hub"
+    monkeypatch.setattr(paths, "CACHE_ROOT", tmp_path / "cache")
+    hub = paths.default_model_directory() / "huggingface/hub"
     monkeypatch.setenv("HF_HUB_CACHE", str(hub))
     good = hub / "models--demo--good" / "config.json"
     bad = hub / "models--demo--bad" / "config.json"

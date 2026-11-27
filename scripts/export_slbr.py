@@ -66,10 +66,14 @@ def export(source: Path, checkpoint: Path, output: Path) -> None:
 
 
 if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+    from core.paths import resolve_model_cache_path
+    from core.model_registry import get_model
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True, help="Local official SLBR source checkout")
     parser.add_argument("--checkpoint", type=Path, required=True, help="Official CLWD model_best.pth.tar")
-    parser.add_argument("--output", type=Path, default=Path("models/slbr/slbr-clwd-512.onnx"))
+    parser.add_argument("--output", type=Path, default=resolve_model_cache_path(get_model("wm_slbr")))
     args = parser.parse_args()
     export(args.source, args.checkpoint, args.output)
     print(f"Installed {args.output.resolve()}")

@@ -6,12 +6,20 @@ test.afterEach(async ({ request }) => {
   expect((await request.delete('/api/e2e-fixture')).status()).toBe(204)
 })
 
-test('downloads shared weights and confirms deletion for both model entries', async ({ page }) => {
+test('saves a custom library, downloads shared weights there and confirms deletion', async ({ page }) => {
   const fixture = await page.request.get('/api/e2e-fixture')
   expect(fixture.ok()).toBeTruthy()
-  expect(await fixture.json()).toEqual({ weight_exists: false })
+  const { directory } = await fixture.json()
   await page.goto('/#/settings')
   await page.getByRole('button', { name: '模型管理', exact: true }).click()
+  const location = page.getByRole('textbox', { name: '模型存储位置' })
+  await location.fill(directory)
+  const saved = page.waitForResponse(response => response.url().endsWith('/api/models/storage'))
+  await page.getByRole('button', { name: '保存位置' }).click()
+  expect((await saved).ok()).toBeTruthy()
+  await page.reload()
+  await page.getByRole('button', { name: '模型管理', exact: true }).click()
+  await expect(location).toHaveValue(directory)
   const row = (name: string) => page.getByText(name, { exact: true }).locator('xpath=../../..')
   const primary = row('主测试模型')
   const alias = row('共享测试模型')
@@ -34,7 +42,7 @@ test('downloads shared weights and confirms deletion for both model entries', as
   await expect(dialog.getByRole('listitem').filter({ hasText: '共享测试模型' })).toBeVisible()
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
   await expect(dialog).toBeHidden()
-  expect(await (await page.request.get('/api/e2e-fixture')).json()).toEqual({ weight_exists: true })
+  expect(await (await page.request.get('/api/e2e-fixture')).json()).toEqual({ directory, weight_exists: true, default_exists: false })
 
   await deleteWeight.click()
   const deletion = page.waitForResponse(response =>
@@ -44,5 +52,5 @@ test('downloads shared weights and confirms deletion for both model entries', as
   expect((await deletion).ok()).toBeTruthy()
   await expect(primary.getByText('未下载', { exact: true })).toBeVisible()
   await expect(alias.getByText('未下载', { exact: true })).toBeVisible()
-  expect(await (await page.request.get('/api/e2e-fixture')).json()).toEqual({ weight_exists: false })
+  expect(await (await page.request.get('/api/e2e-fixture')).json()).toEqual({ directory, weight_exists: false, default_exists: false })
 })

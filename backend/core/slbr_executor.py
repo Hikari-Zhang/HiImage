@@ -4,7 +4,7 @@ import numpy as np
 
 from .inpaint_regions import prepare_mask, repair_regions
 from .model_executor import BaseModelExecutor
-from .paths import resolve_model_cache_path
+from .paths import find_local_model_path
 
 
 class SLBRExecutor(BaseModelExecutor):
@@ -19,7 +19,7 @@ class SLBRExecutor(BaseModelExecutor):
             return
         import onnxruntime as ort
 
-        path = resolve_model_cache_path(self.model_config)
+        path = find_local_model_path(self.model_config)
         options = ort.SessionOptions()
         options.intra_op_num_threads = 4
         session = ort.InferenceSession(path.read_bytes(), options, providers=["CPUExecutionProvider"])

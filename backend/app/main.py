@@ -13,13 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # 确保 backend/ 在 sys.path 中（core 模块可导入）
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 优先使用 core.paths 作为路径的唯一数据源；如果旧版本缺少导出则回退到 app.config
-try:
-    from core.paths import PROJECT_ROOT, MODELS_DIR, apply_default_env_vars
-except ImportError:
-    from core.paths import PROJECT_ROOT, MODELS_DIR  # type: ignore[assignment]
-    def apply_default_env_vars(): pass  # type: ignore[misc]
-
+from core.paths import PROJECT_ROOT, apply_default_env_vars, model_storage_dirs
 from app.config import get
 from app.routers import system, inpaint, upscale, settings, logs, postprocess, cutout, tasks, immich, prompt_edit, models as models_router_module
 from app.websocket.progress import router as ws_router
@@ -127,11 +121,12 @@ async def lifespan(app: FastAPI):
     apply_default_env_vars()
     print(f"[Backend] HiImage API 启动")
     print(f"[Backend] 项目根目录: {PROJECT_ROOT}")
-    print(f"[Backend] 模型目录: {MODELS_DIR}")
+    download_directory = model_storage_dirs()[0]
+    print(f"[Backend] 模型下载目录: {download_directory}")
 
     log_manager.info("HiImage API 启动", source="backend")
     log_manager.info(f"项目根目录: {PROJECT_ROOT}", source="backend")
-    log_manager.info(f"模型目录: {MODELS_DIR}", source="backend")
+    log_manager.info(f"模型下载目录: {download_directory}", source="backend")
 
     yield
 

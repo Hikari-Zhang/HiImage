@@ -101,6 +101,7 @@ models:
     size_mb: 928   # 实测：BiRefNet-general-epoch_244.onnx ≈ 928 MB
     badge: 推荐
     rembg_session_name: birefnet-general
+    md5: "7a35a0141cbbc80de11d9c9a28f52697"
     onnx_filename: BiRefNet-general-epoch_244.onnx
     github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-epoch_244.onnx
     supported_params: {}
@@ -120,6 +121,7 @@ models:
     size_mb: 977   # 实测：bria-rmbg-2.0.onnx ≈ 977 MB
     badge: ""
     rembg_session_name: bria-rmbg
+    sha256: "5b486f08200f513f460da46dd701db5fbb47d79b4be4b708a19444bcd4e79958"
     onnx_filename: bria-rmbg-2.0.onnx
     github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/bria-rmbg-2.0.onnx
     supported_params: {}
@@ -139,6 +141,7 @@ models:
     size_mb: 170   # 实测：isnet-general-use.onnx ≈ 170 MB
     badge: ""
     rembg_session_name: isnet-general-use
+    md5: "fc16ebd8b0c10d971d3513d564d01e29"
     onnx_filename: isnet-general-use.onnx
     github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx
     supported_params: {}
@@ -158,6 +161,7 @@ models:
     size_mb: 168   # 实测：isnet-anime.onnx ≈ 168 MB
     badge: 动漫
     rembg_session_name: isnet-anime
+    md5: "6f184e756bb3bd901c8849220a83e38e"
     onnx_filename: isnet-anime.onnx
     github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-anime.onnx
     supported_params: {}
@@ -177,6 +181,7 @@ models:
     size_mb: 168   # 实测：u2net.onnx ≈ 168 MB
     badge: ""
     rembg_session_name: u2net
+    md5: "60024c5c889badc19c04ad937298a77b"
     onnx_filename: u2net.onnx
     github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx
     supported_params: {}
@@ -196,6 +201,7 @@ models:
     size_mb: 168   # 实测：u2net_human_seg.onnx ≈ 168 MB
     badge: 快速
     rembg_session_name: u2net_human_seg
+    md5: "c09ddc2e0104f800e3e1bb4652583d1f"
     onnx_filename: u2net_human_seg.onnx
     github_download_url: https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx
     supported_params: {}

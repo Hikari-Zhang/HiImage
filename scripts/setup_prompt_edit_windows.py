@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from core.paths import get_hf_hub_dir
 from core.prompt_edit_windows import (
     RUNTIME_ASSET, RUNTIME_RELEASE, RUNTIME_SHA256, WINDOWS_MODELS, Weight,
-    install_root, runtime_directory, runtime_installed,
+    weight_locations, runtime_directory, runtime_installed,
 )
 
 RUNTIME_URL = f"https://github.com/leejet/stable-diffusion.cpp/releases/download/{RUNTIME_RELEASE}/{RUNTIME_ASSET}"
@@ -70,7 +70,7 @@ def weight_source(weight: Weight, local_dirs: list[Path]) -> Path:
 
 
 def install_weight(weight: Weight, local_dirs: list[Path]) -> None:
-    weights = install_root() / "weights"
+    weights = weight_locations()[0]
     destination = weight.path(weights)
     if weight.installed(weights) and sha256(destination) == weight.sha256:
         return

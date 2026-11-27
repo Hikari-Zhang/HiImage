@@ -3,9 +3,13 @@ Rembg 抠图执行器
 
 包装 rembg 库，用于图像抠图（matting）。
 """
+import os
+
 import numpy as np
 from typing import Dict, Any
 from .model_executor import BaseModelExecutor
+from .paths import rembg_model_path
+from .downloaders import download_rembg, rembg_checksum_matches
 
 
 class RembgExecutor(BaseModelExecutor):
@@ -27,11 +31,28 @@ class RembgExecutor(BaseModelExecutor):
 
     def load_model(self) -> None:
         """加载 rembg session"""
-        import rembg
+        import onnxruntime as ort
+        from rembg.sessions import sessions_class
 
-        # 从配置中获取 rembg session 名称
-        session_name = self.model_config.get("rembg_session_name", "birefnet-general")
-        self._session = rembg.new_session(session_name)
+        session_name = self.model_config["rembg_session_name"]
+        implementation = next((cls for cls in sessions_class if cls.name() == session_name), None)
+        if implementation is None:
+            raise ValueError(f"rembg 未提供会话：{session_name}")
+        weight = rembg_model_path(self.model_config, installed=True)
+        if not weight.is_file() or not rembg_checksum_matches(self.model_config, weight):
+            download_rembg(self.model_config)
+            weight = rembg_model_path(self.model_config)
+
+        # rembg 通常根据会话名重新拼文件名；直接交给 ONNX 已选定的注册表权重。
+        class LocalSession(implementation):
+            @classmethod
+            def download_models(cls, *args, **kwargs):
+                return str(weight)
+
+        options = ort.SessionOptions()
+        if threads := os.environ.get("OMP_NUM_THREADS"):
+            options.inter_op_num_threads = options.intra_op_num_threads = int(threads)
+        self._session = LocalSession(session_name, options)
 
     def execute(self, image: np.ndarray, **kwargs) -> np.ndarray:
         """

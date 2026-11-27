@@ -1,13 +1,15 @@
 import { defineConfig } from '@playwright/test'
 
 const modelManager = process.env.HIIMAGE_TEST_MODEL_MANAGER === '1'
+const frontendPort = modelManager ? 15173 : 5173
+const frontendURL = `http://127.0.0.1:${frontendPort}`
 const fixtureServer = 'http://127.0.0.1:18787'
 
 export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.e2e.ts',
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: frontendURL,
     channel: process.env.PLAYWRIGHT_CHANNEL || (process.platform === 'win32' ? 'msedge' : 'chromium'),
     headless: true,
   },
@@ -18,8 +20,8 @@ export default defineConfig({
       reuseExistingServer: false,
     }] : []),
     {
-      command: 'npm run dev -- --host 127.0.0.1 --port 5173 --strictPort',
-      url: 'http://127.0.0.1:5173',
+      command: `npm run dev -- --host 127.0.0.1 --port ${frontendPort} --strictPort`,
+      url: frontendURL,
       env: modelManager ? { HIIMAGE_BACKEND_PROXY_TARGET: fixtureServer } : undefined,
       reuseExistingServer: !modelManager && !process.env.CI,
     },

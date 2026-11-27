@@ -5,7 +5,7 @@ import numpy as np
 
 from .inpaint_regions import prepare_mask, repair_regions
 from .model_executor import BaseModelExecutor
-from .paths import resolve_model_cache_path
+from .paths import find_local_model_path
 
 
 class LamaExecutor(BaseModelExecutor):
@@ -19,7 +19,7 @@ class LamaExecutor(BaseModelExecutor):
 
         import torch
 
-        path = resolve_model_cache_path(self.model_config)
+        path = find_local_model_path(self.model_config)
         with path.open("rb") as weights:
             digest = hashlib.sha256()
             for chunk in iter(lambda: weights.read(1024 * 1024), b""):

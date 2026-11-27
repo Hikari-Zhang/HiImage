@@ -42,7 +42,12 @@ def serve(root: Path) -> None:
     app.add_api_route("/api/health", lambda: {"status": "ok"})
     app.add_api_route("/api/settings", lambda: {"device": "cpu"})
     app.add_api_route("/api/devices", lambda: {"devices": []})
-    app.add_api_route("/api/e2e-fixture", lambda: {"weight_exists": (root / "models/shared-fixture.pth").is_file()})
+    library = (root / "自定义 模型库").resolve()
+    app.add_api_route("/api/e2e-fixture", lambda: {
+        "directory": str(library),
+        "weight_exists": (library / "e2e-fixture/shared-fixture.pth").is_file(),
+        "default_exists": (root / "cache/HiImage/e2e-fixture/shared-fixture.pth").is_file(),
+    })
     app.add_api_route("/api/e2e-fixture/weight", lambda: Response(weight, media_type="application/octet-stream"))
 
     @app.delete("/api/e2e-fixture", status_code=204)

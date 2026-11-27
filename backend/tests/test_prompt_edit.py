@@ -189,7 +189,7 @@ def test_edit_dimensions_align_to_the_model(source, expected):
 
 def test_windows_uses_ready_model_and_its_own_command(monkeypatch, tmp_path, isolated_task_registry):
     monkeypatch.setattr(service, "windows_x64", lambda: True)
-    monkeypatch.setattr(service, "install_root", lambda: tmp_path)
+    monkeypatch.setattr(service, "weight_locations", lambda: (tmp_path / "weights",))
     runtime = tmp_path / "runtime"
     monkeypatch.setattr(service, "runtime_directory", lambda: runtime)
     monkeypatch.setenv("HIIMAGE_PROMPT_EDIT_VULKAN_DEVICE", "vulkan1")

@@ -2,7 +2,7 @@
 路径管理器 — 统一管理项目中的所有路径
 
 所有路径配置集中在此文件，便于维护和自定义。
-环境变量优先级 > 默认值。
+模型库按设置顺序查找，默认位于 ~/.cache/HiImage，旧版路径用于兼容。
 
 用法：
     from core.paths import HF_HOME, MODELS_DIR, resolve_model_path
@@ -114,11 +114,10 @@ RESTORMER_HOME = cache_dirs_from_env()["RESTORMER_HOME"]
 U2NET_HOME = cache_dirs_from_env()["U2NET_HOME"]
 
 # 项目 models/ 目录（向后兼容旧代码）
-# ⚠️  已废弃：新代码请使用 MODELS_CACHE_DIR（~/.cache/models）；此变量仅作向后兼容保留。
+# 旧安装位置。模型读写请通过下方的路径解析函数。
 MODELS_DIR = _RUNTIME_PATHS.models_dir
 
-# 模型缓存目录（默认下载位置）：~/.cache/hiimage/models/
-# 可通过环境变量 HIIMAGE_CACHE 自定义（会自动附加 /models）
+# 旧版缓存路径，保留给兼容调用方。
 MODELS_CACHE_DIR = CACHE_ROOT / "models"
 
 
@@ -132,20 +131,35 @@ def ensure_runtime_dirs() -> RuntimePaths:
 # 辅助函数
 # ──────────────────────────────────────────────────────────────
 
-def get_hf_hub_dir() -> Path:
-    """返回 Hub 客户端和 HiImage 共用的下载目录。"""
+def default_model_directory() -> Path:
+    return CACHE_ROOT / "HiImage"
+
+
+def model_storage_dirs() -> tuple[Path, ...]:
+    from app.config import get
+
+    configured = (Path(value) for value in get("storage.model_directories", []))
+    return tuple(dict.fromkeys((*configured, default_model_directory())))
+
+
+def storage_locations(subdirectory: str, legacy: Path) -> tuple[Path, ...]:
+    """按配置顺序查找，然后查找默认模型库及旧版安装路径。"""
+    locations = (root / subdirectory for root in model_storage_dirs())
+    return tuple(dict.fromkeys((*locations, legacy)))
+
+
+def hf_cache_locations() -> tuple[tuple[Path, Path | None], ...]:
+    """每个库先查 Hub 快照，再查手动安装，最后兼容原来的 HF 环境变量。"""
+    locations = [(root / "huggingface/hub", root / "huggingface/manual") for root in model_storage_dirs()]
     value = os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE")
-    return Path(os.path.expandvars(value)).expanduser() if value else HF_HOME / "hub"
+    if value:
+        locations.append((Path(os.path.expandvars(value)).expanduser(), None))
+    locations.append((HF_HOME / "hub", HF_HOME / "manual"))
+    return tuple(dict.fromkeys(locations))
 
 
-def get_hf_hub_dirs() -> tuple[Path, ...]:
-    """以前的 HiImage 直接写入 HF_HOME/hub，读取和删除时仍识别该目录。"""
-    return tuple(dict.fromkeys((get_hf_hub_dir(), HF_HOME / "hub")))
-
-
-def get_hf_manual_dir() -> Path:
-    """获取 HuggingFace 手动下载目录（manual/ 子目录）"""
-    return HF_HOME / "manual"
+def get_hf_hub_dir() -> Path:
+    return model_storage_dirs()[0] / "huggingface/hub"
 
 
 def ensure_dir(path: Path) -> Path:
@@ -179,7 +193,7 @@ def find_hf_snapshot(repo_id: str) -> Optional[Path]:
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import LocalEntryNotFoundError
 
-    for hub_dir in get_hf_hub_dirs():
+    for hub_dir, manual in hf_cache_locations():
         try:
             path = snapshot_download(
                 repo_id=repo_id,
@@ -189,9 +203,12 @@ def find_hf_snapshot(repo_id: str) -> Optional[Path]:
             if Path(path).is_dir():
                 return Path(path)
         except LocalEntryNotFoundError:
-            continue
-    manual_dir = get_hf_manual_dir() / repo_id.replace("/", "--")
-    return manual_dir if manual_dir.is_dir() else None
+            pass
+        if manual is not None:
+            directory = manual / repo_id.replace("/", "--")
+            if directory.is_dir():
+                return directory
+    return None
 
 
 def resolve_hf_model_path(repo_id: str) -> str:
@@ -210,30 +227,20 @@ def model_cache_root(cfg: dict) -> Optional[Path]:
     }.get(cfg.get("provider"))
 
 
-def resolve_model_cache_path(cfg: dict) -> Path:
-    """
-    统一解析模型缓存路径（下载/加载/检查均使用此函数）。
-
-    根据模型类型定位到正确的缓存子目录：
-      - realesrgan  → REALESRGAN_HOME / weight_filename  （~/.cache/realesrgan/）
-      - restormer   → RESTORMER_HOME / weight_filename   （~/.cache/restormer/）
-      - gfpgan      → GFPGAN_HOME / weight_filename      （~/.cache/gfpgan/）
-      - 其他        → resolve_model_path(local_path)     # 向后兼容
-
-    优先级：
-      1. cfg["weight_filename"]  # 文件名
-      2. cfg["local_path"] 的最后一段（basename）
-
-    用法：
-        from core.paths import resolve_model_cache_path
-        path = resolve_model_cache_path(cfg)
-    """
+def local_model_locations(cfg: dict) -> tuple[Path, ...]:
     local_path = cfg.get("local_path", "")
+    filename = cfg.get("weight_filename") or Path(local_path).name
     root = model_cache_root(cfg)
-    if root is None:
-        return resolve_model_path(local_path)
-    weight_filename = cfg.get("weight_filename") or os.path.basename(local_path)
-    return root / weight_filename
+    default = root / filename if root is not None else resolve_model_path(local_path)
+    provider = "gfpgan" if cfg.get("executor") == "gfpgan" else cfg.get("provider")
+    if not provider:
+        return (default,)
+    return storage_locations(str(Path(provider) / filename), default)
+
+
+def resolve_model_cache_path(cfg: dict) -> Path:
+    """本次下载的目标文件。"""
+    return local_model_locations(cfg)[0]
 
 
 def legacy_model_cache_path(cfg: dict) -> Optional[tuple[Path, Path]]:
@@ -249,16 +256,26 @@ def legacy_model_cache_path(cfg: dict) -> Optional[tuple[Path, Path]]:
 
 
 def find_local_model_path(cfg: dict) -> Path:
-    path = resolve_model_cache_path(cfg)
+    locations = local_model_locations(cfg)
     legacy = legacy_model_cache_path(cfg)
-    if not path.exists() and legacy and legacy[0].exists():
-        return legacy[0]
-    return path
+    if legacy:
+        locations = (*locations, legacy[0])
+    return next((path for path in locations if path.is_file()), locations[0])
 
 
-def rembg_model_path(cfg: dict) -> Path:
+def rembg_locations(cfg: dict) -> tuple[tuple[Path, Path], ...]:
     session = cfg.get("rembg_session_name", cfg.get("rembg_model_name", cfg["id"]))
-    return U2NET_HOME / cfg.get("onnx_filename", f"{session}.onnx")
+    filename = cfg.get("onnx_filename", f"{session}.onnx")
+    return tuple((root / filename, root) for root in storage_locations("rembg", U2NET_HOME))
+
+
+def rembg_model_path(cfg: dict, *, installed: bool = False) -> Path:
+    locations = rembg_locations(cfg)
+    if installed:
+        for path, _ in locations:
+            if path.is_file():
+                return path
+    return locations[0][0]
 
 
 # ──────────────────────────────────────────────────────────────

@@ -265,6 +265,13 @@ function BackendModelManager({ backend }: { backend: string }) {
 
       {/* ── 右侧模型列表 ────────────────────────────────────────────────── */}
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        {data?.storage && (
+          <ModelStorage key={JSON.stringify(data.storage.directories)} backend={backend}
+            directories={data.storage.directories} defaultDirectory={data.storage.default_directory} />
+        )}
+        {data?.storage === null && (
+          <p className="px-4 py-2 text-xs text-fg-secondary">请在后端电脑上打开 HiImage 修改模型存储位置。</p>
+        )}
         {/* 列表头部工具栏 */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-border-subtle flex-shrink-0 gap-2">
           <span className="text-xs text-fg-secondary flex-shrink-0">
@@ -749,5 +756,56 @@ function ModelRow({
         ) : null}
       </div>
     </div>
+  )
+}
+
+function ModelStorage({ backend, directories, defaultDirectory }: {
+  backend: string; directories: string[]; defaultDirectory: string
+}) {
+  const directory = directories.join('\n')
+  const [draft, setDraft] = useState(directory)
+  const [saved, setSaved] = useState(directory)
+  const [saving, setSaving] = useState(false)
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault()
+    if (saving || draft.trim() === saved) return
+    setSaving(true)
+    try {
+      const result = await createApiClient(backend || '/').json<{ directories: string[] }>('/api/models/storage', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ directories: draft.split('\n').map(line => line.trim()).filter(Boolean) }),
+      }, '保存模型目录失败')
+      const normalized = result.directories.join('\n')
+      setDraft(normalized)
+      setSaved(normalized)
+      refreshModelList(backend)
+      showToast('success', '模型存储位置已保存')
+    } catch (error) {
+      showToast('error', error instanceof Error ? error.message : String(error))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form onSubmit={save} className="border-b border-border-subtle px-4 py-3">
+      <label htmlFor="model-directory" className="text-xs font-medium">模型存储位置</label>
+      <div className="mt-1 flex gap-2">
+        <textarea id="model-directory" rows={2} value={draft} disabled={saving}
+          onChange={(event) => setDraft(event.target.value)} placeholder={defaultDirectory}
+          aria-describedby="model-directory-help"
+          className="min-w-0 flex-1 rounded border border-border-subtle bg-bg-primary px-2 py-1.5 text-xs" />
+        <button disabled={saving || draft.trim() === saved}
+          className="rounded bg-border-focus px-3 text-xs text-white disabled:opacity-50">
+          {saving ? '保存中…' : '保存位置'}
+        </button>
+      </div>
+      <p id="model-directory-help" className="mt-1 text-[11px] text-fg-secondary">
+        每行一个目录，按从上到下的顺序读取。新下载写入第一行，留空使用默认目录。
+        <span className="block break-all">默认目录：{defaultDirectory}</span>
+      </p>
+    </form>
   )
 }

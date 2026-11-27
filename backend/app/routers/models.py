@@ -22,6 +22,8 @@ import json
 import logging
 import os
 from pathlib import Path
+from tempfile import TemporaryFile
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -107,6 +109,65 @@ def _can_open_model_folders(request: Request | None) -> bool:
     )
 
 
+def _local_storage_request(request: Request | None) -> bool:
+    if not request or not request.client:
+        return False
+    hosts = {"127.0.0.1", "::1", "localhost"}
+    origin = request.headers.get("origin")
+    try:
+        return (request.client.host in hosts and request.url.hostname in hosts
+                and (not origin or urlsplit(origin).hostname in hosts)
+                and all(ip.strip() in hosts for ip in request.headers.get(
+                    "x-forwarded-for", request.client.host).split(",")))
+    except ValueError:
+        return False
+
+
+class ModelStorageUpdate(BaseModel):
+    directories: list[str]
+
+
+@router.put("/storage")
+async def update_model_storage(data: ModelStorageUpdate, request: Request):
+    from app.config import get_all, save
+    from core.download_queue import get_download_queue
+    from core.model_checker import invalidate_model_cache
+    from core.model_resources import ModelResourcesBusy, model_resources
+    from core.paths import default_model_directory
+
+    if not _local_storage_request(request):
+        raise HTTPException(403, "请在运行 HiImage 的电脑上修改模型存储位置")
+    try:
+        directories = []
+        for value in data.directories:
+            if not value.strip():
+                continue
+            directory = Path(value.strip()).expanduser()
+            if not directory.is_absolute():
+                raise HTTPException(422, f"请输入后端电脑上的绝对目录路径：{value}")
+            directory = directory.resolve()
+            if directory.exists() and not directory.is_dir():
+                raise HTTPException(422, f"路径不是文件夹：{directory}")
+            if directory not in directories:
+                directories.append(directory)
+        with model_resources.deleting():
+            if get_download_queue().list_active():
+                raise ModelResourcesBusy("下载队列仍有任务，请在下载结束后修改目录")
+            destination = directories[0] if directories else default_model_directory()
+            destination.mkdir(parents=True, exist_ok=True)
+            with TemporaryFile(dir=destination):
+                pass
+            settings = get_all()
+            settings["storage.model_directories"] = [str(path) for path in directories]
+            save(settings)
+            invalidate_model_cache()
+    except ModelResourcesBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HTTPException(422, f"无法保存模型存储位置：{exc}") from exc
+    return {"directories": settings["storage.model_directories"]}
+
+
 def _model_folder(file_path: str | None) -> Path | None:
     if not file_path:
         return None
@@ -140,7 +201,14 @@ def _model_list_entries():
 @router.get("/list")
 async def models_list(request: Request = None):
     """返回注册模型、文件状态和当前客户端可用的目录操作。"""
+    from app.config import get
+    from core.paths import default_model_directory
+
+    storage = None
+    if _local_storage_request(request):
+        storage = {"directories": get("storage.model_directories", []), "default_directory": str(default_model_directory())}
     return {
+        "storage": storage,
         "models": await asyncio.to_thread(_model_list_entries),
         "mode_groups": MODE_GROUPS,
         "can_open_model_folders": _can_open_model_folders(request),

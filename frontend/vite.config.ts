@@ -6,6 +6,7 @@ const apiProxy = {
   '/api': {
     target: process.env.HIIMAGE_BACKEND_PROXY_TARGET || 'http://127.0.0.1:8787',
     changeOrigin: true,
+    xfwd: true,
     ws: true,
   },
 }

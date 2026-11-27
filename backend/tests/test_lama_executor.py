@@ -11,7 +11,7 @@ import pytest
 
 from core.model_executor import ModelExecutorFactory
 from core.model_registry import get_model
-from core.paths import resolve_model_cache_path
+from core.paths import find_local_model_path
 
 
 def test_roi_and_dilation_are_combined_once(monkeypatch):
@@ -40,7 +40,7 @@ def test_empty_selection_does_not_load_weights(monkeypatch):
 def test_bad_weights_are_rejected_before_torchscript_load(monkeypatch, tmp_path):
     weight = tmp_path / "big-lama.pt"
     weight.write_bytes(b"invalid")
-    monkeypatch.setattr("core.lama_executor.resolve_model_cache_path", lambda _: weight)
+    monkeypatch.setattr("core.lama_executor.find_local_model_path", lambda _: weight)
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(jit=SimpleNamespace(
         load=lambda *_args, **_kwargs: pytest.fail("校验失败时不能加载权重"),
     )))
@@ -73,7 +73,7 @@ def test_lama_download_validates_before_replacing_existing_weight(monkeypatch, t
 
 
 def test_real_lama_repairs_photo_through_roi_api():
-    if not resolve_model_cache_path(get_model("wm_lama")).is_file():
+    if not find_local_model_path(get_model("wm_lama")).is_file():
         pytest.skip("需要本地 Big LaMa 权重")
     from fastapi.testclient import TestClient
     from app.main import app

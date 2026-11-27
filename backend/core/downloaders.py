@@ -31,17 +31,23 @@ def _check_cancel(cancel_check) -> None:
 
 # ── rembg ONNX 下载 ────────────────────────────────────────────────────────────
 
+def rembg_checksum_matches(cfg: dict, path: Path) -> bool:
+    algorithm = "sha256" if cfg.get("sha256") else "md5"
+    if not cfg.get(algorithm):
+        return True
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, algorithm).hexdigest() == cfg[algorithm]
+
+
 def download_rembg(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     """
-    下载 rembg ONNX 模型到 ~/.u2net/。
+    下载 rembg ONNX 模型到首选模型库。
 
     完全绕过 rembg 的 pooch 机制，使用 urllib 直接下载 ONNX 文件，
     支持实时速度/进度回调，支持通过 network.github_mirror 配置镜像加速。
 
     GitHub Releases 镜像示例（settings.json）：
       "network": { "github_mirror": "https://mirror.ghproxy.com" }
-
-    下载后写入 ~/.u2net/<onnx_filename>，与 rembg 的 U2NET_HOME 保持一致。
 
     :param cancel_check: 可选，无参函数，返回 True 时抛出 InterruptedError 终止下载。
     """
@@ -68,7 +74,7 @@ def download_rembg(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     size_mb = cfg.get("size_mb", 0) or 0
     if dest.exists() and size_mb:
         existing_mb = dest.stat().st_size / (1024 * 1024)
-        if existing_mb >= size_mb * 0.5:
+        if existing_mb >= size_mb * 0.5 and rembg_checksum_matches(cfg, dest):
             if progress_cb:
                 progress_cb({"message": f"文件已存在，跳过", "speed": "", "downloaded": "", "total_size": ""})
             return
@@ -143,7 +149,7 @@ def download_hf(cfg: dict, progress_cb=None, cancel_check=None) -> None:
     """
     通过 huggingface_hub 逐文件下载 HF 模型到标准 hub 缓存格式，支持实时速度回调。
 
-    下载路径：~/.cache/huggingface/hub/models--<org>--<repo>/（标准 HF hub 格式）
+    下载到首选模型库的 huggingface/hub 子目录（标准 HF Hub 格式）
     不再使用 manual/ 扁平目录。
 
     - 遵循 HF_ENDPOINT 环境变量（镜像站支持）
@@ -291,8 +297,9 @@ def _download_file(cfg, dest, url, progress_cb, cancel_check):
 
     req = urllib.request.Request(url, headers={"User-Agent": "HiImage/2.0"})
 
-    expected_digest = cfg.get("sha256")
-    digest = hashlib.sha256() if expected_digest else None
+    algorithm = "md5" if cfg.get("md5") and not cfg.get("sha256") else "sha256"
+    expected_digest = cfg.get(algorithm)
+    digest = hashlib.new(algorithm) if expected_digest else None
     temporary = None
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
@@ -334,7 +341,8 @@ def _download_file(cfg, dest, url, progress_cb, cancel_check):
         if not downloaded or (total_bytes and downloaded != total_bytes):
             raise ValueError(f"{name} 权重下载不完整")
         if digest is not None and digest.hexdigest() != expected_digest:
-            raise ValueError(f"{name} 权重 SHA-256 校验失败")
+            label = "SHA-256" if algorithm == "sha256" else "MD5"
+            raise ValueError(f"{name} 权重 {label} 校验失败")
         os.replace(temporary, dest)
     finally:
         if temporary is not None:

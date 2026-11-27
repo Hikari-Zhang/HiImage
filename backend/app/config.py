@@ -4,6 +4,7 @@
 import json
 import os
 import threading
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 # 项目根目录（backend/ 的上级）
@@ -50,7 +51,6 @@ def _load() -> dict:
         # Re-check inside lock to avoid double-load
         if _loaded:
             return _cache
-        _loaded = True
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 raw = json.load(f)
@@ -65,6 +65,7 @@ def _load() -> dict:
             _cache = flat
         except (FileNotFoundError, json.JSONDecodeError):
             _cache = {}
+        _loaded = True
     return _cache
 
 
@@ -98,8 +99,16 @@ def save(settings: dict) -> None:
             nested[key] = value
 
     os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(nested, f, indent=2, ensure_ascii=False)
+    # 安装脚本也会读此文件；跨进程读取时只能看到完整的一版配置。
+    temporary = None
+    try:
+        with NamedTemporaryFile("w", dir=CONFIG_PATH.parent, encoding="utf-8", delete=False) as f:
+            temporary = f.name
+            json.dump(nested, f, indent=2, ensure_ascii=False)
+        os.replace(temporary, CONFIG_PATH)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
 
     # 刷新缓存
     reload()

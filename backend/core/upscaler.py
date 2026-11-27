@@ -10,7 +10,6 @@ import cv2
 import numpy as np
 import urllib.request
 from .paths import PROJECT_ROOT as _PR
-from .paths import MODELS_CACHE_DIR as _MC
 
 
 def _build_upscale_structures():
@@ -85,15 +84,10 @@ _MODEL_ARCH, _MODEL_NUM_BLOCK, _MODEL_NUM_CONV, _MODEL_OUTSCALE = _dicts
 # 扁平化 model_id 列表（向后兼容旧接口）
 AVAILABLE_UPSCALE_MODELS = [entry[0] for entry in UPSCALE_MODEL_LIST]
 
-# 模型权重缓存目录
-# 模型权重缓存目录（默认：~/.cache/hiimage/models/realesrgan/）
-_WEIGHTS_DIR = str(_MC / 'realesrgan')
-
-
 def _get_weight_path(model_name: str) -> str:
     """
     获取模型权重路径。
-    使用 paths.py 统一解析（MODELS_CACHE_DIR / 'realesrgan' / weight_filename）。
+    按设置的模型库顺序查找权重。
     """
     from .paths import find_local_model_path
 
@@ -107,9 +101,11 @@ def _get_weight_path(model_name: str) -> str:
 
 def _download_weight(model_name: str, progress_callback=None) -> str:
     """下载模型权重，支持进度回调 callback(downloaded_bytes, total_bytes)"""
-    os.makedirs(_WEIGHTS_DIR, exist_ok=True)
+    from .paths import resolve_model_cache_path
+
     url = _MODEL_URL[model_name]
-    dest = _get_weight_path(model_name)
+    dest = str(resolve_model_cache_path({"provider": "realesrgan", "weight_filename": _MODEL_WEIGHT[model_name]}))
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
 
     print(f"[Upscaler] 正在下载模型权重: {url}")
     print(f"[Upscaler] 保存至: {dest}")
