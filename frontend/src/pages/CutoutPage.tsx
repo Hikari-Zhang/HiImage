@@ -1,3 +1,4 @@
+import { createSourceImporter } from '../services/sourceImport'
 import ImmichActions, { type ImmichActionsHandle } from '../components/ImmichActions'
 import { bindImmichSource } from '../services/immich'
 /**
@@ -29,7 +30,7 @@ import { DownloadStatus, ModelStatus } from '../constants'
 import type { ModelGroup } from '../components/ModelSelect/ModelSelect'
 import type { MaskStroke } from '../types/mask'
 import { POINT_SAMPLE_RATIO } from '../types/mask'
-import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
+import { downloadDataUrl } from '../services/fileService'
 import { recordImageResult } from '../services/imageHistory'
 import { createTaskId } from '../services/taskId'
 import { createTaskProgressSession } from '../services/taskProgress'
@@ -46,6 +47,8 @@ const CHECKERBOARD_STYLE = {
   backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
   backgroundColor: '#1a1a1a',
 }
+
+const sourceImport = createSourceImporter(() => useCutoutStore.getState().sourceRevision)
 
 export default function CutoutPage({ isVisible = false }: { isVisible?: boolean }) {
   // ── Store 状态 ──
@@ -347,7 +350,7 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadSource = useCallback((file: File) => {
-    fileToDataUrl(file).then((dataUrl) => setSourceImage(dataUrl, undefined, file))
+    sourceImport.read(file, image => setSourceImage(image, undefined, file))
       .catch((err) => showToast('error', `读取图片失败: ${err.message}`))
   }, [setSourceImage])
 
@@ -533,26 +536,24 @@ export default function CutoutPage({ isVisible = false }: { isVisible?: boolean 
     <div className="flex flex-col h-full">
       <PageHeader title="抠图" right={
         <div className="flex items-center gap-2">
-          <ImageHistory disabled={isProcessing} onUse={async file => {
-            const image = await fileToDataUrl(file)
-            if (useCutoutStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
-            setSourceImage(image, undefined, file)
+          <ImageHistory beginImport={sourceImport.begin} disabled={isProcessing} onUse={async (file, isCurrent) => {
+            await sourceImport.read(file, image => setSourceImage(image, undefined, file), isCurrent)
           }} />
           <SendToEditor image={compositeResult || resultImage} current="cutout" />
         </div>
       } />
 
       <div className="flex-none px-3 py-1 border-b border-border-subtle">
-        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="cutout" revision={sourceRevision} original={sourcePreviewUrl} result={compositeResult || resultImage}
-          onImport={async items => {
+        <ImmichActions beginImport={sourceImport.begin} ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="cutout" revision={sourceRevision} original={sourcePreviewUrl} result={compositeResult || resultImage}
+          onImport={async (items, isCurrent) => {
             const item = items[0]
-            const image = await fileToDataUrl(item.file)
-            if (useCutoutStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
-            setSourceImage(image, undefined, item.file)
-            bindImmichSource('cutout', {
-              token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
-              revision: useCutoutStore.getState().sourceRevision,
-            })
+            await sourceImport.read(item.file, image => {
+              setSourceImage(image, undefined, item.file)
+              bindImmichSource('cutout', {
+                token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
+                revision: useCutoutStore.getState().sourceRevision,
+              })
+            }, isCurrent)
           }} />
       </div>
 

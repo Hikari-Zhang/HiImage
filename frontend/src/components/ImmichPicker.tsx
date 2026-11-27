@@ -1,3 +1,4 @@
+import type { BeginSourceImport, ImportIsCurrent } from '../services/sourceImport'
 import { MAX_FILE_BYTES, MAX_TOTAL_INPUT_BYTES } from '../services/batchLimits'
 import { useEffect, useState } from 'react'
 import { immichApi, type ImmichAlbum, type ImmichAsset } from '../services/immich'
@@ -24,8 +25,9 @@ function Thumbnail({ asset, preview = false }: { asset: ImmichAsset; preview?: b
     : <span className="block aspect-square bg-bg-primary" />
 }
 
-export default function ImmichPicker({ close, limit, multiple, onImport }: {
-  close: () => void; limit: number; multiple: boolean; onImport: (items: ImmichImport[]) => Promise<void>
+export default function ImmichPicker({ close, limit, multiple, beginImport, onImport }: {
+  close: () => void; limit: number; multiple: boolean; beginImport?: BeginSourceImport
+  onImport: (items: ImmichImport[], isCurrent?: ImportIsCurrent) => Promise<void>
 }) {
   const [albums, setAlbums] = useState<ImmichAlbum[]>([])
   const [items, setItems] = useState<ImmichAsset[]>([])
@@ -67,6 +69,7 @@ export default function ImmichPicker({ close, limit, multiple, onImport }: {
     setImporting(true)
     setError('')
     const api = immichApi()
+    const isCurrent = beginImport?.()
     const ready: ImmichImport[] = []
     const errors: string[] = []
     let bytes = 0
@@ -89,7 +92,7 @@ export default function ImmichPicker({ close, limit, multiple, onImport }: {
       }
     }
     try {
-      if (ready.length) await onImport(ready)
+      if (ready.length && (!isCurrent || isCurrent())) await onImport(ready, isCurrent)
       if (!errors.length) { close(); return }
       setSelected(selected.filter(item => !ready.some(entry => entry.id === item.id)))
       setError(errors.join('；'))

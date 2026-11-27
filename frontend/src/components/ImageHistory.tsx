@@ -1,3 +1,4 @@
+import type { BeginSourceImport, ImportIsCurrent } from '../services/sourceImport'
 import { useEffect, useRef, useState } from 'react'
 import { History, ImagePlus, Trash2 } from 'lucide-react'
 import ModalDialog from './ModalDialog'
@@ -8,7 +9,8 @@ import {
 } from '../services/imageHistory'
 
 interface ImageHistoryProps {
-  onUse: (file: File) => void | Promise<void>
+  beginImport?: BeginSourceImport
+  onUse: (file: File, isCurrent?: ImportIsCurrent) => void | Promise<void>
   disabled?: boolean
   useLabel?: string
 }
@@ -60,7 +62,7 @@ export default function ImageHistory(props: ImageHistoryProps) {
   )
 }
 
-function HistoryDialog({ onUse, disabled, useLabel = '设为原图', close }: ImageHistoryProps & { close: () => void }) {
+function HistoryDialog({ beginImport, onUse, disabled, useLabel = '设为原图', close }: ImageHistoryProps & { close: () => void }) {
   const [entries, setEntries] = useState<ImageHistoryEntry[]>([])
   const [limit, setLimit] = useState(pageSize)
   const [loading, setLoading] = useState(true)
@@ -141,7 +143,9 @@ function HistoryDialog({ onUse, disabled, useLabel = '设为原图', close }: Im
             <div className="flex shrink-0 flex-wrap gap-1">
               <Button type="button" size="sm" variant="secondary" icon={<ImagePlus size={14} />}
                 disabled={busy || disabled || confirmClear} onClick={() => void run(async () => {
-                  await onUse(await loadHistoryImage(entry))
+                  const isCurrent = beginImport?.()
+                  const file = await loadHistoryImage(entry)
+                  if (!isCurrent || isCurrent()) await onUse(file, isCurrent)
                   close()
                 }, '载入历史图片失败')}>{useLabel}</Button>
               <Button type="button" size="sm" variant="ghost" disabled={busy || confirmClear}

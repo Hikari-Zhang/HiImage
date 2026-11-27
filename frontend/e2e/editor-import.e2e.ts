@@ -36,6 +36,41 @@ for (const editor of [
   })
 }
 
+for (const editor of ['watermark', 'cutout', 'upscale']) {
+  test(`${editor} keeps the last selection when the earlier file finishes late`, async ({ page }) => {
+    await page.addInitScript(() => {
+      const read = FileReader.prototype.readAsDataURL
+      FileReader.prototype.readAsDataURL = function (blob) {
+        if (!(blob instanceof File) || blob.name !== 'first.png') return read.call(this, blob)
+        window.addEventListener('release-first-read', () => {
+          this.addEventListener('loadend', () => window.dispatchEvent(new Event('first-read-done')), { once: true })
+          read.call(this, blob)
+        }, { once: true })
+      }
+    })
+    await page.goto('/#/' + editor)
+    const file = await photo(page)
+    const input = page.locator('input[type="file"]').first()
+    const sourceRevision = () => page.evaluate(async editor => {
+      if (editor === 'cutout') {
+        const { useCutoutStore } = await import('/src/stores/useCutoutStore.ts')
+        return useCutoutStore.getState().sourceRevision
+      }
+      const { useImageStore, useUpscaleImageStore } = await import('/src/stores/useImageStore.ts')
+      return (editor === 'upscale' ? useUpscaleImageStore : useImageStore).getState().sourceRevision
+    }, editor)
+    const initialRevision = await sourceRevision()
+    await input.setInputFiles({ ...file, name: 'first.png' })
+    await input.setInputFiles({ ...file, name: 'last.png' })
+    await expect.poll(sourceRevision).toBe(initialRevision + 1)
+    await page.evaluate(() => new Promise<void>(resolve => {
+      window.addEventListener('first-read-done', () => resolve(), { once: true })
+      window.dispatchEvent(new Event('release-first-read'))
+    }))
+    expect(await sourceRevision()).toBe(initialRevision + 1)
+  })
+}
+
 test('Immich save uses the capture time from the original response', async ({ page }) => {
   const assetId = '5117607e-8edb-467e-913a-9c308cb62562'
   const displayTime = '2024-01-02T01:00:00.000Z'

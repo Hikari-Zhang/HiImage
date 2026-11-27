@@ -1,3 +1,4 @@
+import type { BeginSourceImport, ImportIsCurrent } from '../services/sourceImport'
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
 import { dataUrlToBlob } from '../services/fileService'
 import {
@@ -120,12 +121,13 @@ export type ImmichActionsHandle = { chooseSource: () => void }
 
 type ImmichActionsProps = {
   editor: ImmichEditor; revision: number; original: string | null; result: string | null
-  onImport: (items: ImmichImport[]) => Promise<void>; multiple?: boolean; limit?: number; inputLabel?: string
+  beginImport?: BeginSourceImport
+  onImport: (items: ImmichImport[], isCurrent?: ImportIsCurrent) => Promise<void>; multiple?: boolean; limit?: number; inputLabel?: string
   onOpenLocal?: () => void
 }
 
 export default forwardRef<ImmichActionsHandle, ImmichActionsProps>(function ImmichActions({
-  editor, revision, original, result, onImport, multiple = false, limit = 1,
+  editor, revision, original, result, beginImport, onImport, multiple = false, limit = 1,
   inputLabel = '从 Immich 选择', onOpenLocal,
 }, ref) {
   const backend = useBackendStore(state => state.backendURL)
@@ -182,7 +184,7 @@ export default forwardRef<ImmichActionsHandle, ImmichActionsProps>(function Immi
           {error && <p role="alert" className="mt-3 text-sm">{error} <a className="underline" href="#/settings?tab=immich" onClick={() => setView(undefined)}>前往设置</a></p>}
         </ImmichDialog>
       )}
-      {view === 'pick'  && <ImmichPicker close={() => setView(undefined)} multiple={multiple} limit={limit} onImport={onImport} />}
+      {view === 'pick'  && <ImmichPicker close={() => setView(undefined)} multiple={multiple} limit={limit} beginImport={beginImport} onImport={onImport} />}
       {view === 'save' && result && connection && <SaveDialog key={revision} result={result} original={original} source={source} connection={connection} close={() => setView(undefined)} />}
     </div>
   )

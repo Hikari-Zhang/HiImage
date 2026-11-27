@@ -1,3 +1,4 @@
+import { createSourceImporter } from '../services/sourceImport'
 import ImmichActions, { type ImmichActionsHandle } from '../components/ImmichActions'
 import { bindImmichSource } from '../services/immich'
 import { useRef, useCallback } from 'react'
@@ -21,7 +22,7 @@ import { useDeviceOptions } from '../hooks/useDeviceOptions'
 import { useDownloadStore } from '../stores/useDownloadStore'
 import { useDownloadManager } from '../hooks/useDownloadManager'
 import { DownloadStatus, modelFileIssue, modelNeedsDownload } from '../constants'
-import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
+import { downloadDataUrl } from '../services/fileService'
 import { downloadBlob, dataUrlToBlob } from '../services/fileService'
 import { recordImageResult } from '../services/imageHistory'
 import JSZip from 'jszip'
@@ -47,6 +48,11 @@ import { uniqueOutputName } from '../services/batchExport'
 import { batchFileKey, prepareBatchFiles } from '../services/batchImport'
 import { createTaskId } from '../services/taskId'
 import { createTaskProgressSession } from '../services/taskProgress'
+
+const sourceImport = createSourceImporter(
+  () => useUpscaleImageStore.getState().sourceRevision,
+  () => useUpscaleBatchStore.getState().mode === 'single',
+)
 
 export default function SuperResolution() {
   const {
@@ -151,7 +157,7 @@ export default function SuperResolution() {
     } else {
       // 单图模式：只处理第一个文件
       const file = files[0]
-      fileToDataUrl(file).then(loadSource).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
+      sourceImport.read(file, loadSource).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
     }
   }
 
@@ -199,7 +205,7 @@ export default function SuperResolution() {
       // 单图模式：只处理第一个
       const file = files[0]
       if (!file || !file.type.startsWith('image/')) return
-      fileToDataUrl(file).then(loadSource).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
+      sourceImport.read(file, loadSource).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
     }
   }
 
@@ -518,16 +524,13 @@ export default function SuperResolution() {
         }
         right={
           <div className="flex items-center gap-1">
-            <ImageHistory disabled={isProcessing || isBatchProcessing} useLabel={mode === 'batch' ? '加入批量队列' : undefined}
-              onUse={async file => {
+            <ImageHistory beginImport={mode === 'single' ? sourceImport.begin : undefined} disabled={isProcessing || isBatchProcessing} useLabel={mode === 'batch' ? '加入批量队列' : undefined}
+              onUse={async (file, isCurrent) => {
                 if (mode === 'batch') {
                   if (!importFiles([file])) throw new Error('图片未能加入队列，请检查图片大小和批量容量。')
                   return
                 }
-                const image = await fileToDataUrl(file)
-                if (useUpscaleImageStore.getState().sourceRevision !== sourceRevision
-                  || useUpscaleBatchStore.getState().mode !== mode) throw new Error('编辑器状态已改变，请重新选择')
-                loadSource(image)
+                await sourceImport.read(file, loadSource, isCurrent)
               }} />
             {mode === 'single' && <SendToEditor image={resultImage} current="upscale" />}
             <button
@@ -558,22 +561,22 @@ export default function SuperResolution() {
 
       {/* Content */}
       <div className="flex-none px-3 py-1 border-b border-border-subtle">
-        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="upscale" revision={sourceRevision} original={sourceImage}
+        <ImmichActions beginImport={mode === 'single' ? sourceImport.begin : undefined} ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="upscale" revision={sourceRevision} original={sourceImage}
           result={mode === 'single' ? resultImage : null} multiple={mode === 'batch'}
           limit={mode === 'batch' ? MAX_BATCH_FILES - batchItems.length : 1}
-          onImport={async items => {
+          onImport={async (items, isCurrent) => {
             if (mode === 'batch') {
               importFiles(items.map(item => item.file))
               return
             }
             const item = items[0]
-            const image = await fileToDataUrl(item.file)
-            if (useUpscaleImageStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
-            loadSource(image)
-            bindImmichSource('upscale', {
-              token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
-              revision: useUpscaleImageStore.getState().sourceRevision,
-            })
+            await sourceImport.read(item.file, image => {
+              loadSource(image)
+              bindImmichSource('upscale', {
+                token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
+                revision: useUpscaleImageStore.getState().sourceRevision,
+              })
+            }, isCurrent)
           }} />
       </div>
 

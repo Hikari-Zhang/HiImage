@@ -1,3 +1,4 @@
+import { createSourceImporter } from '../services/sourceImport'
 import ImmichActions, { type ImmichActionsHandle } from '../components/ImmichActions'
 import { bindImmichSource } from '../services/immich'
 import { useState, useCallback, useRef, useEffect } from 'react'
@@ -24,7 +25,7 @@ import { useMaskExport } from '../hooks/useMaskExport'
 import { PostprocessMethod, DownloadStatus, modelFileIssue, modelNeedsDownload } from '../constants'
 import type { MaskTool } from '../types/mask'
 import type { ROI } from '../types/mask'
-import { fileToDataUrl, downloadDataUrl } from '../services/fileService'
+import { downloadDataUrl } from '../services/fileService'
 import { recordImageResult } from '../services/imageHistory'
 import { createTaskId } from '../services/taskId'
 import { createTaskProgressSession } from '../services/taskProgress'
@@ -42,6 +43,8 @@ const POSTPROCESS_OPTIONS = [
   { value: PostprocessMethod.POISSON,     label: 'Poisson 融合（修边缘）' },
   { value: PostprocessMethod.GFPGAN,      label: 'GFPGAN（人脸专用）' },
 ]
+
+const sourceImport = createSourceImporter(() => useImageStore.getState().sourceRevision)
 
 export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boolean }) {
   const {
@@ -135,10 +138,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
     const file = e.target.files?.[0]
     if (!file) return
     e.target.value = ''
-    fileToDataUrl(file).then((dataUrl) => {
-      setSourceImage(dataUrl)
-      setShowResult(false)
-    }).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
+    sourceImport.read(file, setSourceImage).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
   }
 
   // Drag & drop
@@ -146,10 +146,7 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
     e.preventDefault()
     const file = e.dataTransfer.files[0]
     if (!file || !file.type.startsWith('image/')) return
-    fileToDataUrl(file).then((dataUrl) => {
-      setSourceImage(dataUrl)
-      setShowResult(false)
-    }).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
+    sourceImport.read(file, setSourceImage).catch((err) => showToast('error', `读取图片失败: ${err.message}`))
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -393,10 +390,8 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
         subtitle={imageWidth > 0 ? `${imageWidth} x ${imageHeight}` : undefined}
         right={
           <div className="flex items-center gap-2">
-            <ImageHistory disabled={isProcessing} onUse={async file => {
-              const image = await fileToDataUrl(file)
-              if (useImageStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
-              setSourceImage(image)
+            <ImageHistory beginImport={sourceImport.begin} disabled={isProcessing} onUse={async (file, isCurrent) => {
+              await sourceImport.read(file, setSourceImage, isCurrent)
             }} />
             <SendToEditor image={resultImage} current="watermark" />
             <span className="text-xs text-fg-secondary">{inpaintModel} | 实际设备 {effectiveDevice}{effectiveDevice !== device ? `（请求 ${device}）` : ''}</span>
@@ -406,16 +401,16 @@ export default function WatermarkRemoval({ isVisible = true }: { isVisible?: boo
 
       {/* Content area */}
       <div className="flex-none px-3 py-1 border-b border-border-subtle">
-        <ImmichActions ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="watermark" revision={sourceRevision} original={sourceImage} result={resultImage}
-          onImport={async items => {
+        <ImmichActions beginImport={sourceImport.begin} ref={immichActionsRef} onOpenLocal={handleOpenFile} editor="watermark" revision={sourceRevision} original={sourceImage} result={resultImage}
+          onImport={async (items, isCurrent) => {
             const item = items[0]
-            const image = await fileToDataUrl(item.file)
-            if (useImageStore.getState().sourceRevision !== sourceRevision) throw new Error('编辑器中的图片已改变，请重新选择')
-            setSourceImage(image)
-            bindImmichSource('watermark', {
-              token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
-              revision: useImageStore.getState().sourceRevision,
-            })
+            await sourceImport.read(item.file, image => {
+              setSourceImage(image)
+              bindImmichSource('watermark', {
+                token: item.token, name: item.file.name, taken: item.taken, backend: item.backend,
+                revision: useImageStore.getState().sourceRevision,
+              })
+            }, isCurrent)
           }} />
       </div>
 
